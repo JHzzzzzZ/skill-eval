@@ -1,0 +1,9 @@
+# 临时/敏感产物：不发布
+prompt.txt
+evalsets/
+uploads/
+*.pyc
+__pycache__/
+.pytest_cache/
+scratch/
+wt-*/
