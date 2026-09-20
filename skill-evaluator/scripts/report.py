@@ -4,6 +4,7 @@
 产出 report.json（19 key，机器可读）+ report.md（人可读）。契约见 tests/test_report.py 模块注释。
 """
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -237,7 +238,36 @@ def _flow_svg() -> str:
             f'xmlns="http://www.w3.org/2000/svg">{"".join(rows)}</svg>')
 
 
-def _evalset_html(evalset_dir) -> str:
+def _skill_meta(skill_arg=None, evalset_dir=None):
+    """被测 skill 的 name/description（SKILL.md frontmatter），供审核视图顶部展示。
+    --skill 指定优先；缺省兜底读评估器 uploads/<name>-<时间戳>/SKILL.md 只读存档（取最新）。"""
+    p = None
+    if skill_arg is not None:
+        p = skill_arg if skill_arg.is_file() else skill_arg / "SKILL.md"
+    elif evalset_dir is not None:
+        up = evalset_dir.parent.parent.parent / "uploads"
+        cands = sorted(up.glob(f"{evalset_dir.parent.name}-*/SKILL.md"))
+        p = cands[-1] if cands else None
+    if p is None or not p.is_file():
+        return None
+    try:
+        text = p.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    m = re.match(r"\s*---\s*\n(.*?)\n\s*---", text, re.S)
+    fm = m.group(1) if m else ""
+
+    def field(k):
+        mm = re.search(rf"^{k}:\s*(.+)$", fm, re.M)
+        return mm.group(1).strip().strip("\"'") if mm else ""
+
+    name, desc = field("name"), field("description")
+    if not name and not desc:
+        return None
+    return {"name": name, "description": desc, "source": str(p)}
+
+
+def _evalset_html(evalset_dir, skill_meta=None) -> str:
     if not evalset_dir or not evalset_dir.is_dir():
         return "<p class='hint'>未指定评测集目录（--evalset），审核视图不可用。</p>"
     rows = []
@@ -274,16 +304,30 @@ def _evalset_html(evalset_dir) -> str:
     name = _esc(evalset_dir.parent.name)
     ver = _esc(evalset_dir.name)
     total = idx
+    head = ""
+    if skill_meta:
+        head = ("<div class='card' id='rv-skill'><strong>被测 Skill："
+                f"{_esc(skill_meta['name'])}</strong>"
+                f"<p style='margin:4px 0 0;font-size:13px;color:#475569'>"
+                f"{_esc(skill_meta['description'])}</p></div>")
+    else:
+        head = ("<p class='hint'>未找到被测 skill 的 SKILL.md（可用 --skill 指定路径），"
+                "审核视图不展示 name/description。</p>")
     return (
-        f"<div id='rv-bar'><strong>审核进度：</strong><span id='rv-count'>0/{total}</span> "
-        f"<button type='button' onclick='rvExport(true)'>复制审核结果</button> "
-        f"<button type='button' onclick='rvExport(false)'>下载 review.json</button></div>"
+        head
+        + f"<div id='rv-bar'><strong>审核进度：</strong><span id='rv-count'>0/{total}</span> "
+        f"<button type='button' id='rv-submit' onclick='rvSubmit()'>提交 review.json</button> "
+        f"<button type='button' onclick='rvExport(true)'>复制</button> "
+        f"<button type='button' onclick='rvExport(false)'>下载</button>"
+        f"<span id='rv-submit-status' style='font-size:13px'></span></div>"
         "<div class='hint' style='margin:8px 0'>审核标准："
         "应触发——像真实用户随口说的话、确实该进登记流程；"
         "不应触发——确实不该触发（查询/实现/其它系统）；"
         "易混淆——边界成立、模型容易踩且不该触发的；"
         "结果用例——期望输出必须可判定（能对着回答判对错）。"
-        "逐条标 通过/驳回，驳回必须写原因；全部审完后点「复制审核结果」发给评估 agent，或下载 review.json 存到 evalsets/&lt;name&gt;/reviews/。</div>"
+        "逐条标 通过/驳回，驳回必须写原因；全部审完后点「提交 review.json」，"
+        "选到 evalsets/&lt;name&gt;/reviews/ 目录保存（浏览器会记住上次目录，之后一键直达）；"
+        "保存后告诉评估 agent 审核已完成。复制/下载按钮保留作兜底。</div>"
         f"<div data-name='{name}' data-ver='{ver}' id='rv-root'>{'' .join(rows)}</div>"
         f"<textarea id='rv-out' style='display:none'></textarea>"
     )
@@ -335,30 +379,46 @@ function rv(btn,v){var it=btn.closest('.rv-item');
 function rvCount(){var all=document.querySelectorAll('.rv-item'),done=0;
  all.forEach(function(e){if(e.dataset.verdict)done++;});
  var c=document.getElementById('rv-count');if(c)c.textContent=done+'/'+all.length;}
-function rvExport(copy){var root=document.getElementById('rv-root');if(!root)return;
+function rvBuild(){var root=document.getElementById('rv-root');if(!root)return null;
  var bad=[];
  document.querySelectorAll('.rv-item').forEach(function(e){
   if(e.dataset.verdict==='reject'&&!((e.dataset.note||'').trim()))bad.push(e.dataset.file);
   if(!e.dataset.verdict)bad.push(e.dataset.file+' 未标');});
- if(bad.length){alert('以下用例未完成审核或驳回缺原因：'+bad.join('；'));return;}
+ if(bad.length){alert('以下用例未完成审核或驳回缺原因：'+bad.join('；'));return null;}
  var items=[];
  document.querySelectorAll('.rv-item').forEach(function(e){
   items.push({group:e.dataset.group,file:e.dataset.file,verdict:e.dataset.verdict,
    note:e.dataset.note||'',prompt:e.dataset.prompt,expect:e.dataset.expect});});
  var out={type:'evalset-review',evalset:root.dataset.name,version:root.dataset.ver,
   reviewed_at:new Date().toISOString(),items:items};
- var text=JSON.stringify(out,null,2),ta=document.getElementById('rv-out');
- ta.value=text;ta.style.display='block';
+ return JSON.stringify(out,null,2);}
+function rvExport(copy){var text=rvBuild();if(text===null)return;
+ var ta=document.getElementById('rv-out');ta.value=text;ta.style.display='block';
  if(copy){navigator.clipboard.writeText(text).then(
   function(){alert('已复制到剪贴板，粘贴发给评估 agent 即可');},
   function(){ta.select();document.execCommand('copy');});}
- else{var a=document.createElement('a');
-  a.href=URL.createObjectURL(new Blob([text],{type:'application/json'}));
-  a.download=root.dataset.name+'-'+root.dataset.ver+'-review.json';a.click();}}</script>
+ else{rvDownload(text);}}
+function rvDownload(text){var root=document.getElementById('rv-root');
+ var a=document.createElement('a');
+ a.href=URL.createObjectURL(new Blob([text],{type:'application/json'}));
+ a.download=(root?root.dataset.name:'evalset')+'-'+(root?root.dataset.ver:'v1')+'-review.json';a.click();}
+function rvDone(msg){var el=document.getElementById('rv-submit-status');
+ if(el){el.style.color='#0b7a3d';el.style.fontWeight='600';el.textContent='✓ 已提交 '+msg;}}
+function rvSubmit(){var root=document.getElementById('rv-root');if(!root)return;
+ var text=rvBuild();if(text===null)return;
+ var fname=root.dataset.name+'-'+root.dataset.ver+'-review.json';
+ if(window.showSaveFilePicker){
+  window.showSaveFilePicker({suggestedName:fname,
+   types:[{description:'JSON',accept:{'application/json':['.json']}}]})
+   .then(function(h){return h.createWritable().then(function(w){
+    return w.write(text).then(function(){return w.close();});}).then(function(){rvDone(h.name);});})
+   .catch(function(){});}
+ else{rvDownload(text);
+  rvDone(fname+'（浏览器不支持直接落盘，已下载，请移到 evalsets/'+root.dataset.name+'/reviews/）');}}</script>
 </body></html>'''
 
 
-def render_html(report: dict, evalset_dir=None) -> str:
+def render_html(report: dict, evalset_dir=None, skill_arg=None) -> str:
     # #19/#20：按 ID 顺序 + 中文指标名；#38：评测集审核同页；#43：SVG 流程图
     cards = []
     for k in ALL_KEYS:
@@ -383,7 +443,7 @@ def render_html(report: dict, evalset_dir=None) -> str:
     return (_HTML_TMPL.replace("__CLS__", cls)
             .replace("__CONCLUSION__", _esc(report["conclusion"]))
             .replace("__CARDS__", "".join(cards))
-            .replace("__EVALSET__", _evalset_html(evalset_dir))
+            .replace("__EVALSET__", _evalset_html(evalset_dir, _skill_meta(skill_arg, evalset_dir)))
             .replace("__FLOW__", _flow_svg()))
 
 
@@ -405,7 +465,7 @@ def render_md(report: dict) -> str:
 
 def main():
     args = sys.argv[1:]
-    html = evalset_dir = None
+    html = evalset_dir = skill_arg = None
     rest = []
     i = 0
     while i < len(args):
@@ -413,10 +473,12 @@ def main():
             html = True; i += 1
         elif args[i] == "--evalset":
             evalset_dir = Path(args[i + 1]); i += 2
+        elif args[i] == "--skill":
+            skill_arg = Path(args[i + 1]); i += 2
         else:
             rest.append(args[i]); i += 1
     if len(rest) != 1:
-        print("usage: report.py <results目录> [--html] [--evalset <evalsets/<name>/vN>]", file=sys.stderr)
+        print("usage: report.py <results目录> [--html] [--evalset <evalsets/<name>/vN>] [--skill <被测skill目录>]", file=sys.stderr)
         sys.exit(2)
     d = Path(rest[0])
     if not d.is_dir():
@@ -427,7 +489,7 @@ def main():
         json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     (d / "report.md").write_text(render_md(report), encoding="utf-8")
     if html:
-        (d / "report.html").write_text(render_html(report, evalset_dir), encoding="utf-8")
+        (d / "report.html").write_text(render_html(report, evalset_dir, skill_arg), encoding="utf-8")
     print(json.dumps({"conclusion": report["conclusion"], "written": True}, ensure_ascii=False))
 
 

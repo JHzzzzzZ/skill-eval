@@ -290,3 +290,53 @@ def test_evalset_review_ui(tmp_path):
     assert "navigator.clipboard" in html  # 复制到剪贴板
     # 驳回必须填原因的前端提示
     assert "驳回原因" in html
+
+
+def test_evalset_review_shows_skill_meta(tmp_path):
+    # 审核人得先知道在审什么：顶部展示被测 skill 的 name/description（--skill 指定）
+    write_inputs(tmp_path, {})
+    ev = tmp_path / "evalsets" / "todo-add" / "v1"
+    (ev / "triggers" / "should").mkdir(parents=True)
+    (ev / "triggers" / "should" / "s1.json").write_text(json.dumps({"prompt": "帮我记个待办"}), encoding="utf-8")
+    sk = tmp_path / "myskill"
+    sk.mkdir()
+    (sk / "SKILL.md").write_text("---\nname: todo-add\ndescription: 需求受理登记，用户说加个需求时触发\n---\n# t\n", encoding="utf-8")
+    r = subprocess.run([sys.executable, str(SCRIPT), str(tmp_path), "--html", "--evalset", str(ev),
+                        "--skill", str(sk)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    html = (tmp_path / "report.html").read_text(encoding="utf-8")
+    assert "被测 Skill" in html and "需求受理登记" in html
+    assert "id='rv-skill'" in html
+
+
+def test_evalset_skill_meta_uploads_fallback(tmp_path):
+    # 不传 --skill 时，兖底读评估器 uploads/<name>-<时间戳>/SKILL.md 存档（取最新）
+    write_inputs(tmp_path, {})
+    ev = tmp_path / "evalsets" / "todo-add" / "v1"
+    (ev / "triggers" / "should").mkdir(parents=True)
+    (ev / "triggers" / "should" / "s1.json").write_text(json.dumps({"prompt": "帮我记个待办"}), encoding="utf-8")
+    up = tmp_path / "uploads" / "todo-add-20260920-115935"
+    up.mkdir(parents=True)
+    (up / "SKILL.md").write_text("---\nname: todo-add\ndescription: 兖底存档描述\n---\n# t\n", encoding="utf-8")
+    r = subprocess.run([sys.executable, str(SCRIPT), str(tmp_path), "--html", "--evalset", str(ev)],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    html = (tmp_path / "report.html").read_text(encoding="utf-8")
+    assert "兖底存档描述" in html
+
+
+def test_evalset_review_submit_button(tmp_path):
+    # 审核完成后一键提交：showSaveFilePicker 直接落盘 review.json，不再只靠复制/下载
+    write_inputs(tmp_path, {})
+    ev = tmp_path / "evalsets" / "todo-add" / "v1"
+    (ev / "triggers" / "should").mkdir(parents=True)
+    (ev / "triggers" / "should" / "s1.json").write_text(json.dumps({"prompt": "帮我记个待办"}), encoding="utf-8")
+    r = subprocess.run([sys.executable, str(SCRIPT), str(tmp_path), "--html", "--evalset", str(ev)],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    html = (tmp_path / "report.html").read_text(encoding="utf-8")
+    assert "rvSubmit" in html and "showSaveFilePicker" in html
+    assert "提交 review.json" in html
+    # 脚本花括号仍配对（回归护栏）
+    script = html.split("<script>")[1].split("</script>")[0]
+    assert script.count("{") == script.count("}")

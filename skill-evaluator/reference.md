@@ -42,6 +42,8 @@ evalsets/<name>/v1/
 
 冻结流程：自动生成 → 展示给用户 → **人工明确确认后**才写 `meta.json` 标记冻结。冻结后所有版本评估复用，不重新生成。`should` 类 prompt 不得照抄 description 措辞（否则 precision 测不出真实值）。
 
+审核载体是 `report.py --html` 产出的 report.html「评测集审核」tab：顶部展示被测 skill 的 name/description（`--skill <被测skill目录>` 指定，缺省兖底读 `uploads/<name>-<时间戳>/SKILL.md` 存档），让审核人先知道在审什么。逐条标通过/驳回后点「提交 review.json」直接落盘（showSaveFilePicker，存到 `reviews/`，浏览器记住上次目录；不支持的浏览器回退为下载），复制/下载保留作兜底。
+
 ## 运行场景
 
 | 场景 | 做什么 | 服务指标 |
