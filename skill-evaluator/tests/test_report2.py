@@ -64,6 +64,7 @@ def test_idempotency_needs_multiple_runs(tmp_path):
         "necessity": "skipped", "passed": True}})
     out = run_report(tmp_path)
     assert out["metrics"]["#12"]["verdict"] == "warn"  # n=1 → warn "单次运行"
+    assert "仅单次运行" in out["metrics"]["#12"]["note"]
 
 
 def test_results_dir_missing_no_crash(tmp_path):

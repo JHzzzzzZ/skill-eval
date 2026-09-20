@@ -16,8 +16,8 @@ def version_key(name_and_dir):
     """语义化版本名按数字排；hash 版本按 report.json 的 generated_at（mtime 会被事后写文件污染）。"""
     name, d = name_and_dir
     if SEMVER_RE.match(name):
-        nums = re.findall(r"\d+", name)
-        return (1, int(nums[0]), name)
+        # 全部数字段参与排序（v1.2 < v1.10），缺失段按前缀规则短者在前
+        return (1, tuple(int(x) for x in re.findall(r"\d+", name)), name)
     ts = ""
     try:
         r = json.loads((d / "report.json").read_text(encoding="utf-8"))

@@ -145,6 +145,22 @@ def test_idempotency_high_variance_warns(tmp_path):
     out = run_report(tmp_path)
     # 变异系数 6/10 = 0.6 > 0.5 → 不稳定
     assert out["metrics"]["#12"]["verdict"] == "warn"
+    # 回归：note 必须与 verdict 一致（原实现 n>=2 时恒写"≤ 阈值，稳定"）
+    assert "不稳定" in out["metrics"]["#12"]["note"]
+    assert "≤" not in out["metrics"]["#12"]["note"]
+
+
+def test_stability_note_matches_verdict_when_stable(tmp_path):
+    # cv ≤ 阈值且 n≥2：pass + note 写"≤ 阈值，稳定"
+    write_inputs(tmp_path, {"score.json": {
+        "trigger": "skipped",
+        "cost": {"tool_calls": {"mean": 10, "std": 2, "n": 3}, "tokens": "skipped",
+                 "seconds": "skipped"},
+        "necessity": "skipped", "passed": True}})
+    out = run_report(tmp_path)
+    assert out["metrics"]["#12"]["verdict"] == "pass"
+    assert "≤" in out["metrics"]["#12"]["note"]
+    assert "稳定" in out["metrics"]["#12"]["note"]
 
 
 # --- #8 双源裁决（#29/#30）：trace 报错 + judges/deps.json ---

@@ -81,6 +81,14 @@ def test_semver_still_numeric(tmp_path):
     assert out["versions"] == ["v2", "v10"]
 
 
+def test_semver_minor_ordering_numeric(tmp_path):
+    # 次要版本段也按数字排：v1.2 < v1.10（原实现只取首个数字，退化为字符串序）
+    make_result(tmp_path, "v1.10", {"#2": "pass"})
+    make_result(tmp_path, "v1.2", {"#2": "fail"})
+    out = run_evo(tmp_path)
+    assert out["versions"] == ["v1.2", "v1.10"]
+
+
 def test_out_natural_order_also_works(tmp_path):
     make_result(tmp_path, "v1", {"#2": "pass"})
     r = subprocess.run(

@@ -142,11 +142,14 @@ def build(d: Path) -> dict:
             std = tc["var"] ** 0.5
         cv = (std / mean) if mean else (0 if std == 0 else 99)
         stable = n >= 2 and cv <= COST_CV_MAX
+        if n < 2:
+            note = "仅单次运行，无稳定性证据"
+        elif stable:
+            note = f"变异系数 {cv:.2f} ≤ {COST_CV_MAX}，稳定"
+        else:
+            note = f"变异系数 {cv:.2f} > {COST_CV_MAX}，不稳定"
         m["#12"] = {"verdict": "pass" if stable else "warn", "method": METHOD_RUN,
-                    "data": score["cost"],
-                    "note": (f"变异系数 {cv:.2f} ≤ {COST_CV_MAX}，稳定" if n >= 2
-                             else f"变异系数 {round(cv, 2)} > {COST_CV_MAX}，不稳定" if n >= 2
-                             else "仅单次运行，无稳定性证据")}
+                    "data": score["cost"], "note": note}
 
     m["#9"] = {"verdict": "skipped", "method": METHOD_COMPARE, "data": None, "note": "无 expect/actual 对比"}
     if isinstance(compare, dict) and (compare.get("score") is not None

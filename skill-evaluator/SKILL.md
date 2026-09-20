@@ -1,7 +1,6 @@
 ---
 name: skill-evaluator
-description: Evaluate a skill package against 19 quality metrics. Only runs when explicitly asked (e.g. "评估这个 skill"), never auto-triggers.
-disable-model-invocation: true
+description: Evaluate a skill package against 19 quality metrics, producing report.json and report.md. Use when the user explicitly asks to evaluate, assess, or 评估 a skill package (give it the skill path).
 ---
 
 # Skill Evaluator
