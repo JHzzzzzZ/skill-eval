@@ -48,7 +48,7 @@ evalsets/<name>/v1/
 
 | 场景 | 做什么 | 服务指标 |
 |---|---|---|
-| 触发评测 | 三组 prompt 各跑一次，带 `--early-exit`（ADR-0007）：事件流出现首次工具调用即终止该次运行省 token；**triggered 由 `trigger_judge.py` 用 LLM 按最终回答判定**（trace_run.triggered 仅作粗筛），环境故障的 case 不计入 P/R 分母；early-exit 截断的 case 最终回答为空，判定交由 trigger_judge 按已执行的步骤裁决 | #1 |
+| 触发评测 | 三组 prompt 各跑一次，带 `--early-exit`（ADR-0007 修订）：事件流出现**首次指向被测 SKILL.md 的工具调用**（渐进式披露下 = agent 决定加载 skill）即终止该次运行省 token；未出现该调用的 run 跑完整，其行为正是 precision 的证据；**triggered 由 `trigger_judge.py` 用 LLM 按最终回答判定**（trace_run.triggered 仅作粗筛），环境故障的 case 不计入 P/R 分母；early-exit 截断的 case 最终回答为空，判定交由 trigger_judge 按已执行的步骤裁决 | #1 |
 | 主运行 Golden Run | 干净 worktree + 加载 skill，跑 cases，采 trace | #4/#8/#9 |
 | 基线 A/B | 同 cases、同 worktree，但**不加载** skill | #5 |
 | 重复运行 ×N | 主运行重复 N 次，每次 trace 存档 | #12/#15 |
@@ -68,7 +68,7 @@ evalsets/<name>/v1/
 
 ## 执行载体与扩展点（ADR-0007）
 
-沙箱运行的唯一执行载体是 pi CLI 子进程（逐 case 一次 `pi --mode json --no-session`），触发评测带 `--early-exit`（首次工具调用即停，省 token）。**不使用 subagent 机制**。未来若需支持 pi 以外的 agent，在 trace_run.py 之上加 adapter 层；本期只预留此声明，不实现（避免没有第二个实现的抽象）。
+沙箱运行的唯一执行载体是 pi CLI 子进程（逐 case 一次 `pi --mode json --no-session`），触发评测带 `--early-exit`（首次指向被测 SKILL.md 的调用即停，省 token；ADR-0007 修订）。**不使用 subagent 机制**。未来若需支持 pi 以外的 agent，在 trace_run.py 之上加 adapter 层；本期只预留此声明，不实现（避免没有第二个实现的抽象）。
 
 被测 skill 出现宿主环境硬编码（绝对路径、特定用户目录、.claude/.cursor 等他方生态路径）→ 可移植性闸门整体 fail（ADR-0008，static_check 的 `hardcoded` 字段）。
 

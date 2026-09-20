@@ -284,3 +284,96 @@ def test_kill_tree_terminates_wrapped_process(tmp_path):
     proc.wait(timeout=15)
     assert time.time() - t0 < 10  # 秒杀，不是等 sleep(30) 自然结束
     assert proc.returncode != 0 or proc.poll() is not None
+
+
+# --- ADR-0007 修订：early-exit 停止条件 = 首次指向被测 SKILL.md 的调用 ---
+
+MARKER_LINES = [
+    '{"type":"session","id":"m1"}',
+    # 第 1 步：与 skill 无关的探索（旧口径会在这里误杀 → 假阴性）
+    json.dumps({"type": "tool_execution_start", "toolCallId": "t1", "toolName": "bash",
+                "args": {"command": "ls"}}),
+    json.dumps({"type": "tool_execution_end", "toolCallId": "t1", "result": "ok", "isError": False}),
+    # 第 2 步：加载被测 skill（= 触发决定点）
+    json.dumps({"type": "tool_execution_start", "toolCallId": "t2", "toolName": "read",
+                "args": {"path": "C:/s/SKILL.md"}}),
+    '{"type":"turn_end","usage":{"totalTokens":10}}',
+    '{"type":"agent_end","messages":[{"role":"assistant","usage":{"totalTokens":25},'
+    '"content":[{"type":"text","text":"answer"}]}]}',
+]
+
+
+def test_early_exit_waits_for_skill_load_not_first_call():
+    # 先探索后加载：不能在第 1 步杀（会误杀成假阴性），要等到加载事件
+    agg = EventAggregator(early_exit=True, skill_marker=r"C:\s\SKILL.md")
+    for line in MARKER_LINES:
+        agg.feed(line)
+        if agg.stop:
+            break
+    trace = agg.result()
+    assert agg.stop is True
+    assert trace["early_exit"] is True
+    assert [s["tool"] for s in trace["steps"]] == ["bash", "read"]  # 探索步保留作证据
+    assert trace["steps"][-1]["args"] == {"path": "C:/s/SKILL.md"}  # 停在加载事件上
+
+
+def test_early_exit_with_marker_never_hit_runs_to_end():
+    # 未加载被测 skill → 跑完整（行为是 precision 的证据），不打 early_exit 标
+    agg = EventAggregator(early_exit=True, skill_marker=r"C:\s\SKILL.md")
+    no_load = [l for l in MARKER_LINES if "C:/s/SKILL.md" not in l]
+    for line in no_load:
+        agg.feed(line)
+    trace = agg.result()
+    assert agg.stop is False
+    assert "early_exit" not in trace
+    assert trace["answer"] == "answer"
+
+
+def test_early_exit_marker_none_keeps_old_behavior():
+    # 兼容：无 marker（无 skill 场景/离线测试）→ 旧口径任意首次调用即停
+    agg = EventAggregator(early_exit=True)
+    for line in MARKER_LINES:
+        agg.feed(line)
+        if agg.stop:
+            break
+    assert agg.stop is True
+    assert [s["tool"] for s in agg.result()["steps"]] == ["bash"]
+
+
+def test_events_seam_skill_marker_via_cli(tmp_path):
+    # CLI 通路：--skill + --early-exit 时 marker = resolve 后的路径，按加载事件停
+    f = tmp_path / "events.jsonl"
+    f.write_text("\n".join(MARKER_LINES), encoding="utf-8")
+    out = json.loads(run_trace(["--events", str(f), "--early-exit",
+                                "--skill", "/s/SKILL.md"]).stdout)
+    assert out["early_exit"] is True
+    assert [s["tool"] for s in out["steps"]] == ["bash", "read"]
+
+
+def test_events_seam_skill_marker_never_hit(tmp_path):
+    # CLI 通路：给了 --skill 但事件流从未加载 → 跑完整，无 early_exit 标
+    f = tmp_path / "events2.jsonl"
+    f.write_text("\n".join(l for l in MARKER_LINES if "C:/s/SKILL.md" not in l), encoding="utf-8")
+    out = json.loads(run_trace(["--events", str(f), "--early-exit",
+                                "--skill", "/s/SKILL.md"]).stdout)
+    assert "early_exit" not in out
+    assert out["answer"] == "answer"
+
+
+def test_early_exit_marker_matches_escaped_windows_path():
+    # 冒烟回归：路径反斜杠在 json 序列化前后形态不同，匹配必须基于 args 原始值
+    p = "C:\\Users\\x\\skill-evaluator\\.skillrepos\\todo-add\\SKILL.md"
+    agg = EventAggregator(early_exit=True, skill_marker=p)
+    line = json.dumps({"type": "tool_execution_start", "toolCallId": "t1", "toolName": "read",
+                       "args": {"path": p}})
+    agg.feed(line)
+    assert agg.stop is True  # 修前这里恒 False（dumps 双斜杠对不上）
+
+
+def test_early_exit_marker_matches_forward_slash_readback():
+    # 模型用 / 回读同一文件也要命中
+    agg = EventAggregator(early_exit=True, skill_marker="C:\\s\\x\\SKILL.md")
+    line = json.dumps({"type": "tool_execution_start", "toolCallId": "t1", "toolName": "read",
+                       "args": {"path": "c:/s/x/SKILL.md"}})
+    agg.feed(line)
+    assert agg.stop is True

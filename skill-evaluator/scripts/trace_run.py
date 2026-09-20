@@ -8,6 +8,7 @@ trace 中的 triggered 判定：agent 是否执行了至少一次工具调用。
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -25,13 +26,19 @@ kill_tree = _kill_tree
 class EventAggregator:
     """逐行聚合 pi --mode json 事件流。feed(line) 增量消费，result() 出 trace。
 
-    early_exit=True（ADR-0007，触发评测专用）：首次 tool_execution_start 即置 stop，
-    编排层据此 kill 子进程，不再花 token 跑完剩余回答。判定是确定性粗筛
-    （与 trace.triggered 同口径），精确判定仍由 trigger_judge.py 兜底。
-    """
+    early_exit=True（ADR-0007，触发评测专用）：检测到“已加载被测 skill”即置 stop，
+    编排层据此 kill 子进程，不再花 token 跑完剩余回答。精确判定仍由 trigger_judge.py 兜底。
 
-    def __init__(self, early_exit: bool = False):
+    停止条件（ADR-0007 修订）：pi 是渐进式披露——启动时只有 name/description 进上下文，
+    SKILL.md 全文由模型决定使用时自己 read（实测 golden 全部第 0 步 read，但
+    trig-shouldnot-3 实证过“先探索 4 步才加载”）。因此停止条件是首次
+    args 指向被测 SKILL.md 的工具调用（= 加载事件本身），而不是任意首次工具调用：
+    后者会在 agent 先探索后加载时把触发 run 误杀成假阴性，系统性低估 recall。
+    skill_marker=None 时退回旧口径（任意首次工具调用即停），供无 skill 场景/离线测试。"""
+
+    def __init__(self, early_exit: bool = False, skill_marker: str | None = None):
         self.early_exit = early_exit
+        self.skill_marker = skill_marker
         self.stop = False
         self.steps, self.errors, self.usage_totals, self.answer_parts = [], [], [], []
 
@@ -55,8 +62,8 @@ class EventAggregator:
             if isinstance(raw_args, str) and len(raw_args) > 200:
                 raw_args = raw_args[:200]
             self.steps.append({"tool": ev.get("toolName", "?"), "args": raw_args, "args_hash": args_hash})
-            if self.early_exit:
-                self.stop = True  # 粗筛信号：agent 已动手 → 后续 token 不再花
+            if self.early_exit and self._hit_marker(raw_args):
+                self.stop = True  # 加载事件 = 触发决定点：后续 token 不再花
                 return
         elif t == "tool_execution_end" and ev.get("isError"):
             self.errors.append(f"工具错误 {ev.get('toolCallId')}: {str(ev.get('result'))[:200]}")
@@ -70,6 +77,27 @@ class EventAggregator:
                     for c in msg.get("content", []):
                         if isinstance(c, dict) and c.get("type") == "text" and c.get("text"):
                             self.answer_parts.append(c["text"])  # ISS-3: 最终回答全文
+
+    def _hit_marker(self, raw_args) -> bool:
+        """停止条件：无 marker → 任意工具调用（旧口径）；有 marker → args 指向被测 SKILL.md。
+
+        匹配用 args 的原始值（dict/list 递归取值）而不是 json.dumps——dumps 会把
+        Windows 路径的 \\ 转义成 \\\\，归一化后与 marker 永远对不上（冒烟实测踩坑）。
+        分隔符/连续斜杠/大小写归一（模型回读时可能用 / 或 \\）。"""
+        if not self.skill_marker:
+            return True
+
+        def text(x):
+            if isinstance(x, str):
+                return x
+            if isinstance(x, dict):
+                return " ".join(text(v) for v in x.values())
+            if isinstance(x, (list, tuple)):
+                return " ".join(text(v) for v in x)
+            return str(x)
+
+        norm = lambda s: re.sub(r"/+", "/", str(s).replace("\\", "/")).lower()
+        return norm(self.skill_marker) in norm(text(raw_args))
 
     def result(self) -> dict:
         trace = {
@@ -88,9 +116,9 @@ class EventAggregator:
         return trace
 
 
-def parse_events(lines, early_exit: bool = False) -> dict:
+def parse_events(lines, early_exit: bool = False, skill_marker: str | None = None) -> dict:
     """把 pi --mode json 的事件流聚合为 trace。非法行计入 errors，不中断。"""
-    agg = EventAggregator(early_exit)
+    agg = EventAggregator(early_exit, skill_marker)
     for line in lines:
         agg.feed(line)
         if agg.stop:
@@ -168,8 +196,12 @@ def main():
         return
 
     if events_file:
+        # 离线解析同样应用 marker 口径（--skill 给了就该按加载事件停）
+        marker = None
+        if not no_skill and skills:
+            marker = str(Path(skills[0]).resolve())
         trace = parse_events(Path(events_file).read_text(encoding="utf-8", errors="replace").splitlines(),
-                             early_exit=bool(early_exit))
+                             early_exit=bool(early_exit), skill_marker=marker)
         if out_path:
             Path(out_path).write_text(json.dumps(trace, ensure_ascii=False, indent=2), encoding="utf-8")
         print(json.dumps(trace, ensure_ascii=False))
@@ -214,9 +246,11 @@ def main():
             proc = subprocess.Popen(cmd, cwd=worktree, stdout=subprocess.PIPE,
                                     stderr=subprocess.PIPE, text=True,
                                     encoding="utf-8", errors="replace")
-            watchdog = threading.Timer(600, lambda: _kill_tree(proc))
+            killed_by_watchdog = threading.Event()
+            watchdog = threading.Timer(600, lambda: (killed_by_watchdog.set(), _kill_tree(proc)))
             watchdog.start()
-            agg = EventAggregator(early_exit=True)
+            agg = EventAggregator(early_exit=True,
+                                  skill_marker=str(Path(skills[0]).resolve()) if skills else None)
             try:
                 for line in proc.stdout:
                     agg.feed(line)
@@ -224,7 +258,7 @@ def main():
                         break
             finally:
                 watchdog.cancel()
-            timed_out = watchdog.finished.is_set()  # 由 watchdog 杀树 = 运行超时，非 pi 崩溃
+            timed_out = killed_by_watchdog.is_set()  # 不能用 watchdog.finished：cancel() 也会 set 它
             if agg.stop and proc.poll() is None:
                 _kill_tree(proc)
             try:
