@@ -289,7 +289,7 @@ td,th{border:1px solid #dde2e7;padding:4px 8px;text-align:left}
 <script>function tab(n){document.querySelectorAll('.tab').forEach(
  e=>e.classList.toggle('on',e.id==='t-'+n));
  document.querySelectorAll('nav button').forEach(
- e=>e.classList.toggle('on',e.dataset.t===n));}}</script>
+ e=>e.classList.toggle('on',e.dataset.t===n));}</script>
 </body></html>'''
 
 

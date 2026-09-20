@@ -238,3 +238,14 @@ def test_gbk_artifact_no_crash(tmp_path):
     out = json.loads((d / "report.json").read_text(encoding="utf-8"))
     # gbk 兼容读取成功：#2 有数据，不是 skipped
     assert out["metrics"]["#2"]["data"] is not None
+
+
+def test_html_tab_script_balanced(tmp_path):
+    # 回归：tab 切换脚本花括号必须配对（曾因模板转义残留多一个 } 导致点击失效）
+    write_inputs(tmp_path, {})
+    r = subprocess.run([sys.executable, str(SCRIPT), str(tmp_path), "--html"], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    html = (tmp_path / "report.html").read_text(encoding="utf-8")
+    script = html.split("<script>")[1].split("</script>")[0]
+    assert script.count("{") == script.count("}")
+    assert "t-flow" in html and "t-evalset" in html
