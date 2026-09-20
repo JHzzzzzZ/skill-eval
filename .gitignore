@@ -9,3 +9,5 @@ scratch/
 wt-*/
 .skillrepos/
 tmp-ev/
+.sandbox/
+.sandbox*

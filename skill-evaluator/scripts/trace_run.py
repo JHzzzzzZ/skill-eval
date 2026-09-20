@@ -27,7 +27,6 @@ class EventAggregator:
     def __init__(self, early_exit: bool = False):
         self.early_exit = early_exit
         self.stop = False
-        self.t0 = None
         self.steps, self.errors, self.usage_totals, self.answer_parts = [], [], [], []
 
     def feed(self, line: str):
@@ -55,8 +54,6 @@ class EventAggregator:
                 return
         elif t == "tool_execution_end" and ev.get("isError"):
             self.errors.append(f"工具错误 {ev.get('toolCallId')}: {str(ev.get('result'))[:200]}")
-        elif t == "turn_end" and not self.t0:
-            self.t0 = time.time()
         if t == "turn_end":
             u = ev.get("usage") or {}
             self.usage_totals.append(u.get("totalTokens") or u.get("tokens", {}).get("total") or 0)
@@ -72,7 +69,7 @@ class EventAggregator:
         trace = {
             "steps": self.steps,
             "tool_calls": len(self.steps),
-            # usage 是累计值：取最后一条非零
+            # usage 是累计值：取事件流最后一条；实跑模式 seconds 由 elapsed 计时
             "tokens": self.usage_totals[-1] if self.usage_totals else 0,
             "seconds": 0.0,  # 事件流无可靠时间戳时置 0，实跑模式下由 elapsed 计时填充
             "answer": "\n".join(self.answer_parts),

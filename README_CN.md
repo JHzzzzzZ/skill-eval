@@ -25,7 +25,7 @@ skill-evaluator/
 ├── reference.md        # 细则：指标映射、沙箱定义、版本号、契约、fallback
 ├── judges/             # LLM 评审 rubric（结构化 JSON 输出，temperature=0）
 ├── scripts/            # 确定性工具（每个脚本一个有文档的 CLI seam）
-└── tests/              # 104 个测试，全部走 subprocess seam
+└── tests/              # 111 个测试，全部走 subprocess seam
 docs/adr/               # 6 条架构决策记录
 ```
 
@@ -50,7 +50,7 @@ docs/adr/               # 6 条架构决策记录
 
 ```bash
 cd skill-evaluator
-python -m pytest tests        # 104 个测试全绿
+python -m pytest tests        # 111 个测试全绿
 ```
 
 设计决策及理由见 `docs/adr/`。英文版见 `README.md`。

@@ -25,8 +25,8 @@ skill-evaluator/
 ├── reference.md        # details: metric map, sandbox, versioning, contracts, fallbacks
 ├── judges/             # LLM-judge rubrics (structured JSON output, temp=0)
 ├── scripts/            # deterministic tooling (each script = one documented CLI seam)
-└── tests/              # 104 tests, subprocess-seam based
-docs/adr/               # 6 architecture decisions
+└── tests/              # 111 tests, subprocess-seam based
+docs/adr/               # 9 architecture decisions
 ```
 
 The evaluator is **self-contained**: all scripts and tests live inside the skill package (ADR-0006). Evaluation artifacts (eval sets, reports) live in `skill-evaluator/evalsets/<skill-name>/` and are frozen per version — never regenerated on re-runs.
@@ -50,7 +50,7 @@ Optional: set `SKILL_EVAL_MODEL=<provider/id>` to pin the model used for sandbox
 
 ```bash
 cd skill-evaluator
-python -m pytest tests        # 104 tests, all green
+python -m pytest tests        # 111 tests, all green
 ```
 
 Design decisions and their reasoning live in `docs/adr/`. See `README_CN.md` for the Chinese version.
