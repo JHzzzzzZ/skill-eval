@@ -33,14 +33,14 @@ SKILL.md 的细则层。指标编号 #N 对应 prompt.txt 的 19 条需求。
 
 ```
 evalsets/<name>/v1/
-├── triggers/should/*.json       # {"prompt": "..."} — 人工提供 5-10 条，缺则自动生成
+├── triggers/should/*.json       # {"prompt": "..."} — 每组至少 10 条（可配，见 evalset_check.py），人工提供不足则自动生成补齐
 ├── triggers/should-not/*.json
 ├── triggers/confusable/*.json
 ├── cases/*.json                 # {"prompt": "...", "expect": "..."}
 └── meta.json                    # {"frozen_at", "reviewed_by": "human"}
 ```
 
-冻结流程：自动生成 → 展示给用户 → **人工明确确认后**才写 `meta.json` 标记冻结。冻结后所有版本评估复用，不重新生成。`should` 类 prompt 不得照抄 description 措辞（否则 precision 测不出真实值）。
+冻结流程：自动生成 → **条数闸门**（`evalset_check.py <evalsets/<name>/vN>`：三组触发集各 ≥ 最小条数，默认 10，可经 `--min` / `SKILL_EVAL_TRIGGER_MIN` / `--min-should|--min-not|--min-confusable` 配置，不达标不进入人工审核）→ 展示给用户 → **人工明确确认后**才写 `meta.json` 标记冻结。冻结后所有版本评估复用，不重新生成。`should` 类 prompt 不得照抄 description 措辞（否则 precision 测不出真实值）。
 
 审核载体是 `report.py --html` 产出的 report.html「评测集审核」tab：顶部展示被测 skill 的 name/description（`--skill <被测skill目录>` 指定，缺省兖底读 `uploads/<name>-<时间戳>/SKILL.md` 存档），让审核人先知道在审什么。逐条标通过/驳回后点「提交 review.json」直接落盘（showSaveFilePicker，存到 `reviews/`，浏览器记住上次目录；不支持的浏览器回退为下载），复制/下载保留作兜底。
 
@@ -64,7 +64,7 @@ evalsets/<name>/v1/
 
 可选 `--thinking <off|minimal|low|medium|high|xhigh|max>` 控制思考档位。LLM 评审（judges/）用**同一个模型配置**，保证与被测运行同源。
 
-可配参数：重复运行 N=3；IDEMPOTENT_MAX_RATIO=0.5（idem.py）；DESCRIPTION_TOKEN_LIMIT=100、NAME_MAX_CHARS=64（static_check.py）；F1_PASS=0.7、COST_CV_MAX=0.5（report.py）。
+可配参数：重复运行 N=3；IDEMPOTENT_MAX_RATIO=0.5（idem.py）；DESCRIPTION_TOKEN_LIMIT=100、NAME_MAX_CHARS=64（static_check.py）；触发集每组最小条数 10（evalset_check.py，环境变量 SKILL_EVAL_TRIGGER_MIN / CLI --min*）；F1_PASS=0.7、COST_CV_MAX=0.5（report.py）。
 
 ## 执行载体与扩展点（ADR-0007）
 
