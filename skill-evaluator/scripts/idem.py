@@ -1,5 +1,6 @@
-"""幂等性判定（#15）。Seam: python idem.py <trace1.json> <trace2.json> -> stdout JSON
+"""幂等性判定（#15）。Seam: python idem.py <trace1.json> <trace2.json> [--out <file>] -> stdout JSON
 
+--out：脚本自写 UTF-8 文件（stdout 同步回显），见 static_check.py 说明。
 第二次运行重复第一次已完成步骤的比例高 = 不幂等（如重复下载已存在的文件）。
 """
 import json
@@ -20,21 +21,34 @@ def load_trace(path: str) -> list:
 
 
 def main():
-    if len(sys.argv) != 3:
-        print("usage: idem.py <trace1.json> <trace2.json>", file=sys.stderr)
+    args = sys.argv[1:]
+    out_path = None
+    rest = []
+    i = 0
+    while i < len(args):
+        if args[i] == "--out":
+            out_path = Path(args[i + 1]); i += 2
+        else:
+            rest.append(args[i]); i += 1
+    if len(rest) != 2:
+        print("usage: idem.py <trace1.json> <trace2.json> [--out <file>]", file=sys.stderr)
         sys.exit(2)
-    steps1 = load_trace(sys.argv[1])
-    steps2 = load_trace(sys.argv[2])
+    steps1 = load_trace(rest[0])
+    steps2 = load_trace(rest[1])
     seen1 = {(s["tool"], s["args_hash"]) for s in steps1}
     repeated = sum(1 for s in steps2 if (s["tool"], s["args_hash"]) in seen1)
     total = len(steps2)
     ratio = repeated / total if total else 0.0
-    print(json.dumps({
+    out = {
         "total_steps": total,
         "repeated_steps": repeated,
         "ratio": ratio,
         "idempotent": ratio <= IDEMPOTENT_MAX_RATIO,
-    }, ensure_ascii=False))
+    }
+    text = json.dumps(out, ensure_ascii=False)
+    if out_path:
+        out_path.write_text(text, encoding="utf-8")
+    print(text)
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-"""Seam: python scripts/static_check.py <skill目录> -> stdout JSON
+"""Seam: python scripts/static_check.py <skill目录> [--out <file>] -> stdout JSON
 
 契约（reference.md § 指标映射）：
 - exit code 0 = 检查完成（不代表 skill 合格）
@@ -124,28 +124,47 @@ def test_token_overlimit_is_warning_not_error(tmp_path):
     assert len(out["warnings"]) == 1
 
 
-def test_invoke_field_validated(tmp_path):
-    # #7: frontmatter 有 invoke 且合法 → 回显解析结果（规范值 human/agent/both）
-    d = make_skill(tmp_path, (
-        "---\nname: s\ndescription: d\ninvoke: agent\n---\nbody\n"
-    ))
+def test_invoke_maps_disable_model_invocation(tmp_path):
+    # #7: 映射 pi 真实 frontmatter 字段 disable-model-invocation（true → resolved=human）
+    d = make_skill(tmp_path, "---\nname: s\ndescription: d\ndisable-model-invocation: true\n---\nbody\n")
     out = run_check(d)
-    assert out["invoke"]["resolved"] == "agent"
+    assert out["invoke"]["resolved"] == "human"
+    assert "disable-model-invocation=true" in out["invoke"]["note"]
 
 
-def test_invoke_field_invalid(tmp_path):
-    d = make_skill(tmp_path, (
-        "---\nname: s\ndescription: d\ninvoke: whatever\n---\nbody\n"
-    ))
+def test_invoke_false_or_missing_is_both(tmp_path):
+    # false 与缺省同义：模型按 description 触发，用户也可手动调用
+    d = make_skill(tmp_path, "---\nname: s\ndescription: d\ndisable-model-invocation: false\n---\nbody\n")
     out = run_check(d)
-    assert out["passed"] is False
-    assert any("invoke" in e for e in out["errors"])
+    assert out["invoke"]["resolved"] == "both"
 
 
 def test_invoke_missing_defaults_both(tmp_path):
+    # 字段缺省 = pi 默认 model-invoked：resolved=both 且 note 说明来源
     d = make_skill(tmp_path, "---\nname: s\ndescription: d\n---\nbody\n")
     out = run_check(d)
     assert out["invoke"]["resolved"] == "both"
+    assert "缺省" in out["invoke"]["note"]
+
+
+def test_invoke_nonboolean_is_warning_not_error(tmp_path):
+    # pi 对非布尔值按未知字段忽略：记警告不算失败（pi 行为对齐）
+    d = make_skill(tmp_path, "---\nname: s\ndescription: d\ndisable-model-invocation: maybe\n---\nbody\n")
+    out = run_check(d)
+    assert out["passed"] is True
+    assert any("disable-model-invocation" in w for w in out["warnings"])
+
+
+def test_out_writes_utf8_file(tmp_path):
+    # --out：脚本自写 UTF-8（Windows shell 重定向产 GBK 是历史事故的根因）
+    d = make_skill(tmp_path, "---\nname: s\ndescription: 记需求登记\n---\nbody\n")
+    out_file = tmp_path / "static.json"
+    r = subprocess.run([sys.executable, str(SCRIPT), str(d), "--out", str(out_file)],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout)["invoke"]["resolved"] == "both"
+    payload = json.loads(out_file.read_text(encoding="utf-8"))  # 非 UTF-8 字节会在这里炸
+    assert payload["description"] == "记需求登记"
 
 
 def test_missing_argv_usage_not_crash():

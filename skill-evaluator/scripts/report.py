@@ -68,17 +68,18 @@ def from_static(static, m: dict):
         return
     errors = static.get("errors", [])
     has_danger = bool(static.get("dangerous"))
-    invoke_err = any("invoke" in e for e in errors)
+    invoke_warn = any("disable-model-invocation" in w for w in static.get("warnings", []))
     m_err = any("name" in e or "description" in e for e in errors)
     token_warn = any("token" in w for w in static.get("warnings", []))
     m["#2"] = {"verdict": "fail" if m_err else "warn" if token_warn else "pass",
                "method": METHOD_STATIC,
                "data": {"description_tokens": static.get("description_tokens")},
                "note": "name/description 规范与 token 阈值"}
-    m["#7"] = {"verdict": "fail" if invoke_err
-               else "pass" if static.get("invoke", {}).get("resolved") in ("human", "agent", "both")
+    m["#7"] = {"verdict": "warn" if invoke_warn
+               else "pass" if static.get("invoke", {}).get("resolved") in ("human", "both")
                else "skipped",
-               "method": METHOD_STATIC, "data": static.get("invoke"), "note": "调用方式 frontmatter 校验"}
+               "method": METHOD_STATIC, "data": static.get("invoke"),
+               "note": "调用方式 frontmatter 校验（disable-model-invocation：true=human，缺省=both）"}
     m["#13"] = {"verdict": "fail" if has_danger else "pass",
                 "method": METHOD_STATIC, "data": static.get("dangerous"), "note": "危险命令扫描"}
 

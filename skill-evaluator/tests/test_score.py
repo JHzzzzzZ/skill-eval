@@ -165,3 +165,19 @@ def test_cost_stats_include_n(tmp_path):
     assert out["cost"]["tool_calls"]["n"] == 2
     assert out["cost"]["tokens"]["min"] == 100
     assert out["cost"]["tokens"]["max"] == 200
+
+
+# --- --out ---
+
+def test_out_writes_utf8_file(tmp_path):
+    # --out：脚本自写 UTF-8（Windows shell 重定向产 GBK 的根因补丁）
+    (tmp_path / "triggers.json").write_text(json.dumps(
+        {"should": [True], "should_not": [False], "confusable": []}), encoding="utf-8")
+    (tmp_path / "runs.json").write_text(json.dumps(
+        [{"tool_calls": 1, "tokens": 10, "seconds": 1.0}]), encoding="utf-8")
+    out_file = tmp_path / "score.json"
+    r = subprocess.run([sys.executable, str(SCRIPT), str(tmp_path), "--out", str(out_file)],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout)["trigger"]["f1"] == 1.0
+    assert json.loads(out_file.read_text(encoding="utf-8"))["passed"] is True

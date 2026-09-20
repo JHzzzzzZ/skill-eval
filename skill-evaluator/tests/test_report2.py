@@ -42,16 +42,16 @@ def test_ablation_verdict_reaches_report(tmp_path):
     assert out["metrics"]["#6"]["verdict"] == "pass"  # 消融后掉分 = 原文必要
 
 
-def test_static_seven_reads_errors_not_resolved(tmp_path):
-    # P1: static_check 对非法 invoke 记 error 但 resolved 保持默认 both → #7 必须看 errors
+def test_static_seven_malformed_bool_is_warn(tmp_path):
+    # #7 新契约：disable-model-invocation 非布尔 → warning → #7 warn，不影响 #2/#13
     write_inputs(tmp_path, {"static.json": {
         "name": "s", "description": "d", "description_tokens": 50,
         "invoke": {"resolved": "both"},
-        "errors": ["invoke 取值 'whatever' 不在 [...]（#7）"], "warnings": [],
-        "dangerous": [], "passed": False}})
+        "errors": [], "warnings": ["disable-model-invocation 取值 'maybe' 不是布尔（pi 将按未知字段忽略）（#7）"],
+        "dangerous": [], "passed": True}})
     out = run_report(tmp_path)
-    assert out["metrics"]["#7"]["verdict"] == "fail"
-    assert out["metrics"]["#2"]["verdict"] == "pass"  # #7 的错误不污染 #2
+    assert out["metrics"]["#7"]["verdict"] == "warn"
+    assert out["metrics"]["#2"]["verdict"] == "pass"  # #7 的警告不污染 #2
     assert out["metrics"]["#13"]["verdict"] == "pass"
 
 

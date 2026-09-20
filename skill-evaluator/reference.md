@@ -83,9 +83,9 @@ evalsets/<name>/v1/
 - `runs.json`：`[{"tool_calls", "tokens", "seconds"}, ...]`，golden（有 skill）各次运行
 - `baseline.json`：同 runs.json 格式，基线（无 skill）运行，缺省则 necessity 输出 `skipped`
 - `trace-<序号>.json`：`{"steps": [{"tool", "args", "args_hash"}, ...], "answer", "tokens", "seconds", "triggered", "errors"}`（trace_run.py 落盘，--out）
-- `static.json`：static_check.py stdout
-- `score.json`：score.py stdout
-- `idem.json`：多次 idem.py 结果的聚合 `{"ratio", "idempotent"}`
+- `static.json`：static_check.py --out（脚本自写 UTF-8；stdout 同步回显。禁 shell 重定向——GBK 控制台会产 GBK 文件）
+- `score.json`：score.py --out（同上）
+- `idem.json`：多次 idem.py --out 结果的聚合 `{"ratio", "idempotent"}`
 - `golden.json`：主运行的 golden trace（#8 唯一数据源）
 - `compare.json`：compare.py 裁决（#9）
 - `process.json`：process.py 裁决（#10）

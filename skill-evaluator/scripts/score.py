@@ -1,5 +1,5 @@
 """评分计算（#1 P/R/F1，#4 均值方差，#5 必要性 A/B）。
-Seam: python score.py <results目录> -> stdout JSON
+Seam: python score.py <results目录> [--out <file>] -> stdout JSON（--out 另写 UTF-8，见 static_check.py 说明）
 
 输入（落盘在同一 results 目录，契约见 reference.md § 中间产物）:
 - triggers.json: {"should": [bool...], "should_not": [...], "confusable": [...]}（可选）
@@ -73,10 +73,19 @@ def necessity(runs: list, baseline: list):
 
 
 def main():
-    if len(sys.argv) != 2:
-        print("usage: score.py <results目录>", file=sys.stderr)
+    args = sys.argv[1:]
+    out_path = None
+    rest = []
+    i = 0
+    while i < len(args):
+        if args[i] == "--out":
+            out_path = Path(args[i + 1]); i += 2
+        else:
+            rest.append(args[i]); i += 1
+    if len(rest) != 1:
+        print("usage: score.py <results目录> [--out <file>]", file=sys.stderr)
         sys.exit(2)
-    d = Path(sys.argv[1])
+    d = Path(rest[0])
     triggers = load_json(d / "triggers.json")
     runs = load_json(d / "runs.json") or []
     baseline = load_json(d / "baseline.json") or []
@@ -87,7 +96,10 @@ def main():
     measured = [trigger != "skipped"] + [v != "skipped" for v in cost.values()]
     out = {"trigger": trigger, "cost": cost, "necessity": necessity_out,
            "passed": any(measured)}
-    print(json.dumps(out, ensure_ascii=False))
+    text = json.dumps(out, ensure_ascii=False)
+    if out_path:
+        out_path.write_text(text, encoding="utf-8")
+    print(text)
 
 
 if __name__ == "__main__":

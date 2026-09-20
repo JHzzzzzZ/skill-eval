@@ -1,9 +1,12 @@
-"""静态检查（#2/#7/#13）。Seam: python static_check.py <skill目录> -> stdout JSON
+"""静态检查（#2/#7/#13）。Seam: python static_check.py <skill目录> [--exclude <文件>] [--out <file>] -> stdout JSON
+
+--out：脚本自写 UTF-8 文件（stdout 同步回显）——Windows 控制台重定向会产 GBK，
+中间产物一律用 --out，禁止 shell 重定向（ADR-0009 同源原则）。
 
 stdout 契约（字段恒输出）：
 {
   "name": str|null, "description": str|null, "description_tokens": int,
-  "invoke": {"allowed": [str...], "resolved": str, "note": str},
+  "invoke": {"allowed": [str...], "resolved": str, "note": str},   # resolved: both|human（映射 disable-model-invocation）
   "dangerous": [{"pattern": str, "line": int, "file": str, "text": str}],
   "hardcoded": [{"pattern": str, "line": int, "file": str, "text": str}],   # 可移植性闸门（ADR-0008）
   "errors": [str], "warnings": [str], "issues": [str],   # issues = errors + warnings
@@ -21,7 +24,7 @@ from pathlib import Path
 DESCRIPTION_TOKEN_LIMIT = 100
 NAME_MAX_CHARS = 64
 
-INVOKE_VALUES = {"human", "agent", "both"}
+INVOKE_VALUES = {"human", "both"}  # pi 真实三态归约：缺省/false=both（模型+用户）；disable-model-invocation:true=human
 
 DANGEROUS_PATTERNS = [
     r"rm\s+-rf?\b",
@@ -85,18 +88,29 @@ def scan_patterns(skill_dir: Path, patterns, exclude_paths=None):
     return hits
 
 
+def emit(out: dict, out_path) -> None:
+    """stdout 同步回显；--out 存在时另写 UTF-8 文件（禁止 shell 重定向的 GBK 风险）。"""
+    text = json.dumps(out, ensure_ascii=False)
+    if out_path:
+        out_path.write_text(text, encoding="utf-8")
+    print(text)
+
+
 def main():
     argv = sys.argv[1:]
     excludes = []
+    out_path = None
     i = 0
     rest = []
     while i < len(argv):
         if argv[i] == "--exclude":
             excludes.append(argv[i + 1]); i += 2
+        elif argv[i] == "--out":
+            out_path = Path(argv[i + 1]); i += 2
         else:
             rest.append(argv[i]); i += 1
     if len(rest) != 1:
-        print("usage: static_check.py <skill目录> [--exclude <文件>]...", file=sys.stderr)
+        print("usage: static_check.py <skill目录> [--exclude <文件>]... [--out <file>]", file=sys.stderr)
         sys.exit(2)
     skill_dir = Path(rest[0])
     exclude_paths = {Path(e).resolve() for e in excludes}
@@ -108,7 +122,7 @@ def main():
         out["errors"].append("SKILL.md 不存在：不是合法 skill 包")
         out["passed"] = False
         out["issues"] = list(out["errors"])
-        print(json.dumps(out, ensure_ascii=False))
+        emit(out, out_path)
         return
 
     try:
@@ -132,14 +146,17 @@ def main():
             out["warnings"].append(
                 f"description 约 {out['description_tokens']} token，超过阈值 {DESCRIPTION_TOKEN_LIMIT}（#2）")
 
-    # #7 调用方式：读 frontmatter invoke，缺省 both，非法值记 error
-    raw_invoke = meta.get("invoke")
-    if raw_invoke:
-        if raw_invoke in INVOKE_VALUES:
-            out["invoke"]["resolved"] = raw_invoke
-        else:
-            out["errors"].append(
-                f"invoke 取值 '{raw_invoke}' 不在 {sorted(INVOKE_VALUES)}（#7）")
+    # #7 调用方式：映射 pi 真实 frontmatter 字段 disable-model-invocation（ADR-0008）。
+    # 不再检查虚构的 invoke 字段：pi/Agent Skills 规范无此字段，检查恒空转。
+    raw = (meta.get("disable-model-invocation") or "").strip().strip('"').lower()
+    if raw in ("true", "yes", "1"):
+        out["invoke"]["resolved"] = "human"
+        out["invoke"]["note"] = "disable-model-invocation=true：对模型隐藏，仅 /skill:name 手动调用"
+    elif raw in ("", "false", "0", "no"):
+        out["invoke"]["note"] = "缺省/false：模型按 description 触发，用户也可手动调用"
+    else:
+        out["warnings"].append(
+            f"disable-model-invocation 取值 '{raw}' 不是布尔（pi 将按未知字段忽略）（#7）")
 
     out["dangerous"] = scan_patterns(skill_dir, DANGEROUS_PATTERNS, exclude_paths)
     if out["dangerous"]:
@@ -153,7 +170,7 @@ def main():
 
     out["passed"] = not out["errors"]
     out["issues"] = out["errors"] + out["warnings"]
-    print(json.dumps(out, ensure_ascii=False))
+    emit(out, out_path)
 
 
 if __name__ == "__main__":
