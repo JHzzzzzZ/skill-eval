@@ -5,14 +5,13 @@ Seam: python process.py --skill <SKILL.md> --trace <trace.json> [--model m] [--t
 """
 import json
 import os
-import shutil
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from compare import extract_answer  # 同一 JSON 提取逻辑
+from _subprocess import ask_json, build_mode_args
 
 
 def build_prompt(skill_text: str, trace: dict) -> str:
@@ -75,20 +74,10 @@ def main():
     if events_file:
         answer = extract_answer(Path(events_file).read_text(encoding="utf-8", errors="replace"))
     else:
-        cmd = ["pi", "-p", "--no-session", "--no-skills"]
-        eff_model = model or os.environ.get("SKILL_EVAL_MODEL")
-        if eff_model:
-            cmd += ["--model", eff_model]
-        if thinking:
-            cmd += ["--thinking", thinking]
-        cmd += ["--", prompt]
-        resolved = shutil.which("pi") or shutil.which("pi.cmd") or shutil.which("pi.exe")
-        if resolved:
-            cmd[0] = resolved
+        mode_args = build_mode_args(model or os.environ.get("SKILL_EVAL_MODEL"), thinking)
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True,
-                              encoding="utf-8", errors="replace", timeout=300)
-            answer = extract_answer(proc.stdout)
+            events_text = ask_json(mode_args, prompt, timeout=300)
+            answer = extract_answer(events_text)
         except FileNotFoundError:
             answer = {"meaningless": [], "score": 0, "reason": "pi CLI 不存在"}
         except subprocess.TimeoutExpired:

@@ -15,6 +15,12 @@ import threading
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).parent))
+from _subprocess import kill_tree as _kill_tree  # 共享：杀进程树（Windows cmd 壳问题）
+
+# 供测试/外部直接导入（test_trace_run.test_kill_tree_terminates_wrapped_process）
+kill_tree = _kill_tree
+
 
 class EventAggregator:
     """逐行聚合 pi --mode json 事件流。feed(line) 增量消费，result() 出 trace。
@@ -93,17 +99,6 @@ def parse_events(lines, early_exit: bool = False) -> dict:
 
 
 DEFAULT_MODEL_ENV = "SKILL_EVAL_MODEL"  # 环境变量作默认模型，--model 显式覆盖
-
-
-def _kill_tree(proc) -> None:
-    """Windows 下 proc.kill 只杀 cmd.exe 包装层（pi.cmd），node 孙进程存活且持有
-    stderr 管道写端 → 父进程 stderr.read() 等 EOF 永久阻塞（实测死锁）。
-    taskkill /T 杀整棵树释放管道；POSIX 无包装层问题，直接 kill。"""
-    if sys.platform == "win32":
-        subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
-                       capture_output=True, timeout=10)
-    else:
-        proc.kill()
 
 
 def build_args(worktree: str, prompt: str, skill=None,
@@ -229,9 +224,18 @@ def main():
                         break
             finally:
                 watchdog.cancel()
+            timed_out = watchdog.finished.is_set()  # 由 watchdog 杀树 = 运行超时，非 pi 崩溃
             if agg.stop and proc.poll() is None:
                 _kill_tree(proc)
-            proc.wait()
+            try:
+                proc.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                # taskkill 偶发失败/竞态：兜底再杀一次，wait 不设限就是下一个死锁
+                _kill_tree(proc)
+                try:
+                    proc.wait(timeout=15)
+                except subprocess.TimeoutExpired:
+                    pass
             elapsed = time.time() - t0
             trace = agg.result()
             trace["seconds"] = round(elapsed, 2)
@@ -243,7 +247,11 @@ def main():
                     proc.stderr.close()  # 进程仍在：读会等 EOF 阻塞，宁丢诊断不错死锁
             except (OSError, ValueError):
                 pass
-            if proc.returncode not in (0, None) and not trace["errors"] and not agg.stop:
+            if timed_out:
+                # watchdog 杀的树：明确报超时，而不是误导性的「pi 退出码」；保留部分 steps 作证据
+                trace["errors"] = ["运行超时（600s）"]
+                trace["passed"] = False
+            elif proc.returncode not in (0, None) and not trace["errors"] and not agg.stop:
                 trace["errors"].append(f"pi 退出码 {proc.returncode}: {stderr[-300:]}")
     except subprocess.TimeoutExpired:
         trace = parse_events([])

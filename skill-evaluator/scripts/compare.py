@@ -1,16 +1,18 @@
 """#9 结果可验证：expect vs actual 的 LLM 对比。Seam: python compare.py --expect <file> --actual <file>
 
-LLM 判定用 pi CLI；--build-only 输出 prompt（离线测试），--events <jsonl> 离线解析回答。
+LLM 判定用 pi CLI（--mode json，prompt 走 stdin，见 _subprocess.ask_json）；
+--build-only 输出 prompt（离线测试），--events <jsonl> 离线解析回答。
 无 JSON 回答时保守判 fail（score 0），不静默通过。
 """
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
-import time
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+from _subprocess import ask_json, build_mode_args, kill_tree, run_pi  # noqa: F401  (kill_tree/run_pi 供其他脚本复用)
 
 def build_prompt(expect: str, actual: str) -> str:
     return (f"你是输出质量评审员。判断\"实际产出\"是否满足\"期望描述\"。\n"
@@ -116,20 +118,10 @@ def main():
     if events_file:
         answer = extract_answer(Path(events_file).read_text(encoding="utf-8", errors="replace"))
     else:
-        cmd = ["pi", "-p", "--no-session", "--no-skills"]
-        eff_model = model or os.environ.get("SKILL_EVAL_MODEL")
-        if eff_model:
-            cmd += ["--model", eff_model]
-        if thinking:
-            cmd += ["--thinking", thinking]
-        cmd += ["--", prompt]
-        resolved = shutil.which("pi") or shutil.which("pi.cmd") or shutil.which("pi.exe")
-        if resolved:
-            cmd[0] = resolved
+        mode_args = build_mode_args(model or os.environ.get("SKILL_EVAL_MODEL"), thinking)
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True,
-                              encoding="utf-8", errors="replace", timeout=300)
-            answer = extract_answer(proc.stdout)
+            events_text = ask_json(mode_args, prompt, timeout=300)
+            answer = extract_answer(events_text)
         except FileNotFoundError:
             answer = {"match": False, "score": 0, "reason": "pi CLI 不存在"}
         except subprocess.TimeoutExpired:

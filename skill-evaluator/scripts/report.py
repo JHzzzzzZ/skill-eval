@@ -412,7 +412,11 @@ function rvSubmit(){var root=document.getElementById('rv-root');if(!root)return;
    types:[{description:'JSON',accept:{'application/json':['.json']}}]})
    .then(function(h){return h.createWritable().then(function(w){
     return w.write(text).then(function(){return w.close();});}).then(function(){rvDone(h.name);});})
-   .catch(function(){});}
+   .catch(function(err){
+    if(err&&err.name==='AbortError')return; /* 用户取消选择：静默，不算失败 */
+    var el=document.getElementById('rv-submit-status');
+    if(el){el.style.color='#b23b3b';el.style.fontWeight='600';
+     el.textContent='✗ 保存失败：'+((err&&err.message)||err||'未知错误')+'（可用复制/下载兑底）';}});}
  else{rvDownload(text);
   rvDone(fname+'（浏览器不支持直接落盘，已下载，请移到 evalsets/'+root.dataset.name+'/reviews/）');}}</script>
 </body></html>'''
