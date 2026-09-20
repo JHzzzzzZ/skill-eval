@@ -20,7 +20,7 @@ def run_check(ev: Path, *args, env=None):
     if env:
         e.update(env)
     r = subprocess.run([sys.executable, str(SCRIPT), str(ev), *args],
-                       capture_output=True, text=True, env=e)
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", env=e)
     assert r.returncode == 0, f"evalset_check.py failed: {r.stderr}"
     return json.loads(r.stdout)
 

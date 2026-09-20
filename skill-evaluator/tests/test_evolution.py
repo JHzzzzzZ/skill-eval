@@ -24,7 +24,7 @@ def make_result(d: Path, version: str, verdicts: dict):
 def run_evo(d: Path):
     r = subprocess.run(
         [sys.executable, str(SCRIPT.parent / "evolution.py"), str(d)],
-        capture_output=True, text=True,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     assert r.returncode == 0, r.stderr
     return json.loads(r.stdout)
@@ -93,7 +93,7 @@ def test_out_natural_order_also_works(tmp_path):
     make_result(tmp_path, "v1", {"#2": "pass"})
     r = subprocess.run(
         [sys.executable, str(SCRIPT), str(tmp_path), "--out", str(tmp_path / "o.json")],
-        capture_output=True, text=True)
+        capture_output=True, text=True, encoding="utf-8", errors="replace")
     assert r.returncode == 0, r.stderr
     assert (tmp_path / "o.json").is_file()
 

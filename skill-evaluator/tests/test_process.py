@@ -14,7 +14,7 @@ SCRIPT = Path(__file__).parent.parent / "scripts" / "process.py"
 def run_process(args: list):
     return subprocess.run(
         [sys.executable, str(SCRIPT.parent / "process.py")] + args,
-        capture_output=True, text=True,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
 
 

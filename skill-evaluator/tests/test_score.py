@@ -25,7 +25,7 @@ def run_score(workdir: Path, triggers: dict, runs: list) -> dict:
     (workdir / "runs.json").write_text(json.dumps(runs), encoding="utf-8")
     r = subprocess.run(
         [sys.executable, str(SCRIPT), str(workdir)],
-        capture_output=True, text=True,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     assert r.returncode == 0, f"script failed: {r.stderr}"
     return json.loads(r.stdout)
@@ -67,7 +67,7 @@ def test_missing_input_files_yields_skipped(tmp_path):
     # 评测集未冻结是正常路径：triggers.json 不存在必须 skipped 而非崩溃
     r = subprocess.run(
         [sys.executable, str(SCRIPT), str(tmp_path)],
-        capture_output=True, text=True,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     assert r.returncode == 0, r.stderr
     out = json.loads(r.stdout)
@@ -80,7 +80,7 @@ def test_malformed_input_yields_skipped(tmp_path):
     (tmp_path / "runs.json").write_text("[]", encoding="utf-8")
     r = subprocess.run(
         [sys.executable, str(SCRIPT), str(tmp_path)],
-        capture_output=True, text=True,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     assert r.returncode == 0, r.stderr
     assert json.loads(r.stdout)["trigger"] == "skipped"
@@ -96,7 +96,7 @@ def test_necessity_with_baseline(tmp_path):
         json.dumps([{"tool_calls": 3, "tokens": 300, "seconds": 10.0}]), encoding="utf-8")
     r = subprocess.run(
         [sys.executable, str(SCRIPT), str(tmp_path)],
-        capture_output=True, text=True,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     assert r.returncode == 0, r.stderr
     out = json.loads(r.stdout)
@@ -114,7 +114,7 @@ def test_necessity_without_baseline_is_skipped(tmp_path):
     (tmp_path / "runs.json").write_text(json.dumps([]), encoding="utf-8")
     r = subprocess.run(
         [sys.executable, str(SCRIPT), str(tmp_path)],
-        capture_output=True, text=True,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     assert r.returncode == 0, r.stderr
     assert json.loads(r.stdout)["necessity"] == "skipped"
@@ -151,7 +151,7 @@ def test_wrong_types_yield_skipped(tmp_path):
     # runs.json 顶层是数字数组、triggers.should 是字符串 → skipped 而非崩溃/垃圾 P/R
     (tmp_path / "triggers.json").write_text(json.dumps({"should": "abc"}), encoding="utf-8")
     (tmp_path / "runs.json").write_text(json.dumps([1, 2, 3]), encoding="utf-8")
-    r = subprocess.run([sys.executable, str(SCRIPT), str(tmp_path)], capture_output=True, text=True)
+    r = subprocess.run([sys.executable, str(SCRIPT), str(tmp_path)], capture_output=True, text=True, encoding="utf-8", errors="replace")
     assert r.returncode == 0, r.stderr
     out = json.loads(r.stdout)
     assert out["trigger"] == "skipped"
@@ -177,7 +177,7 @@ def test_out_writes_utf8_file(tmp_path):
         [{"tool_calls": 1, "tokens": 10, "seconds": 1.0}]), encoding="utf-8")
     out_file = tmp_path / "score.json"
     r = subprocess.run([sys.executable, str(SCRIPT), str(tmp_path), "--out", str(out_file)],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
     assert r.returncode == 0, r.stderr
     assert json.loads(r.stdout)["trigger"]["f1"] == 1.0
     assert json.loads(out_file.read_text(encoding="utf-8"))["passed"] is True

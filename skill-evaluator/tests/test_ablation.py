@@ -30,7 +30,7 @@ def make_skill(tmp_path: Path) -> Path:
 def run_ablation(args: list):
     return subprocess.run(
         [sys.executable, str(SCRIPT.parent / "ablation.py")] + args,
-        capture_output=True, text=True,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
 
 

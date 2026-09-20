@@ -15,7 +15,7 @@ SCRIPT = Path(__file__).parent.parent / "scripts" / "static_check.py"
 def run_check(skill_dir: Path) -> dict:
     r = subprocess.run(
         [sys.executable, str(SCRIPT), str(skill_dir)],
-        capture_output=True, text=True,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     assert r.returncode == 0, f"script failed: {r.stderr}"
     return json.loads(r.stdout)
@@ -160,7 +160,7 @@ def test_out_writes_utf8_file(tmp_path):
     d = make_skill(tmp_path, "---\nname: s\ndescription: 记需求登记\n---\nbody\n")
     out_file = tmp_path / "static.json"
     r = subprocess.run([sys.executable, str(SCRIPT), str(d), "--out", str(out_file)],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
     assert r.returncode == 0, r.stderr
     assert json.loads(r.stdout)["invoke"]["resolved"] == "both"
     payload = json.loads(out_file.read_text(encoding="utf-8"))  # 非 UTF-8 字节会在这里炸
@@ -168,7 +168,7 @@ def test_out_writes_utf8_file(tmp_path):
 
 
 def test_missing_argv_usage_not_crash():
-    r = subprocess.run([sys.executable, str(SCRIPT)], capture_output=True, text=True)
+    r = subprocess.run([sys.executable, str(SCRIPT)], capture_output=True, text=True, encoding="utf-8", errors="replace")
     assert r.returncode != 0
     assert "usage" in (r.stdout + r.stderr).lower()
 

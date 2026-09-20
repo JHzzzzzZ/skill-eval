@@ -15,7 +15,7 @@ SCRIPT = Path(__file__).parent.parent / "scripts" / "trace_run.py"
 def run_trace(args: list, cwd: Path = None):
     r = subprocess.run(
         [sys.executable, str(SCRIPT.parent / "trace_run.py")] + args,
-        capture_output=True, text=True, cwd=str(cwd) if cwd else None,
+        capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=str(cwd) if cwd else None,
     )
     return r
 

@@ -34,7 +34,7 @@ def write_inputs(d: Path, files: dict):
 def run_report(d: Path):
     r = subprocess.run(
         [sys.executable, str(SCRIPT), str(d)],
-        capture_output=True, text=True,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     assert r.returncode == 0, f"report.py failed: {r.stderr}"
     return json.loads((d / "report.json").read_text(encoding="utf-8"))
@@ -219,7 +219,7 @@ def test_report_md_ordered_with_chinese_labels(tmp_path):
 def test_html_report_written(tmp_path):
     write_inputs(tmp_path, {"score.json": {"trigger": {"precision": 1.0, "recall": 1.0, "f1": 1.0},
                                            "cost": "skipped", "necessity": "skipped", "passed": True}})
-    r = subprocess.run([sys.executable, str(SCRIPT), str(tmp_path), "--html"], capture_output=True, text=True)
+    r = subprocess.run([sys.executable, str(SCRIPT), str(tmp_path), "--html"], capture_output=True, text=True, encoding="utf-8", errors="replace")
     assert r.returncode == 0, r.stderr
     html = (tmp_path / "report.html").read_text(encoding="utf-8")
     assert (tmp_path / "report.json").is_file()  # 原有产物不丢
@@ -237,7 +237,7 @@ def test_html_report_with_evalset(tmp_path):
     (ev / "cases").mkdir()
     (ev / "cases" / "k1.json").write_text(json.dumps({"prompt": "记 todo", "expect": "登记成功"}), encoding="utf-8")
     r = subprocess.run([sys.executable, str(SCRIPT), str(tmp_path), "--html", "--evalset", str(ev)],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
     assert r.returncode == 0, r.stderr
     html = (tmp_path / "report.html").read_text(encoding="utf-8")
     assert "帮我记个待办" in html
@@ -249,7 +249,7 @@ def test_html_report_with_evalset(tmp_path):
 def test_gbk_artifact_no_crash(tmp_path):
     d = tmp_path
     (d / "static.json").write_bytes('{"name": "s", "description": "需求受理", "description_tokens": 5, "invoke": {}, "dangerous": [], "errors": [], "warnings": [], "passed": true}'.encode("gbk"))
-    r = subprocess.run([sys.executable, str(SCRIPT), str(d)], capture_output=True, text=True)
+    r = subprocess.run([sys.executable, str(SCRIPT), str(d)], capture_output=True, text=True, encoding="utf-8", errors="replace")
     assert r.returncode == 0, r.stderr
     out = json.loads((d / "report.json").read_text(encoding="utf-8"))
     # gbk 兼容读取成功：#2 有数据，不是 skipped
@@ -259,7 +259,7 @@ def test_gbk_artifact_no_crash(tmp_path):
 def test_html_tab_script_balanced(tmp_path):
     # 回归：tab 切换脚本花括号必须配对（曾因模板转义残留多一个 } 导致点击失效）
     write_inputs(tmp_path, {})
-    r = subprocess.run([sys.executable, str(SCRIPT), str(tmp_path), "--html"], capture_output=True, text=True)
+    r = subprocess.run([sys.executable, str(SCRIPT), str(tmp_path), "--html"], capture_output=True, text=True, encoding="utf-8", errors="replace")
     assert r.returncode == 0, r.stderr
     html = (tmp_path / "report.html").read_text(encoding="utf-8")
     script = html.split("<script>")[1].split("</script>")[0]
@@ -276,7 +276,7 @@ def test_evalset_review_ui(tmp_path):
     (ev / "cases").mkdir()
     (ev / "cases" / "k1.json").write_text(json.dumps({"prompt": "记 todo", "expect": "登记成功"}), encoding="utf-8")
     r = subprocess.run([sys.executable, str(SCRIPT), str(tmp_path), "--html", "--evalset", str(ev)],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
     assert r.returncode == 0, r.stderr
     html = (tmp_path / "report.html").read_text(encoding="utf-8")
     # 每条用例带审核控件与定位信息
@@ -302,7 +302,7 @@ def test_evalset_review_shows_skill_meta(tmp_path):
     sk.mkdir()
     (sk / "SKILL.md").write_text("---\nname: todo-add\ndescription: 需求受理登记，用户说加个需求时触发\n---\n# t\n", encoding="utf-8")
     r = subprocess.run([sys.executable, str(SCRIPT), str(tmp_path), "--html", "--evalset", str(ev),
-                        "--skill", str(sk)], capture_output=True, text=True)
+                        "--skill", str(sk)], capture_output=True, text=True, encoding="utf-8", errors="replace")
     assert r.returncode == 0, r.stderr
     html = (tmp_path / "report.html").read_text(encoding="utf-8")
     assert "被测 Skill" in html and "需求受理登记" in html
@@ -319,7 +319,7 @@ def test_evalset_skill_meta_uploads_fallback(tmp_path):
     up.mkdir(parents=True)
     (up / "SKILL.md").write_text("---\nname: todo-add\ndescription: 兖底存档描述\n---\n# t\n", encoding="utf-8")
     r = subprocess.run([sys.executable, str(SCRIPT), str(tmp_path), "--html", "--evalset", str(ev)],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
     assert r.returncode == 0, r.stderr
     html = (tmp_path / "report.html").read_text(encoding="utf-8")
     assert "兖底存档描述" in html
@@ -332,7 +332,7 @@ def test_evalset_review_submit_button(tmp_path):
     (ev / "triggers" / "should").mkdir(parents=True)
     (ev / "triggers" / "should" / "s1.json").write_text(json.dumps({"prompt": "帮我记个待办"}), encoding="utf-8")
     r = subprocess.run([sys.executable, str(SCRIPT), str(tmp_path), "--html", "--evalset", str(ev)],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
     assert r.returncode == 0, r.stderr
     html = (tmp_path / "report.html").read_text(encoding="utf-8")
     assert "rvSubmit" in html and "showSaveFilePicker" in html

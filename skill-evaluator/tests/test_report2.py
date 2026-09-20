@@ -10,7 +10,7 @@ SCRIPT = Path(__file__).parent.parent / "scripts" / "report.py"
 def run_report(d: Path):
     r = subprocess.run(
         [sys.executable, str(SCRIPT), str(d)],
-        capture_output=True, text=True,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     assert r.returncode == 0, f"report.py failed: {r.stderr}"
     return json.loads((d / "report.json").read_text(encoding="utf-8"))
@@ -71,6 +71,6 @@ def test_results_dir_missing_no_crash(tmp_path):
     # P2: 写路径也要兜底——目录不存在时受控失败
     r = subprocess.run(
         [sys.executable, str(SCRIPT), str(tmp_path / "nonexistent")],
-        capture_output=True, text=True)
+        capture_output=True, text=True, encoding="utf-8", errors="replace")
     assert r.returncode != 0
     assert "traceback" not in r.stderr.lower()

@@ -17,7 +17,7 @@ def run_validate(tmp_path: Path, payload) -> dict:
     p.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     r = subprocess.run(
         [sys.executable, str(SCRIPT), "--validate", str(p)],
-        capture_output=True, text=True,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     assert r.returncode == 0, f"script failed: {r.stderr}"
     return json.loads(r.stdout)
@@ -100,7 +100,7 @@ def test_malformed_json_file(tmp_path):
     out = run_validate(tmp_path, {})  # 占位，下面直接跑
     r = subprocess.run(
         [sys.executable, str(SCRIPT), "--validate", str(p)],
-        capture_output=True, text=True,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     assert r.returncode == 0
     out = json.loads(r.stdout)
@@ -112,7 +112,7 @@ def test_malformed_json_file(tmp_path):
 def test_missing_file_controlled(tmp_path):
     r = subprocess.run(
         [sys.executable, str(SCRIPT), "--validate", str(tmp_path / "nope.json")],
-        capture_output=True, text=True)
+        capture_output=True, text=True, encoding="utf-8", errors="replace")
     assert r.returncode == 0
     out = json.loads(r.stdout)
     assert out["valid"] is False

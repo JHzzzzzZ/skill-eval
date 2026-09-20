@@ -14,7 +14,7 @@ SCRIPT = Path(__file__).parent.parent / "scripts" / "trigger_judge.py"
 def run_judge(args: list):
     return subprocess.run(
         [sys.executable, str(SCRIPT.parent / "trigger_judge.py")] + args,
-        capture_output=True, text=True,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
 
 

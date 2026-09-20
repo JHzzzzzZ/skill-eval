@@ -20,7 +20,7 @@ def write_trace(p: Path, steps: list) -> Path:
 def run_idem(t1: Path, t2: Path) -> dict:
     r = subprocess.run(
         [sys.executable, str(SCRIPT.parent / "idem.py"), str(t1), str(t2)],
-        capture_output=True, text=True,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     assert r.returncode == 0, f"script failed: {r.stderr}"
     return json.loads(r.stdout)
@@ -68,6 +68,6 @@ def test_malformed_trace(tmp_path):
     t1 = write_trace(tmp_path / "t1.json", [{"tool": "bash", "args_hash": "a"}])
     r = subprocess.run(
         [sys.executable, str(SCRIPT.parent / "idem.py"), str(t1), str(bad)],
-        capture_output=True, text=True,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     assert r.returncode != 0, "非法 trace 应报错退出而非静默给 0"
