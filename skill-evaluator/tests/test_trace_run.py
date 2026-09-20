@@ -170,3 +170,88 @@ def test_trace_contains_answer_and_args(tmp_path):
     assert out["answer"] == "目录内容是 a b c"
     assert out["steps"][0]["args"] == {"command": "ls -la"}
     assert "args_hash" in out["steps"][0]
+
+
+# --- ADR-0007: EventAggregator 增量消费 + early-exit ---
+
+import sys as _sys
+_sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
+from trace_run import EventAggregator  # noqa: E402
+
+EVENT_LINES = [
+    '{"type":"tool_execution_start","toolName":"read","args":"x.md"}',
+    '{"type":"tool_execution_end","toolCallId":"t1","isError":false}',
+    '{"type":"turn_end","usage":{"totalTokens":10}}',
+    '{"type":"agent_end","messages":[{"role":"assistant","usage":{"totalTokens":25},'
+    '"content":[{"type":"text","text":"answer"}]}]}',
+]
+
+
+def test_incremental_feed_equals_full_parse():
+    agg = EventAggregator()
+    for line in EVENT_LINES:
+        agg.feed(line)
+    full = json.loads(run_trace(["--events", _write_jsonl(EVENT_LINES)]).stdout)
+    assert agg.result()["tool_calls"] == full["tool_calls"]
+    assert agg.result()["answer"] == full["answer"]
+
+
+def _write_jsonl(lines) -> str:
+    import tempfile, os
+    fd, p = tempfile.mkstemp(suffix=".jsonl")
+    os.close(fd)
+    Path(p).write_text("\n".join(lines), encoding="utf-8")
+    return p
+
+
+def test_early_exit_stops_at_first_tool_call():
+    agg = EventAggregator(early_exit=True)
+    for line in EVENT_LINES:
+        agg.feed(line)
+        if agg.stop:
+            break
+    trace = agg.result()
+    assert agg.stop is True
+    assert trace["early_exit"] is True
+    assert trace["triggered"] is True
+    assert trace["tool_calls"] == 1
+    # 停在首个工具调用，后面的 turn_end/agent_end 不消费 → 无 answer
+    assert trace["answer"] == ""
+    assert trace["passed"] is True  # early-exit 不计入 errors
+
+
+def test_no_early_exit_consumes_all():
+    agg = EventAggregator()
+    for line in EVENT_LINES:
+        agg.feed(line)
+    trace = agg.result()
+    assert trace["answer"] == "answer"
+    assert trace["tokens"] == 25
+    assert "early_exit" not in trace
+
+
+def test_early_exit_without_tool_call_runs_to_end():
+    no_tool = [l for l in EVENT_LINES if "tool_execution" not in l]
+    agg = EventAggregator(early_exit=True)
+    for line in no_tool:
+        agg.feed(line)
+    trace = agg.result()
+    assert trace["triggered"] is False
+    assert trace["answer"] == "answer"
+    assert "early_exit" not in trace
+
+
+def test_events_flag_with_early_exit(tmp_path):
+    # --early-exit 离线通路：同样在首个工具调用处截断
+    f = tmp_path / "events.jsonl"
+    f.write_text("\n".join(EVENT_LINES), encoding="utf-8")
+    out = json.loads(run_trace(["--events", str(f), "--early-exit"]).stdout)
+    assert out["early_exit"] is True
+    assert out["tool_calls"] == 1
+
+
+def test_build_args_with_early_exit_flag_unchanged_command():
+    # --early-exit 是编排层开关，不进 pi 命令行
+    out = json.loads(run_trace(["--build-only", "--worktree", "/w",
+                                "--prompt", "hi", "--early-exit"]).stdout)
+    assert "--early-exit" not in out["command"]

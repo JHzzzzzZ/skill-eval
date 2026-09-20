@@ -7,7 +7,7 @@ SKILL.md 的细则层。指标编号 #N 对应 prompt.txt 的 19 条需求。
 | 手段 | 指标 | 本期状态 |
 |---|---|---|
 | 静态检查 | #2 name/description 规范与 token 数、#7 调用方式、#13 权限扫描 | ✅ 已实现（static_check.py） |
-| 沙箱运行 | #1 触发精准度、#4 成本、#5 必要性、#8 最小依赖、#9 结果可验证 | ✅ 已实现（trace_run.py + score.py） |
+| 沙箱运行 | #1 触发精准度、#4 成本、#5 必要性、#8 最小依赖 | ✅ 已实现（trace_run.py + score.py + judges/deps.md 语义面双源） |
 | LLM 评审 | #3 正文精简、#6 低冗余、#11 fallback、#16 前置自检、#17/18 输入输出契约、#19 副作用可逆 | ✅ 已实现（judges/ + judge_runner.py） |
 | 沙箱运行（多次） | #12 稳定性、#15 幂等 | ✅ 已实现（重复运行 ×N + idem.py） |
 | Trace 对照 | #10 过程可验证 | ✅ 已实现（process.py） |
@@ -46,7 +46,7 @@ evalsets/<name>/v1/
 
 | 场景 | 做什么 | 服务指标 |
 |---|---|---|
-| 触发评测 | 三组 prompt 各跑一次；**triggered 由 `trigger_judge.py` 用 LLM 按最终回答判定**（trace_run.triggered 仅作粗筛），环境故障的 case 不计入 P/R 分母 | #1 |
+| 触发评测 | 三组 prompt 各跑一次，带 `--early-exit`（ADR-0007）：事件流出现首次工具调用即终止该次运行省 token；**triggered 由 `trigger_judge.py` 用 LLM 按最终回答判定**（trace_run.triggered 仅作粗筛），环境故障的 case 不计入 P/R 分母；early-exit 截断的 case 最终回答为空，判定交由 trigger_judge 按已执行的步骤裁决 | #1 |
 | 主运行 Golden Run | 干净 worktree + 加载 skill，跑 cases，采 trace | #4/#8/#9 |
 | 基线 A/B | 同 cases、同 worktree，但**不加载** skill | #5 |
 | 重复运行 ×N | 主运行重复 N 次，每次 trace 存档 | #12/#15 |
@@ -63,6 +63,17 @@ evalsets/<name>/v1/
 可选 `--thinking <off|minimal|low|medium|high|xhigh|max>` 控制思考档位。LLM 评审（judges/）用**同一个模型配置**，保证与被测运行同源。
 
 可配参数：重复运行 N=3；IDEMPOTENT_MAX_RATIO=0.5（idem.py）；DESCRIPTION_TOKEN_LIMIT=100、NAME_MAX_CHARS=64（static_check.py）；F1_PASS=0.7、COST_CV_MAX=0.5（report.py）。
+
+## 执行载体与扩展点（ADR-0007）
+
+沙箱运行的唯一执行载体是 pi CLI 子进程（逐 case 一次 `pi --mode json --no-session`），触发评测带 `--early-exit`（首次工具调用即停，省 token）。**不使用 subagent 机制**。未来若需支持 pi 以外的 agent，在 trace_run.py 之上加 adapter 层；本期只预留此声明，不实现（避免没有第二个实现的抽象）。
+
+被测 skill 出现宿主环境硬编码（绝对路径、特定用户目录、.claude/.cursor 等他方生态路径）→ 可移植性闸门整体 fail（ADR-0008，static_check 的 `hardcoded` 字段）。
+
+## 规则
+
+- 评估器目录内不得出现针对特定被测 skill 的脚本（#31）；历史运行证据存 `evalsets/<name>/provenance/`
+- LLM 评审一律逐项计分：rubric 拆检查点，每项 1 分，score 由 items 推导（#5，judge_runner.py 强制校验）
 
 ## 中间产物契约
 
@@ -81,11 +92,11 @@ evalsets/<name>/v1/
 - `ablation.json`：`{"f1_full", "f1_ablated", "deleted": [...]}`（#6 实证）
 - `judges/<metric>.json`：judge_runner.py 校验通过的 LLM 评审输出，metric ∈ {brevity, redundancy, fallback, precheck, contract, side-effects}（**不要**存成 judge-*.json 或放 results 根目录，report.py 只认 judges/<metric>.json）
 
-`score.py <results目录>` 读同目录三件套；`idem.py <trace1> <trace2>` 出幂等比例。
+`score.py <results目录>` 读同目录三件套；`idem.py <trace1> <trace2>` 出幂等比例。统计口径：均值/标准差/n/min/max（#10/#28）；必要性为 tokens/tool_calls/seconds 三分量各自提升率（#11）。
 
 ## LLM 评审
 
-temperature=0、单次、结构化 JSON 输出（`{score, evidence, reason}`，evidence 必须引用原文）。rubric 文件在 `judges/`。
+temperature=0、单次、结构化 JSON 输出（`{items: [{name, pass, quote}], score, evidence, reason}`，evidence 必须引用原文；**score = pass 项数/总项数**，0~1 两位小数，judge_runner.py 强制校验）。rubric 文件在 `judges/`。
 
 流程门禁：主 agent 按 rubric 产出 JSON → 运行 `python scripts/judge_runner.py --validate <文件>` → `valid=true` 才能进报告；校验失败把 errors 原文回给 LLM 重产一次，再失败则该指标标 `skipped` 并注明。
 

@@ -127,7 +127,8 @@ def main():
         if resolved:
             cmd[0] = resolved
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            proc = subprocess.run(cmd, capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", timeout=300)
             answer = extract_answer(proc.stdout)
         except FileNotFoundError:
             answer = {"match": False, "score": 0, "reason": "pi CLI 不存在"}

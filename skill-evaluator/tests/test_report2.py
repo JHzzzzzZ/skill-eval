@@ -59,8 +59,8 @@ def test_idempotency_needs_multiple_runs(tmp_path):
     # P2: 单次运行不判 #12/#15
     write_inputs(tmp_path, {"score.json": {
         "trigger": "skipped",
-        "cost": {"tool_calls": {"mean": 3, "var": 0, "n": 1}, "tokens": {"mean": 100, "var": 0, "n": 1},
-                 "seconds": {"mean": 10, "var": 0, "n": 1}},
+        "cost": {"tool_calls": {"mean": 3, "std": 0, "n": 1}, "tokens": {"mean": 100, "std": 0, "n": 1},
+                 "seconds": {"mean": 10, "std": 0, "n": 1}},
         "necessity": "skipped", "passed": True}})
     out = run_report(tmp_path)
     assert out["metrics"]["#12"]["verdict"] == "warn"  # n=1 → warn "单次运行"

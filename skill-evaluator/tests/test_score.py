@@ -8,7 +8,7 @@
 stdout 契约：
 {
   "trigger": {"precision", "recall", "f1"},
-  "cost": {"tool_calls": {"mean","var"}, "tokens": {...}, "seconds": {...}},
+  "cost": {"tool_calls": {"mean","std","n","min","max"}, "tokens": {...}, "seconds": {...}},
   "passed": bool
 }
 """
@@ -101,10 +101,13 @@ def test_necessity_with_baseline(tmp_path):
     assert r.returncode == 0, r.stderr
     out = json.loads(r.stdout)
     n = out["necessity"]
-    assert n["golden_tokens_mean"] == 100.0
-    assert n["baseline_tokens_mean"] == 300.0
+    # #11 三分量：tokens / tool_calls / seconds 各自对比
+    assert n["tokens"]["golden"] == 100.0
+    assert n["tokens"]["baseline"] == 300.0
     # 提升率 = (baseline - golden) / baseline = 2/3
-    assert abs(n["improvement"] - 2 / 3) < 1e-9
+    assert abs(n["tokens"]["improvement"] - 2 / 3) < 1e-9
+    assert n["tool_calls"]["golden"] == 3.0
+    assert n["seconds"]["golden"] == 10.0
 
 
 def test_necessity_without_baseline_is_skipped(tmp_path):
@@ -127,8 +130,11 @@ def test_cost_mean_variance(tmp_path):
     out = run_score(tmp_path, {"should": [], "should_not": [], "confusable": []}, runs)
     c = out["cost"]["tool_calls"]
     assert c["mean"] == 3.0
-    # 方差用总体方差：(2-3)^2+(4-3)^2 = 2, /2 = 1
-    assert c["var"] == 1.0
+    # #10/#28: 标准差用总体 std = sqrt(总体方差) = sqrt(1) = 1；并给出 n/min/max
+    assert c["std"] == 1.0
+    assert c["n"] == 2
+    assert c["min"] == 2
+    assert c["max"] == 4
     assert out["cost"]["tokens"]["mean"] == 150.0
     assert out["cost"]["seconds"]["mean"] == 15.0
 
@@ -157,3 +163,5 @@ def test_cost_stats_include_n(tmp_path):
             {"tool_calls": 4, "tokens": 200, "seconds": 20.0}]
     out = run_score(tmp_path, {"should": [], "should_not": [], "confusable": []}, runs)
     assert out["cost"]["tool_calls"]["n"] == 2
+    assert out["cost"]["tokens"]["min"] == 100
+    assert out["cost"]["tokens"]["max"] == 200

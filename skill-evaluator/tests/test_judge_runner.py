@@ -23,33 +23,73 @@ def run_validate(tmp_path: Path, payload) -> dict:
     return json.loads(r.stdout)
 
 
-# --- Slice 8: 合法输出 ---
+# --- Slice 8: 合法输出（#5 逐项计分契约）---
 
 def test_valid_judge_output(tmp_path):
-    payload = {"score": 1, "evidence": ["引用的原文"], "reason": "有部分冗余"}
+    payload = {"items": [{"name": "有索引结构", "pass": False, "quote": "无"}],
+               "score": 0.0, "evidence": ["引用的原文"], "reason": "有部分冗余"}
     assert run_validate(tmp_path, payload)["valid"] is True
+
+
+def test_score_must_match_items_mapping(tmp_path):
+    # #5：score = pass 项数 / 总项数（0~1，两位小数）。score 与 items 不一致即拒绝
+    all_pass = {"items": [{"name": "a", "pass": True, "quote": "q1"},
+                          {"name": "b", "pass": True, "quote": "q2"}],
+                "score": 1.0, "evidence": [], "reason": "全过"}
+    assert run_validate(tmp_path, all_pass)["valid"] is True
+    partial = {"items": [{"name": "a", "pass": True, "quote": "q1"},
+                         {"name": "b", "pass": False, "quote": "q2"},
+                         {"name": "c", "pass": False, "quote": "q3"}],
+               "score": 0.33, "evidence": ["e"], "reason": "部分"}
+    assert run_validate(tmp_path, partial)["valid"] is True
+    none_pass = {"items": [{"name": "a", "pass": False, "quote": "q"}],
+                 "score": 0.0, "evidence": ["e"], "reason": "全挂"}
+    assert run_validate(tmp_path, none_pass)["valid"] is True
+    mismatch = {"items": [{"name": "a", "pass": True, "quote": "q"}],
+                "score": 0.5, "evidence": ["e"], "reason": "不一致"}
+    out = run_validate(tmp_path, mismatch)
+    assert out["valid"] is False
+    assert any("items" in e for e in out["errors"])
+
+
+def test_items_structure_required(tmp_path):
+    # items 缺失/为空/字段不合法都拒绝
+    out = run_validate(tmp_path, {"score": 1.0, "evidence": ["e"], "reason": "x"})
+    assert out["valid"] is False and any("items" in e for e in out["errors"])
+    out = run_validate(tmp_path, {"items": [], "score": 0.0, "evidence": ["e"], "reason": "x"})
+    assert out["valid"] is False
+    out = run_validate(tmp_path, {"items": [{"name": "a", "pass": True}], "score": 1.0,
+                                  "evidence": ["e"], "reason": "x"})  # 缺 quote
+    assert out["valid"] is False
+    out = run_validate(tmp_path, {"items": [{"name": "a", "pass": "yes", "quote": "q"}],
+                                  "score": 1.0, "evidence": ["e"], "reason": "x"})  # pass 非布尔
+    assert out["valid"] is False
 
 
 # --- Slice 9: 非法输出 ---
 
 def test_score_out_of_range(tmp_path):
-    out = run_validate(tmp_path, {"score": 3, "evidence": [], "reason": "x"})
+    out = run_validate(tmp_path, {"items": [], "score": 1.5, "evidence": [], "reason": "x"})
     assert out["valid"] is False
     assert any("score" in e for e in out["errors"])
 
 
 def test_evidence_must_be_nonempty_strings(tmp_path):
     # score=2 可以 evidence 为空；score<2 时 evidence 必须非空且全是字符串
-    ok = run_validate(tmp_path, {"score": 2, "evidence": [], "reason": "无冗余"})
+    ok = run_validate(tmp_path, {"items": [{"name": "a", "pass": True, "quote": "q"}],
+                                 "score": 1.0, "evidence": [], "reason": "无冗余"})
     assert ok["valid"] is True
-    bad = run_validate(tmp_path, {"score": 1, "evidence": [], "reason": "x"})
+    bad = run_validate(tmp_path, {"items": [{"name": "a", "pass": False, "quote": "q"}],
+                                  "score": 0.5, "evidence": [], "reason": "x"})
     assert bad["valid"] is False
-    bad2 = run_validate(tmp_path, {"score": 1, "evidence": [123], "reason": "x"})
+    bad2 = run_validate(tmp_path, {"items": [{"name": "a", "pass": False, "quote": "q"}],
+                                   "score": 0.5, "evidence": [123], "reason": "x"})
     assert bad2["valid"] is False
 
 
 def test_missing_reason(tmp_path):
-    out = run_validate(tmp_path, {"score": 0, "evidence": ["a"]})
+    out = run_validate(tmp_path, {"items": [{"name": "a", "pass": False, "quote": "q"}],
+                                  "score": 0.0, "evidence": ["a"]})
     assert out["valid"] is False
     assert any("reason" in e for e in out["errors"])
 

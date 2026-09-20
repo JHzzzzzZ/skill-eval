@@ -46,22 +46,30 @@ def stats(runs: list, key: str):
     n = len(vals)
     mean = sum(vals) / n
     var = sum((v - mean) ** 2 for v in vals) / n
-    return {"mean": mean, "var": var, "n": n}
+    # #10/#28：std 替代 var（变异系数直接可读），并给出 min/max/n 支撑单次成本区间
+    return {"mean": mean, "std": var ** 0.5, "n": n, "min": min(vals), "max": max(vals)}
 
 
 def necessity(runs: list, baseline: list):
-    # #5: 有 skill (golden) vs 无 skill (baseline) 的 token 均值对比
+    """#5/#11：golden（有 skill）vs baseline（无 skill）三分量对比。
+
+    #11：不只看 token，步数与耗时同时给出提升率，由 report.py 综合裁决。
+    任一分量缺数据 → 该分量标 skipped，不拖累其他分量。"""
     if not baseline:
         return "skipped"
-    g = stats(runs, "tokens")
-    b = stats(baseline, "tokens")
-    if g == "skipped" or b == "skipped" or b["mean"] == 0:
+    comps = {}
+    for key in ("tokens", "tool_calls", "seconds"):
+        g, b = stats(runs, key), stats(baseline, key)
+        if g == "skipped" or b == "skipped" or b["mean"] == 0:
+            comps[key] = "skipped"
+        else:
+            comps[key] = {
+                "golden": g["mean"], "baseline": b["mean"],
+                "improvement": (b["mean"] - g["mean"]) / b["mean"],
+            }
+    if all(v == "skipped" for v in comps.values()):
         return "skipped"
-    return {
-        "golden_tokens_mean": g["mean"],
-        "baseline_tokens_mean": b["mean"],
-        "improvement": (b["mean"] - g["mean"]) / b["mean"],
-    }
+    return comps
 
 
 def main():

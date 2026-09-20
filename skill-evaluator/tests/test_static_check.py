@@ -181,3 +181,38 @@ def test_exclude_directory(tmp_path):
     (d / "tests" / "fixtures.py").write_text('x = "rm -rf /tmp"\n', encoding="utf-8")
     out = run_check([str(d), "--exclude", str(d / "tests")])
     assert out["dangerous"] == []
+
+
+# --- 可移植性闸门（ADR-0008）：宿主环境硬编码 → 整体 fail ---
+
+def test_hardcoded_windows_path_fails(tmp_path):
+    d = make_skill(tmp_path, "---\nname: s\ndescription: d\n---\nbody\n")
+    (d / "run.py").write_text('PYTHON = r"C:' + chr(92) + 'Users' + chr(92) + 'j00889192' + chr(92) + 'proj' + chr(92) + '.venv' + chr(92) + 'python.exe"' + chr(10), encoding="utf-8")
+    out = run_check(d)
+    assert len(out["hardcoded"]) == 1
+    assert out["passed"] is False  # 硬编码闸门命中 = error = fail
+
+
+def test_hardcoded_posix_home_fails(tmp_path):
+    d = make_skill(tmp_path, "---\nname: s\ndescription: d\n---\nbody\n")
+    (d / "setup.sh").write_text("cd /home/alice/tools && ./install.sh\n", encoding="utf-8")
+    out = run_check(d)
+    assert len(out["hardcoded"]) == 1
+
+
+def test_hardcoded_other_agent_ecosystem_fails(tmp_path):
+    d = make_skill(tmp_path, "---\nname: s\ndescription: d\n---\nbody\n")
+    (d / "SKILL.md").write_text(
+        "---\nname: s\ndescription: d\n---\n复制到 ~/.claude/skills/ 使用\n", encoding="utf-8")
+    out = run_check(d)
+    assert any("claude" in h["pattern"] for h in out["hardcoded"])
+    assert out["passed"] is False
+
+
+def test_relative_and_env_paths_pass(tmp_path):
+    d = make_skill(tmp_path, "---\nname: s\ndescription: d\n---\nbody\n")
+    (d / "run.py").write_text('DIR = os.environ["SKILL_EVAL_HOME"]\nREL = ".venv/bin/python"\n', encoding="utf-8")
+    (d / "x.sh").write_text('cd "$SCRIPT_DIR/../lib" && ./run.sh\n', encoding="utf-8")
+    out = run_check(d)
+    assert out["hardcoded"] == []
+    assert out["passed"] is True

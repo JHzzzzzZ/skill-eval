@@ -1,6 +1,7 @@
 ---
 name: skill-evaluator
-description: Evaluate a skill package against 19 quality metrics (trigger precision, cost, necessity, idempotency, etc). Use when asked to evaluate, score, or review a skill.
+description: Evaluate a skill package against 19 quality metrics. Only runs when explicitly asked (e.g. "评估这个 skill"), never auto-triggers.
+disable-model-invocation: true
 ---
 
 # Skill Evaluator

@@ -25,7 +25,7 @@ skill-evaluator/
 ├── reference.md        # details: metric map, sandbox, versioning, contracts, fallbacks
 ├── judges/             # LLM-judge rubrics (structured JSON output, temp=0)
 ├── scripts/            # deterministic tooling (each script = one documented CLI seam)
-└── tests/              # 80 tests, subprocess-seam based
+└── tests/              # 104 tests, subprocess-seam based
 docs/adr/               # 6 architecture decisions
 ```
 
@@ -50,7 +50,7 @@ Optional: set `SKILL_EVAL_MODEL=<provider/id>` to pin the model used for sandbox
 
 ```bash
 cd skill-evaluator
-python -m pytest tests        # 80 tests, all green
+python -m pytest tests        # 104 tests, all green
 ```
 
 Design decisions and their reasoning live in `docs/adr/`. See `README_CN.md` for the Chinese version.

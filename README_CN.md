@@ -25,7 +25,7 @@ skill-evaluator/
 ├── reference.md        # 细则：指标映射、沙箱定义、版本号、契约、fallback
 ├── judges/             # LLM 评审 rubric（结构化 JSON 输出，temperature=0）
 ├── scripts/            # 确定性工具（每个脚本一个有文档的 CLI seam）
-└── tests/              # 80 个测试，全部走 subprocess seam
+└── tests/              # 104 个测试，全部走 subprocess seam
 docs/adr/               # 6 条架构决策记录
 ```
 
@@ -35,7 +35,7 @@ docs/adr/               # 6 条架构决策记录
 
 1. 安装：把 `skill-evaluator/` 复制到 `~/.pi/agent/skills/`
 2. 会话里说：*"评估这个 skill：`<路径>`"*
-3. 拿到 `skill-evaluator/evalsets/<name>/results/<version>/` 下的 `report.json` + `report.md`
+3. 拿到 `skill-evaluator/evalsets/<name>/results/<version>/` 下的 `report.json` + `report.md`（`report.py --html` 另出单文件静态页：报告 + 评测集审核 + SVG 流程图）
 
 可选：设置环境变量 `SKILL_EVAL_MODEL=<provider/id>` 固定沙箱运行和 LLM 评审用的模型（默认用 pi 当前模型）。
 
@@ -50,7 +50,7 @@ docs/adr/               # 6 条架构决策记录
 
 ```bash
 cd skill-evaluator
-python -m pytest tests        # 80 个测试全绿
+python -m pytest tests        # 104 个测试全绿
 ```
 
 设计决策及理由见 `docs/adr/`。英文版见 `README.md`。

@@ -82,10 +82,10 @@ def test_static_dangerous_is_fail(tmp_path):
 def test_score_inputs(tmp_path):
     write_inputs(tmp_path, {"score.json": {
         "trigger": {"precision": 1.0, "recall": 1.0, "f1": 1.0},
-        "cost": {"tool_calls": {"mean": 3, "var": 1}, "tokens": {"mean": 100, "var": 0},
-                 "seconds": {"mean": 10, "var": 0}},
-        "necessity": {"golden_tokens_mean": 100, "baseline_tokens_mean": 300,
-                      "improvement": 0.66},
+        "cost": {"tool_calls": {"mean": 3, "std": 1}, "tokens": {"mean": 100, "std": 0},
+                 "seconds": {"mean": 10, "std": 0}},
+        "necessity": {"tokens": {"golden": 100, "baseline": 300, "improvement": 0.66},
+                      "tool_calls": "skipped", "seconds": "skipped"},
         "passed": True}})
     out = run_report(tmp_path)
     m = out["metrics"]
@@ -114,12 +114,12 @@ def test_idem_and_compare(tmp_path):
 # --- Slice 18: LLM 评审映射 ---
 
 def test_judge_inputs(tmp_path):
-    write_inputs(tmp_path, {"judges/redundancy.json": {"score": 2, "evidence": [], "reason": "x"},
-                            "judges/fallback.json": {"score": 0, "evidence": ["a"], "reason": "无 fallback"}})
+    write_inputs(tmp_path, {"judges/redundancy.json": {"score": 1.0, "evidence": [], "reason": "x"},
+                            "judges/fallback.json": {"score": 0.0, "evidence": ["a"], "reason": "无 fallback"}})
     out = run_report(tmp_path)
     m = out["metrics"]
-    assert m["#6"]["verdict"] == "pass"   # score 2
-    assert m["#11"]["verdict"] == "fail"  # score 0
+    assert m["#6"]["verdict"] == "pass"   # ratio 1.0
+    assert m["#11"]["verdict"] == "fail"  # ratio 0.0
 
 
 # --- Slice 19: report.md 产出 ---
@@ -139,9 +139,102 @@ def test_report_md_written(tmp_path):
 def test_idempotency_high_variance_warns(tmp_path):
     write_inputs(tmp_path, {"score.json": {
         "trigger": "skipped",
-        "cost": {"tool_calls": {"mean": 10, "var": 50, "n": 3}, "tokens": {"mean": 100, "var": 400, "n": 3},
-                 "seconds": {"mean": 10, "var": 0, "n": 3}},
+        "cost": {"tool_calls": {"mean": 10, "std": 6, "n": 3}, "tokens": {"mean": 100, "std": 20, "n": 3},
+                 "seconds": {"mean": 10, "std": 0, "n": 3}},
         "necessity": "skipped", "passed": True}})
     out = run_report(tmp_path)
-    # 变异系数 sqrt(50)/10 ≈ 0.707 > 0.5 → 不稳定
+    # 变异系数 6/10 = 0.6 > 0.5 → 不稳定
     assert out["metrics"]["#12"]["verdict"] == "warn"
+
+
+# --- #8 双源裁决（#29/#30）：trace 报错 + judges/deps.json ---
+
+def test_deps_judge_semantic_fail(tmp_path):
+    # golden 无报错，但语义评审发现未打包依赖 → fail
+    write_inputs(tmp_path, {"golden.json": {"steps": [], "errors": []},
+                            "judges/deps.json": {"items": [{"name": "无未打包依赖", "pass": False, "quote": "q"}],
+                                                 "score": 0.0, "evidence": ["e"], "reason": "缺"}})
+    out = run_report(tmp_path)
+    assert out["metrics"]["#8"]["verdict"] == "fail"
+
+
+def test_deps_judge_partial_warn(tmp_path):
+    write_inputs(tmp_path, {"golden.json": {"steps": [], "errors": []},
+                            "judges/deps.json": {"items": [{"name": "a", "pass": True, "quote": "q"},
+                                                           {"name": "b", "pass": False, "quote": "q"}],
+                                                 "score": 0.5, "evidence": ["e"], "reason": "部分"}})
+    out = run_report(tmp_path)
+    assert out["metrics"]["#8"]["verdict"] == "warn"
+
+
+def test_deps_trace_error_overrides_semantic_pass(tmp_path):
+    # 实跑报错优先级高于语义面全过 → 仍 fail
+    write_inputs(tmp_path, {"golden.json": {"steps": [], "errors": ["ModuleNotFoundError: x"]},
+                            "judges/deps.json": {"items": [{"name": "a", "pass": True, "quote": "q"}],
+                                                 "score": 1.0, "evidence": [], "reason": "全过"}})
+    out = run_report(tmp_path)
+    assert out["metrics"]["#8"]["verdict"] == "fail"
+
+
+# --- #19/#20：report.md 按指标 ID 排序 + 每处标注中文含义 ---
+
+def test_report_md_ordered_with_chinese_labels(tmp_path):
+    write_inputs(tmp_path, {"score.json": {"trigger": {"precision": 1.0, "recall": 1.0, "f1": 1.0},
+                                           "cost": "skipped", "necessity": "skipped", "passed": True},
+                            "static.json": {"name": "s", "description": "d", "description_tokens": 5,
+                                            "invoke": {"resolved": "both"}, "dangerous": [],
+                                            "errors": [], "warnings": [], "passed": True}})
+    out = run_report(tmp_path)
+    md = (tmp_path / "report.md").read_text(encoding="utf-8")
+    # 19 个指标全部出现，按 ID 顺序
+    ids = [f"#{i}" for i in range(1, 20)]
+    pos = [md.index(f"### {k} · ") for k in ids]
+    assert pos == sorted(pos)
+    # 每处标注中文含义（不能只写 #N）
+    assert "#1 · 触发精准度" in md
+    assert "#17 · 输入契约" in md
+    assert "#18 · 输出契约" in md
+    # method 用中文标注
+    assert "（沙箱运行）" in md and "（静态检查）" in md
+
+
+# --- #24/#38/#43：--html 静态报告页（双 tab + SVG 流程） ---
+
+def test_html_report_written(tmp_path):
+    write_inputs(tmp_path, {"score.json": {"trigger": {"precision": 1.0, "recall": 1.0, "f1": 1.0},
+                                           "cost": "skipped", "necessity": "skipped", "passed": True}})
+    r = subprocess.run([sys.executable, str(SCRIPT), str(tmp_path), "--html"], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    html = (tmp_path / "report.html").read_text(encoding="utf-8")
+    assert (tmp_path / "report.json").is_file()  # 原有产物不丢
+    assert "触发精准度" in html            # 中文指标名（#20）
+    assert "<svg" in html                 # 流程图（#43）
+    assert "评测集" in html               # 审核页 tab（#38）
+    assert html.count("<script") <= 1 and "http" not in html.split("<body")[1][:2000]  # 单文件、无外链
+
+
+def test_html_report_with_evalset(tmp_path):
+    write_inputs(tmp_path, {})
+    ev = tmp_path / "evalset"
+    (ev / "triggers" / "should").mkdir(parents=True)
+    (ev / "triggers" / "should" / "s1.json").write_text(json.dumps({"prompt": "帮我记个待办"}), encoding="utf-8")
+    (ev / "cases").mkdir()
+    (ev / "cases" / "k1.json").write_text(json.dumps({"prompt": "记 todo", "expect": "登记成功"}), encoding="utf-8")
+    r = subprocess.run([sys.executable, str(SCRIPT), str(tmp_path), "--html", "--evalset", str(ev)],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    html = (tmp_path / "report.html").read_text(encoding="utf-8")
+    assert "帮我记个待办" in html
+    assert "登记成功" in html
+
+
+# --- 坏产物兜底（#41 类）：编码错误的中间产物 → 对应指标 skipped，整体不崩 ---
+
+def test_gbk_artifact_no_crash(tmp_path):
+    d = tmp_path
+    (d / "static.json").write_bytes('{"name": "s", "description": "需求受理", "description_tokens": 5, "invoke": {}, "dangerous": [], "errors": [], "warnings": [], "passed": true}'.encode("gbk"))
+    r = subprocess.run([sys.executable, str(SCRIPT), str(d)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    out = json.loads((d / "report.json").read_text(encoding="utf-8"))
+    # gbk 兼容读取成功：#2 有数据，不是 skipped
+    assert out["metrics"]["#2"]["data"] is not None

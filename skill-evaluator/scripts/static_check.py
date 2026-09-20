@@ -5,6 +5,7 @@ stdout 契约（字段恒输出）：
   "name": str|null, "description": str|null, "description_tokens": int,
   "invoke": {"allowed": [str...], "resolved": str, "note": str},
   "dangerous": [{"pattern": str, "line": int, "file": str, "text": str}],
+  "hardcoded": [{"pattern": str, "line": int, "file": str, "text": str}],   # 可移植性闸门（ADR-0008）
   "errors": [str], "warnings": [str], "issues": [str],   # issues = errors + warnings
   "passed": bool          # errors 为空即 True（危险命令/缺 name 都算 error）
 }
@@ -36,6 +37,16 @@ DANGEROUS_PATTERNS = [
     r"drop\s+table\b",
 ]
 
+# 可移植性闸门（ADR-0008）：宿主环境硬编码 → 整体 fail。
+# 只查硬编码，不查"声明给某 agent 用"（#7 调用方式与通用性无关）。
+# 排除：相对路径与环境变量引用本就不匹配这些模式。
+HOST_HARDCODE_PATTERNS = [
+    r"[A-Za-z]:[\\/](?:Users|home)[\\/]",   # Windows 绝对用户路径（C:\Users\xxx、C:/home/xxx）
+    r"(?<![\w.])/(?:Users|home)/[\w.-]+",   # POSIX 绝对用户目录（/Users/xxx、/home/xxx）
+    r"(?<![\w.])\.(?:claude|cursor|codex)\b",  # 他方 agent 生态目录（.claude/.cursor/.codex）
+    r"(?<![\w.])~[\\/]\.(?:claude|cursor|codex)\b",  # ~ 下的他方生态目录
+]
+
 
 def parse_frontmatter(text: str):
     m = re.match(r"\A---\s*\n(.*?)\n---\s*\n", text, re.DOTALL)
@@ -56,20 +67,19 @@ def token_estimate(text: str) -> int:
     return zh + max(0, rest) // 4
 
 
-def scan_dangerous(skill_dir: Path, exclude_paths=None):
+def scan_patterns(skill_dir: Path, patterns, exclude_paths=None):
     hits = []
     for f in sorted(skill_dir.rglob("*")):
-        if not f.is_file() or f.suffix not in (".py", ".sh", ".ps1", ".cmd", ".bat", ".js", ".md"):
+        if not f.is_file() or f.suffix not in (".py", ".sh", ".ps1", ".cmd", ".bat", ".js", ".md", ".json", ".toml", ".yaml", ".yml"):
             continue
         if exclude_paths and any(f.resolve().is_relative_to(e) for e in exclude_paths):
             continue
         try:
             lines = f.read_text(encoding="utf-8", errors="ignore").splitlines()
-            lines = f.read_text(encoding="utf-8", errors="ignore").splitlines()
         except OSError:
             continue
         for i, line in enumerate(lines, 1):
-            for p in DANGEROUS_PATTERNS:
+            for p in patterns:
                 if re.search(p, line, re.IGNORECASE):
                     hits.append({"pattern": p, "line": i, "file": f.name, "text": line.strip()})
     return hits
@@ -92,7 +102,7 @@ def main():
     exclude_paths = {Path(e).resolve() for e in excludes}
     out = {"name": None, "description": None, "description_tokens": 0,
            "invoke": {"allowed": sorted(INVOKE_VALUES), "resolved": "both", "note": ""},
-           "dangerous": [], "errors": [], "warnings": [], "issues": [], "passed": True}
+           "dangerous": [], "hardcoded": [], "errors": [], "warnings": [], "issues": [], "passed": True}
     skill_md = skill_dir / "SKILL.md"
     if not skill_md.is_file():
         out["errors"].append("SKILL.md 不存在：不是合法 skill 包")
@@ -131,9 +141,15 @@ def main():
             out["errors"].append(
                 f"invoke 取值 '{raw_invoke}' 不在 {sorted(INVOKE_VALUES)}（#7）")
 
-    out["dangerous"] = scan_dangerous(skill_dir, exclude_paths)
+    out["dangerous"] = scan_patterns(skill_dir, DANGEROUS_PATTERNS, exclude_paths)
     if out["dangerous"]:
         out["errors"].append(f"发现 {len(out['dangerous'])} 处危险命令模式（#13）")
+
+    # 可移植性闸门（ADR-0008）：宿主环境硬编码 → 整体 fail
+    out["hardcoded"] = scan_patterns(skill_dir, HOST_HARDCODE_PATTERNS, exclude_paths)
+    if out["hardcoded"]:
+        out["errors"].append(
+            f"发现 {len(out['hardcoded'])} 处宿主环境硬编码（可移植性闸门，ADR-0008）")
 
     out["passed"] = not out["errors"]
     out["issues"] = out["errors"] + out["warnings"]
