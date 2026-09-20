@@ -237,6 +237,7 @@ def _evalset_html(evalset_dir) -> str:
     if not evalset_dir or not evalset_dir.is_dir():
         return "<p class='hint'>未指定评测集目录（--evalset），审核视图不可用。</p>"
     rows = []
+    idx = 0
     for group, sub in (("应触发", "triggers/should"), ("不应触发", "triggers/should-not"),
                        ("易混淆", "triggers/confusable"), ("结果用例", "cases")):
         d = evalset_dir / sub
@@ -249,11 +250,39 @@ def _evalset_html(evalset_dir) -> str:
             except (OSError, json.JSONDecodeError):
                 continue
             expect = j.get("expect")
-            items.append(f"<li><code>{_esc(j.get('prompt', ''))}</code>"
-                         + (f" → 期望：{_esc(expect)}" if expect else "") + "</li>")
+            idx += 1
+            items.append(
+                f"<div class='card rv-item' data-group='{group}' data-file='{f.name}' data-idx='{idx}' "
+                f"data-prompt='{_esc(j.get('prompt', ''))}' data-expect='{_esc(expect or '')}'>"
+                f"<div><code>{_esc(j.get('prompt', ''))}</code>"
+                + (f" → 期望：{_esc(expect)}" if expect else "") +
+                f" <small style='color:#94a3b8'>{f.name}</small></div>"
+                f"<div class='rv-ctrl'>"
+                f"<button type='button' class='rv-ok' onclick='rv(this,&quot;approve&quot;)'>✓ 通过</button> "
+                f"<button type='button' class='rv-bad' onclick='rv(this,&quot;reject&quot;)'>✗ 驳回</button> "
+                f"<input class='rv-note' placeholder='驳回原因（驳回必填）'"
+                f" oninput='this.closest(&quot;.rv-item&quot;).dataset.note=this.value'>"
+                f"</div></div>")
         if items:
-            rows.append(f"<h4>{group}（{len(items)}）</h4><ul>{''.join(items)}</ul>")
-    return "".join(rows) or "<p class='hint'>评测集目录为空。</p>"
+            rows.append(f"<h4>{group}（{len(items)}）</h4>" + "".join(items))
+    if not rows:
+        return "<p class='hint'>评测集目录为空。</p>"
+    name = _esc(evalset_dir.parent.name)
+    ver = _esc(evalset_dir.name)
+    total = idx
+    return (
+        f"<div id='rv-bar'><strong>审核进度：</strong><span id='rv-count'>0/{total}</span> "
+        f"<button type='button' onclick='rvExport(true)'>复制审核结果</button> "
+        f"<button type='button' onclick='rvExport(false)'>下载 review.json</button></div>"
+        "<div class='hint' style='margin:8px 0'>审核标准："
+        "应触发——像真实用户随口说的话、确实该进登记流程；"
+        "不应触发——确实不该触发（查询/实现/其它系统）；"
+        "易混淆——边界成立、模型容易踩且不该触发的；"
+        "结果用例——期望输出必须可判定（能对着回答判对错）。"
+        "逐条标 通过/驳回，驳回必须写原因；全部审完后点「复制审核结果」发给评估 agent，或下载 review.json 存到 evalsets/&lt;name&gt;/reviews/。</div>"
+        f"<div data-name='{name}' data-ver='{ver}' id='rv-root'>{'' .join(rows)}</div>"
+        f"<textarea id='rv-out' style='display:none'></textarea>"
+    )
 
 
 _HTML_TMPL = '''<!DOCTYPE html>
@@ -273,6 +302,13 @@ pre{overflow:auto;padding:8px}.stepbox{fill:#fff;stroke:#94a3b8}
 .stepname{font-weight:700;font-size:14px}.stepdesc{font-size:12px;fill:#475569}
 .arrow{stroke:#64748b;stroke-width:1.5}.arrowhead{fill:#64748b}
 h4{margin:14px 0 4px}.hint{color:#6b7280}
+#rv-bar{position:sticky;top:0;background:#fff;border:1px solid #e2e6ea;border-radius:8px;padding:8px 12px;z-index:2;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+#rv-bar button{border:1px solid #1f2937;background:#1f2937;color:#fff;border-radius:6px;padding:4px 12px;cursor:pointer;font-size:13px}
+.rv-item .rv-ctrl{margin-top:6px;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.rv-ctrl button{border:1px solid #94a3b8;background:#fff;border-radius:6px;padding:2px 10px;cursor:pointer;font-size:13px}
+.rv-item[data-verdict="approve"]{border-color:#0b7a3d}.rv-item[data-verdict="approve"] .rv-ok{background:#0b7a3d;color:#fff}
+.rv-item[data-verdict="reject"]{border-color:#b23b3b}.rv-item[data-verdict="reject"] .rv-bad{background:#b23b3b;color:#fff}
+.rv-note{flex:1;min-width:180px;border:1px solid #dde2e7;border-radius:6px;padding:3px 8px;font-size:13px}
 table{border-collapse:collapse;width:100%;font-size:13px}
 td,th{border:1px solid #dde2e7;padding:4px 8px;text-align:left}
 </style></head><body>
@@ -289,7 +325,32 @@ td,th{border:1px solid #dde2e7;padding:4px 8px;text-align:left}
 <script>function tab(n){document.querySelectorAll('.tab').forEach(
  e=>e.classList.toggle('on',e.id==='t-'+n));
  document.querySelectorAll('nav button').forEach(
- e=>e.classList.toggle('on',e.dataset.t===n));}</script>
+ e=>e.classList.toggle('on',e.dataset.t===n));}
+function rv(btn,v){var it=btn.closest('.rv-item');
+ it.dataset.verdict=v;rvCount();}
+function rvCount(){var all=document.querySelectorAll('.rv-item'),done=0;
+ all.forEach(function(e){if(e.dataset.verdict)done++;});
+ var c=document.getElementById('rv-count');if(c)c.textContent=done+'/'+all.length;}
+function rvExport(copy){var root=document.getElementById('rv-root');if(!root)return;
+ var bad=[];
+ document.querySelectorAll('.rv-item').forEach(function(e){
+  if(e.dataset.verdict==='reject'&&!((e.dataset.note||'').trim()))bad.push(e.dataset.file);
+  if(!e.dataset.verdict)bad.push(e.dataset.file+' 未标');});
+ if(bad.length){alert('以下用例未完成审核或驳回缺原因：\n'+bad.join('\n'));return;}
+ var items=[];
+ document.querySelectorAll('.rv-item').forEach(function(e){
+  items.push({group:e.dataset.group,file:e.dataset.file,verdict:e.dataset.verdict,
+   note:e.dataset.note||'',prompt:e.dataset.prompt,expect:e.dataset.expect});});
+ var out={type:'evalset-review',evalset:root.dataset.name,version:root.dataset.ver,
+  reviewed_at:new Date().toISOString(),items:items};
+ var text=JSON.stringify(out,null,2),ta=document.getElementById('rv-out');
+ ta.value=text;ta.style.display='block';
+ if(copy){navigator.clipboard.writeText(text).then(
+  function(){alert('已复制到剪贴板，粘贴发给评估 agent 即可');},
+  function(){ta.select();document.execCommand('copy');});}
+ else{var a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([text],{type:'application/json'}));
+  a.download=root.dataset.name+'-'+root.dataset.ver+'-review.json';a.click();}}</script>
 </body></html>'''
 
 

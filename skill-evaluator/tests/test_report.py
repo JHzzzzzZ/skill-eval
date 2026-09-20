@@ -249,3 +249,28 @@ def test_html_tab_script_balanced(tmp_path):
     script = html.split("<script>")[1].split("</script>")[0]
     assert script.count("{") == script.count("}")
     assert "t-flow" in html and "t-evalset" in html
+
+
+def test_evalset_review_ui(tmp_path):
+    # 审核交互：每条可标 通过/驳回 + 备注 + 导出 review.json
+    write_inputs(tmp_path, {})
+    ev = tmp_path / "evalsets" / "todo-add" / "v1"
+    (ev / "triggers" / "should").mkdir(parents=True)
+    (ev / "triggers" / "should" / "s1.json").write_text(json.dumps({"prompt": "帮我记个待办"}), encoding="utf-8")
+    (ev / "cases").mkdir()
+    (ev / "cases" / "k1.json").write_text(json.dumps({"prompt": "记 todo", "expect": "登记成功"}), encoding="utf-8")
+    r = subprocess.run([sys.executable, str(SCRIPT), str(tmp_path), "--html", "--evalset", str(ev)],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    html = (tmp_path / "report.html").read_text(encoding="utf-8")
+    # 每条用例带审核控件与定位信息
+    assert "class='card rv-item'" in html
+    assert "data-group='应触发'" in html and "data-file='s1.json'" in html
+    assert "通过" in html and "驳回" in html
+    # 审核标准说明（教人怎么审）
+    assert "审核标准" in html
+    # 导出：复制 + 下载，携带评测集名与版本
+    assert "review.json" in html and "todo-add" in html and "v1" in html
+    assert "navigator.clipboard" in html  # 复制到剪贴板
+    # 驳回必须填原因的前端提示
+    assert "驳回原因" in html
