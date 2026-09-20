@@ -76,7 +76,18 @@ def test_build_command_with_skill(tmp_path):
     assert "--mode" in cmd and "json" in cmd
     assert "--no-session" in cmd
     assert "--skill" in cmd
-    assert cmd[cmd.index("--skill") + 1] == "/s/SKILL.md"
+    # 绝对路径原样保留（POSIX）；Windows 下 resolve 会补盘符，故断言 resolve 后的值
+    assert cmd[cmd.index("--skill") + 1] == str(Path("/s/SKILL.md").resolve())
+
+
+def test_skill_relative_path_resolved_absolute(tmp_path):
+    # 缺陷修复：相对路径按子进程 cwd（=worktree）解析 → skill 静默不加载。
+    # 现在 build_args 统一 resolve；以 cwd=tmp_path 验证解析基于调用方 cwd。
+    (tmp_path / "SKILL.md").write_text("---\nname: s\ndescription: d\n---\n", encoding="utf-8")
+    out = json.loads(run_trace(["--build-only", "--worktree", "/w",
+                                "--prompt", "hi", "--skill", "SKILL.md"], cwd=tmp_path).stdout)
+    cmd = out["command"]
+    assert cmd[cmd.index("--skill") + 1] == str((tmp_path / "SKILL.md").resolve())
 
 
 def test_build_command_no_skill(tmp_path):
@@ -255,3 +266,21 @@ def test_build_args_with_early_exit_flag_unchanged_command():
     out = json.loads(run_trace(["--build-only", "--worktree", "/w",
                                 "--prompt", "hi", "--early-exit"]).stdout)
     assert "--early-exit" not in out["command"]
+
+
+# --- Windows 死锁修复：_kill_tree ---
+
+def test_kill_tree_terminates_wrapped_process(tmp_path):
+    # Windows proc.kill 只杀 cmd.exe 包装层，node 孙进程持 stderr 管道 → read 永久阻塞。
+    # _kill_tree（taskkill /F /T）必须让整棵树在超时前退场。
+    import time
+    sys.path.insert(0, str(SCRIPT.parent))
+    from trace_run import _kill_tree
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    t0 = time.time()
+    _kill_tree(proc)
+    proc.wait(timeout=15)
+    assert time.time() - t0 < 10  # 秒杀，不是等 sleep(30) 自然结束
+    assert proc.returncode != 0 or proc.poll() is not None

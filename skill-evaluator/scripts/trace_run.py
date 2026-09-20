@@ -95,6 +95,17 @@ def parse_events(lines, early_exit: bool = False) -> dict:
 DEFAULT_MODEL_ENV = "SKILL_EVAL_MODEL"  # 环境变量作默认模型，--model 显式覆盖
 
 
+def _kill_tree(proc) -> None:
+    """Windows 下 proc.kill 只杀 cmd.exe 包装层（pi.cmd），node 孙进程存活且持有
+    stderr 管道写端 → 父进程 stderr.read() 等 EOF 永久阻塞（实测死锁）。
+    taskkill /T 杀整棵树释放管道；POSIX 无包装层问题，直接 kill。"""
+    if sys.platform == "win32":
+        subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                       capture_output=True, timeout=10)
+    else:
+        proc.kill()
+
+
 def build_args(worktree: str, prompt: str, skill=None,
                model: str = None, thinking: str = None) -> list:
     """pi CLI 命令。模型：--model 显式传参 > SKILL_EVAL_MODEL 环境变量 > pi 默认。
@@ -108,7 +119,9 @@ def build_args(worktree: str, prompt: str, skill=None,
     else:
         skills = [s for s in (skill or []) if s]
     for s in skills:
-        cmd += ["--skill", s]
+        # 解析为绝对路径：子进程 cwd=worktree，相对路径会按 worktree 解析
+        # 导致 skill 静默不加载（实测冒烟踩坑）
+        cmd += ["--skill", str(Path(s).resolve())]
     eff_model = model or os.environ.get(DEFAULT_MODEL_ENV)
     if eff_model:
         cmd += ["--model", eff_model]
@@ -206,7 +219,7 @@ def main():
             proc = subprocess.Popen(cmd, cwd=worktree, stdout=subprocess.PIPE,
                                     stderr=subprocess.PIPE, text=True,
                                     encoding="utf-8", errors="replace")
-            watchdog = threading.Timer(600, proc.kill)
+            watchdog = threading.Timer(600, lambda: _kill_tree(proc))
             watchdog.start()
             agg = EventAggregator(early_exit=True)
             try:
@@ -217,14 +230,17 @@ def main():
             finally:
                 watchdog.cancel()
             if agg.stop and proc.poll() is None:
-                proc.kill()
+                _kill_tree(proc)
             proc.wait()
             elapsed = time.time() - t0
             trace = agg.result()
             trace["seconds"] = round(elapsed, 2)
             stderr = ""
             try:
-                stderr = proc.stderr.read() or ""
+                if proc.poll() is not None:
+                    stderr = proc.stderr.read() or ""
+                else:
+                    proc.stderr.close()  # 进程仍在：读会等 EOF 阻塞，宁丢诊断不错死锁
             except (OSError, ValueError):
                 pass
             if proc.returncode not in (0, None) and not trace["errors"] and not agg.stop:
