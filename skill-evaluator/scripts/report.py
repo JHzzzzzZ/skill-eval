@@ -336,7 +336,7 @@ function rvExport(copy){var root=document.getElementById('rv-root');if(!root)ret
  document.querySelectorAll('.rv-item').forEach(function(e){
   if(e.dataset.verdict==='reject'&&!((e.dataset.note||'').trim()))bad.push(e.dataset.file);
   if(!e.dataset.verdict)bad.push(e.dataset.file+' 未标');});
- if(bad.length){alert('以下用例未完成审核或驳回缺原因：\n'+bad.join('\n'));return;}
+ if(bad.length){alert('以下用例未完成审核或驳回缺原因：'+bad.join('；'));return;}
  var items=[];
  document.querySelectorAll('.rv-item').forEach(function(e){
   items.push({group:e.dataset.group,file:e.dataset.file,verdict:e.dataset.verdict,
