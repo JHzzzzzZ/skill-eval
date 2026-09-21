@@ -190,10 +190,28 @@ def build(d: Path) -> dict:
                    "note": "消融后掉分=原文必要(通过)；持平/上升=冗余实证(警告)"}
     m["#14"] = {"verdict": "skipped", "method": METHOD_RUN, "data": None, "note": "evolution.py 独立产出"}
 
+    # 评测集 AI 审核（#49）：reviewed_by=ai 时给依赖评测集的指标加标注
+    reviewed_by = _evalset_reviewed_by(d)
+    if reviewed_by == "ai":
+        ai_note = "评测集 AI 审核，未经人工复核"
+        for k in ("#1", "#5", "#9"):
+            if m[k]["verdict"] != "skipped":
+                m[k]["note"] = f"{m[k]['note']}（{ai_note}）"
+
     from datetime import datetime
     report = {"metrics": m, "conclusion": conclusion(m),
+              "reviewed_by": reviewed_by,
               "generated_at": datetime.now().isoformat(timespec="seconds")}
     return report
+
+
+def _evalset_reviewed_by(d: Path):
+    """从 evalsets/<name>/<version>/meta.json 读 reviewed_by（human|ai|None）。
+    results 目录 = evalsets/<name>/results/<version>，评测集与 results 同父。"""
+    meta = load(d.parent.parent / d.name, "meta.json")
+    if isinstance(meta, dict) and meta.get("reviewed_by") in ("human", "ai"):
+        return meta["reviewed_by"]
+    return None
 
 
 def conclusion(m: dict) -> str:
@@ -209,8 +227,8 @@ FLOW_STEPS = [  # SKILL.md 的 8 步流程（#43 流程图数据源）
     ("1 前置自检", "scripts/judges/reference.md 存在；被测路径有 SKILL.md，缺失走 Fallback"),
     ("2 存档与定版", "只读存档 uploads/，副本 git init+commit，版本号 = 短 hash"),
     ("3 静态检查", "static_check.py：#2 规范、#7 调用方式、#13 危险命令、可移植性闸门"),
-    ("4 评测集", "检查冻结的 evalsets/<name>/vN/；未冻结则生成后等人工审核"),
-    ("5 沙箱运行", "git worktree 内实跑 pi CLI：触发（带 early-exit）+ 主运行 + 基线 A/B + 重复 ×N"),
+    ("4 评测集", "检查冻结的 evalsets/<name>/vN/；未冻结则生成后 LLM 自动审核（换模型）即冻结（reviewed_by=ai）"),
+    ("5 沙箱运行", "按档增量跑 pi CLI：T2 触发（early-exit）→ T3 主运行+基线+重复 → T4 审计/消融"),
     ("6 LLM 评审", "judges/ 逐项计分 rubric，judge_runner.py --validate 通过才进报告"),
     ("7 计算", "score.py（P/R/F1、成本、三分量必要性）+ idem.py（幂等）"),
     ("8 报告", "report.py：report.json + report.md（--html 加静态页），19 指标恒出现"),
@@ -361,7 +379,7 @@ table{border-collapse:collapse;width:100%;font-size:13px}
 td,th{border:1px solid #dde2e7;padding:4px 8px;text-align:left}
 </style></head><body>
 <header><h1 style="margin:0;font-size:20px">Skill 评估报告</h1>
-<p style="margin:4px 0 0">结论：<span class="badge __CLS__">__CONCLUSION__</span></p></header>
+<p style="margin:4px 0 0">结论：<span class="badge __CLS__">__CONCLUSION__</span>__META__</p></header>
 <nav><button data-t="report" class="on" onclick="tab('report')">报告</button>
 <button data-t="evalset" onclick="tab('evalset')">评测集审核</button>
 <button data-t="flow" onclick="tab('flow')">评估流程</button></nav>
@@ -444,15 +462,26 @@ def render_html(report: dict, evalset_dir=None, skill_arg=None) -> str:
             f"<p style='font-size:13px;color:#475569'>{_esc(v.get('note') or '')}</p>"
             f"{items_html}{data_html}</div>")
     cls = report["conclusion"]
+    meta_bits = []
+    if report.get("tier"):
+        meta_bits.append(f"<span class='badge skipped' style='margin-left:8px'>{_esc(report['tier'])}</span>")
+    if report.get("reviewed_by") == "ai":
+        meta_bits.append("<small style='margin-left:8px;color:#fbbf24'>评测集 AI 审核，未经人工复核</small>")
     return (_HTML_TMPL.replace("__CLS__", cls)
             .replace("__CONCLUSION__", _esc(report["conclusion"]))
+            .replace("__META__", "" .join(meta_bits))
             .replace("__CARDS__", "".join(cards))
             .replace("__EVALSET__", _evalset_html(evalset_dir, _skill_meta(skill_arg, evalset_dir)))
             .replace("__FLOW__", _flow_svg()))
 
 
 def render_md(report: dict) -> str:
-    lines = ["# Skill 评估报告", "", f"**结论：{report['conclusion']}**", ""]
+    head = ["# Skill 评估报告", "", f"**结论：{report['conclusion']}**"]
+    if report.get("tier"):
+        head.append(f"**档位：{report['tier']}**")
+    if report.get("reviewed_by") == "ai":
+        head.append("**评测集 AI 审核，未经人工复核**")
+    lines = head + [""]
     for k in ALL_KEYS:  # #19：严格按指标 ID 顺序
         v = report["metrics"][k]
         note = f" — {v['note']}" if v.get("note") else ""
@@ -469,7 +498,7 @@ def render_md(report: dict) -> str:
 
 def main():
     args = sys.argv[1:]
-    html = evalset_dir = skill_arg = None
+    html = evalset_dir = skill_arg = tier = None
     rest = []
     i = 0
     while i < len(args):
@@ -479,16 +508,20 @@ def main():
             evalset_dir = Path(args[i + 1]); i += 2
         elif args[i] == "--skill":
             skill_arg = Path(args[i + 1]); i += 2
+        elif args[i] == "--tier":
+            tier = args[i + 1]; i += 2
         else:
             rest.append(args[i]); i += 1
     if len(rest) != 1:
-        print("usage: report.py <results目录> [--html] [--evalset <evalsets/<name>/vN>] [--skill <被测skill目录>]", file=sys.stderr)
+        print("usage: report.py <results目录> [--tier <static|review|trigger|core|full>] [--html] [--evalset <evalsets/<name>/vN>] [--skill <被测skill目录>]", file=sys.stderr)
         sys.exit(2)
     d = Path(rest[0])
     if not d.is_dir():
         print(f"results 目录不存在: {d}", file=sys.stderr)
         sys.exit(2)
     report = build(d)
+    if tier:
+        report["tier"] = tier
     (d / "report.json").write_text(
         json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     (d / "report.md").write_text(render_md(report), encoding="utf-8")
