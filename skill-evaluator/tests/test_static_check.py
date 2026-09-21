@@ -254,3 +254,30 @@ def test_gbk_console_no_crash(tmp_path):
     )
     assert r.returncode == 0, f"crashed on gbk console: {r.stderr[-300:]}"
     assert b"UnicodeEncodeError" not in r.stderr
+
+
+# --- ADR-0011：闸门作用域=运行面，tests/ 夹具豁免 ---
+
+def test_tests_dir_exempt_from_gate(tmp_path):
+    # 危险命令与宿主硬编码写在 tests/ 内 → 不命中；同样的内容在 scripts/ 内 → 命中
+    d = tmp_path / "sample-skill"
+    (d / "tests").mkdir(parents=True)
+    (d / "scripts").mkdir()
+    body = '---\nname: s\ndescription: "x" * 120\n---\n\n# t\n'
+    (d / "SKILL.md").write_text(body, encoding="utf-8")
+    bad = ('import os\n'
+           'os.system("rm -rf /tmp/x")  # C:' + chr(92) + 'Users' + chr(92) + 'evil\n')
+    (d / "tests" / "test_fixture.py").write_text(bad, encoding="utf-8")
+    (d / "scripts" / "real.py").write_text(bad, encoding="utf-8")
+    out = run_check(d)
+    assert out["scan_excluded_dirs"] == ["tests"]
+    assert out["dangerous"] and all(h["file"] == "real.py" for h in out["dangerous"])
+    assert out["hardcoded"] and all(h["file"] == "real.py" for h in out["hardcoded"])
+
+
+def test_no_tests_dir_field_empty(tmp_path):
+    d = tmp_path / "sample-skill"
+    d.mkdir()
+    (d / "SKILL.md").write_text('---\nname: s\ndescription: "x" * 120\n---\n\n# t\n', encoding="utf-8")
+    out = run_check(d)
+    assert out["scan_excluded_dirs"] == []

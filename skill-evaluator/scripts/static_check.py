@@ -9,6 +9,7 @@ stdout 契约（字段恒输出）：
   "invoke": {"allowed": [str...], "resolved": str, "note": str},   # resolved: both|human（映射 disable-model-invocation）
   "dangerous": [{"pattern": str, "line": int, "file": str, "text": str}],
   "hardcoded": [{"pattern": str, "line": int, "file": str, "text": str}],   # 可移植性闸门（ADR-0008）
+  "scan_excluded_dirs": [str],   # 闸门豁免目录（ADR-0011：tests/ 不属运行面）
   "errors": [str], "warnings": [str], "issues": [str],   # issues = errors + warnings
   "passed": bool          # errors 为空即 True（危险命令/缺 name 都算 error）
 }
@@ -30,6 +31,9 @@ NAME_MAX_CHARS = 64
 
 INVOKE_VALUES = {"human", "both"}  # pi 真实三态归约：缺省/false=both（模型+用户）；disable-model-invocation:true=human
 
+# 闸门豁免目录（ADR-0011）：仅扫描运行面，tests/ 内夹具不参与 dangerous/hardcoded 扫描
+SCAN_EXEMPT_DIRS = frozenset({"tests"})
+
 DANGEROUS_PATTERNS = [
     r"rm\s+-rf?\b",
     r"\bdel\s+/[qs]",
@@ -47,6 +51,8 @@ DANGEROUS_PATTERNS = [
 # 可移植性闸门（ADR-0008）：宿主环境硬编码 → 整体 fail。
 # 只查硬编码，不查"声明给某 agent 用"（#7 调用方式与通用性无关）。
 # 排除：相对路径与环境变量引用本就不匹配这些模式。
+# 作用域（ADR-0011）：闸门只扫运行面——tests/ 内的夹具（tmp_path 运行时路径、
+# 危险命令用例）是测试产物，不随 skill 运行，默认豁免。
 HOST_HARDCODE_PATTERNS = [
     r"[A-Za-z]:[\\/](?:Users|home)[\\/]",   # Windows 绝对用户路径（C:\Users\xxx、C:/home/xxx）
     r"(?<![\w.])/(?:Users|home)/[\w.-]+",   # POSIX 绝对用户目录（/Users/xxx、/home/xxx）
@@ -78,6 +84,10 @@ def scan_patterns(skill_dir: Path, patterns, exclude_paths=None):
     hits = []
     for f in sorted(skill_dir.rglob("*")):
         if not f.is_file() or f.suffix not in (".py", ".sh", ".ps1", ".cmd", ".bat", ".js", ".md", ".json", ".toml", ".yaml", ".yml"):
+            continue
+        # ADR-0011：tests/ 是测试夹具面，不属于运行面，闸门豁免
+        rel = f.relative_to(skill_dir)
+        if rel.parts[0] in SCAN_EXEMPT_DIRS:
             continue
         if exclude_paths and any(f.resolve().is_relative_to(e) for e in exclude_paths):
             continue
@@ -165,6 +175,9 @@ def main():
     out["dangerous"] = scan_patterns(skill_dir, DANGEROUS_PATTERNS, exclude_paths)
     if out["dangerous"]:
         out["errors"].append(f"发现 {len(out['dangerous'])} 处危险命令模式（#13）")
+
+    out["scan_excluded_dirs"] = sorted(
+        d for d in SCAN_EXEMPT_DIRS if (skill_dir / d).is_dir())
 
     # 可移植性闸门（ADR-0008）：宿主环境硬编码 → 整体 fail
     out["hardcoded"] = scan_patterns(skill_dir, HOST_HARDCODE_PATTERNS, exclude_paths)
