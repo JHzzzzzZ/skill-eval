@@ -117,6 +117,8 @@ temperature=0、单次、结构化 JSON 输出（`{items: [{name, pass, quote}],
 
 流程门禁：主 agent 按 rubric 产出 JSON → 运行 `python scripts/judge_runner.py --validate <文件>` → `valid=true` 才能进报告；校验失败把 errors 原文回给 LLM 重产一次，再失败则该指标标 `skipped` 并注明。
 
+检查点极性：每个 rubric 的检查点分两向——**能力清单**（做到才 pass，如 brevity 的行数克制）与**问题清单**（无此类问题才 pass，如 deps 的无未打包外部依赖）。极性逐条定义，同一 rubric 内可混向（实际也混）；items 契约与 score 公式不感知极性，新写 rubric 时只需保证每条检查点的 pass 条件在文案里可判定，不需要把措辞统一成一向。
+
 后续可切换为 3 次取中位数或多模型交叉——切换时只改本节，rubric 不动。
 
 ## 幂等（#15）
