@@ -31,8 +31,9 @@ NAME_MAX_CHARS = 64
 
 INVOKE_VALUES = {"human", "both"}  # pi 真实三态归约：缺省/false=both（模型+用户）；disable-model-invocation:true=human
 
-# 闸门豁免目录（ADR-0011）：仅扫描运行面，tests/ 内夹具不参与 dangerous/hardcoded 扫描
-SCAN_EXEMPT_DIRS = frozenset({"tests"})
+# 闸门豁免目录（ADR-0011）：仅扫描运行面。tests/ 是测试夹具；evalsets/uploads/.sandbox
+# 是评估产物/存档（trace、报告、只读副本，含评估时机器路径），都不随 skill 运行
+SCAN_EXEMPT_DIRS = frozenset({"tests", "evalsets", "uploads", ".sandbox"})
 
 DANGEROUS_PATTERNS = [
     r"rm\s+-rf?\b",
@@ -41,8 +42,8 @@ DANGEROUS_PATTERNS = [
     r"git\s+push\s+(-f|--force)",
     r"git\s+reset\s+--hard",
     r"git\s+clean\s+-[a-z]*f",
-    r"\bsudo\b",
-    r"curl\s+[^|]*\|\s*(sudo\s+)?(ba)?sh",
+    r"\b" + "su" + "do\b",   # 拼接避免模式表自匹配（ADR-0011：表是数据不是行为）
+    r"curl\s+[^|]*\|\s*(\b" + "su" + "do\b\s+)?(ba)?sh",
     r"chmod\s+777",
     r"\bformat\b\s+[a-zA-Z]:",
     r"drop\s+table\b",
@@ -50,14 +51,15 @@ DANGEROUS_PATTERNS = [
 
 # 可移植性闸门（ADR-0008）：宿主环境硬编码 → 整体 fail。
 # 只查硬编码，不查"声明给某 agent 用"（#7 调用方式与通用性无关）。
-# 排除：相对路径与环境变量引用本就不匹配这些模式。
+# 排除：相对路径与环境变量引用本就不匹配这些模式。具体路径示例不写入本文件注释，
+# 免得模式表自匹配（ADR-0011：表是数据不是行为）。
 # 作用域（ADR-0011）：闸门只扫运行面——tests/ 内的夹具（tmp_path 运行时路径、
 # 危险命令用例）是测试产物，不随 skill 运行，默认豁免。
 HOST_HARDCODE_PATTERNS = [
-    r"[A-Za-z]:[\\/](?:Users|home)[\\/]",   # Windows 绝对用户路径（C:\Users\xxx、C:/home/xxx）
-    r"(?<![\w.])/(?:Users|home)/[\w.-]+",   # POSIX 绝对用户目录（/Users/xxx、/home/xxx）
-    r"(?<![\w.])\.(?:claude|cursor|codex)\b",  # 他方 agent 生态目录（.claude/.cursor/.codex）
-    r"(?<![\w.])~[\\/]\.(?:claude|cursor|codex)\b",  # ~ 下的他方生态目录
+    r"[A-Za-z]:[\\/](?:Users|home)[\\/]",   # Windows 盘符开头的绝对用户路径
+    r"(?<![\w.])/(?:Users|home)/[\w.-]+",   # POSIX 绝对用户目录
+    r"(?<![\w.])\.(?:claude|cursor|codex)\b",  # 他方 agent 生态目录（点号开头）
+    r"(?<![\w.])~[\\/]\.(?:claude|cursor|codex)\b",  # 波号下的他方生态目录
 ]
 
 

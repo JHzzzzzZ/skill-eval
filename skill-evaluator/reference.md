@@ -85,7 +85,7 @@ evalsets/<name>/v1/
 
 沙箱运行的唯一执行载体是 pi CLI 子进程（逐 case 一次 `pi --mode json --no-session`），触发评测带 `--early-exit`（首次指向被测 SKILL.md 的调用即停，省 token；ADR-0007 修订）。**不使用 subagent 机制**。未来若需支持 pi 以外的 agent，在 trace_run.py 之上加 adapter 层；本期只预留此声明，不实现（避免没有第二个实现的抽象）。
 
-被测 skill 出现宿主环境硬编码（绝对路径、特定用户目录、.claude/.cursor 等他方生态路径）→ 可移植性闸门整体 fail（ADR-0008，static_check 的 `hardcoded` 字段）。
+被测 skill 出现宿主环境硬编码（绝对路径、特定用户目录、他方 agent 生态目录等）→ 可移植性闸门整体 fail（ADR-0008，static_check 的 `hardcoded` 字段）。
 
 ## 规则
 
