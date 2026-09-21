@@ -74,3 +74,12 @@ def test_results_dir_missing_no_crash(tmp_path):
         capture_output=True, text=True, encoding="utf-8", errors="replace")
     assert r.returncode != 0
     assert "traceback" not in r.stderr.lower()
+
+
+# --- Slice 28: #14 归组修正——method 应为「历史对比」，不是「沙箱运行」 ---
+
+def test_evolution_method_is_historical_diff(tmp_path):
+    # #14 = evolution.py 读历史 report.json，与沙箱无关；ADR-0004 四分组归「历史对比」
+    out = run_report(tmp_path)
+    assert out["metrics"]["#14"]["method"] == "历史对比"
+    assert out["metrics"]["#14"]["verdict"] == "skipped"  # evolution.py 独立产出，report.py 不代打

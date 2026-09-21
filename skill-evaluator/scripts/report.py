@@ -24,6 +24,7 @@ ALL_KEYS = [f"#{i}" for i in range(1, 20)]
 THREE_TIER = {"pass", "warn", "fail", "skipped"}
 METHOD_STATIC = "静态检查"
 METHOD_RUN = "沙箱运行"
+METHOD_DIFF = "历史对比"  # #14 专属：evolution.py 读历史 report.json，不碰沙箱
 METHOD_JUDGE = "LLM评审"
 METHOD_COMPARE = "对比"
 
@@ -188,7 +189,7 @@ def build(d: Path) -> dict:
         m["#6"] = {"verdict": "pass" if ab.get("f1_ablated", 0) < ab.get("f1_full", 1) else "warn",
                    "method": METHOD_RUN, "data": ab,
                    "note": "消融后掉分=原文必要(通过)；持平/上升=冗余实证(警告)"}
-    m["#14"] = {"verdict": "skipped", "method": METHOD_RUN, "data": None, "note": "evolution.py 独立产出"}
+    m["#14"] = {"verdict": "skipped", "method": METHOD_DIFF, "data": None, "note": "evolution.py 独立产出"}
 
     # 评测集 AI 审核（#49）：reviewed_by=ai 时给依赖评测集的指标加标注
     reviewed_by = _evalset_reviewed_by(d)
@@ -487,7 +488,8 @@ def render_md(report: dict) -> str:
         note = f" — {v['note']}" if v.get("note") else ""
         name = DIM_NAMES.get(k, "")
         method = {METHOD_STATIC: "静态检查", METHOD_RUN: "沙箱运行",
-                  METHOD_JUDGE: "LLM评审", METHOD_COMPARE: "对比"}.get(v["method"], v["method"])
+                  METHOD_JUDGE: "LLM评审", METHOD_COMPARE: "对比",
+                  METHOD_DIFF: "历史对比"}.get(v["method"], v["method"])
         # #20：中文指标名 + 中文测量手段，data 保留原样供核对推导
         lines.append(f"### {k} · {name} [{v['verdict']}]（{method}）{note}")
         if v.get("data") is not None:
