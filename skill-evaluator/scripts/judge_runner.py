@@ -6,6 +6,10 @@
 - score 由 items 推导（可复现）：pass 项数 / 总项数（0~1，两位小数）；不一致即拒绝
 - score < 1 时 evidence 必须非空且全为字符串（必须引用原文）；score == 1 允许 evidence 为空
 """
+import _console
+
+_console.fix()
+
 import json
 import sys
 from pathlib import Path

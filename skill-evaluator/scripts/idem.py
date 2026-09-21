@@ -3,6 +3,10 @@
 --out：脚本自写 UTF-8 文件（stdout 同步回显），见 static_check.py 说明。
 第二次运行重复第一次已完成步骤的比例高 = 不幂等（如重复下载已存在的文件）。
 """
+import _console
+
+_console.fix()
+
 import json
 import sys
 from pathlib import Path

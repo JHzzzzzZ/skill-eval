@@ -3,6 +3,10 @@
 读同目录中间产物（static.json/score.json/idem.json/compare.json/golden.json/judges/*.json），
 产出 report.json（19 key，机器可读）+ report.md（人可读）。契约见 tests/test_report.py 模块注释。
 """
+import _console
+
+_console.fix()
+
 import json
 import re
 import sys

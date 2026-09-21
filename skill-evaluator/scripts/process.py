@@ -3,6 +3,10 @@ Seam: python process.py --skill <SKILL.md> --trace <trace.json> [--model m] [--t
 
 --build-only 输出 prompt；--events 离线解析；无 JSON 回答保守判 fail（score 0）。
 """
+import _console
+
+_console.fix()
+
 import json
 import os
 import subprocess

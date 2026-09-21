@@ -9,6 +9,10 @@
 最小条数配置优先级：--min-组参 > --min > 环境变量 SKILL_EVAL_TRIGGER_MIN > 默认 10。
 输出 {"counts", "minimums", "passed", "issues"}；passed=False 仅体现在 JSON，退出码恒 0（对齐 static_check）。
 """
+import _console
+
+_console.fix()
+
 import json
 import os
 

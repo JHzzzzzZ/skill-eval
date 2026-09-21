@@ -3,6 +3,10 @@ Seam: python evolution.py <evalsets/<name>> [--out <file>]
 
 版本排序按语义化数字（v2 < v10），非字典序。
 """
+import _console
+
+_console.fix()
+
 import json
 import re
 import sys

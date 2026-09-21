@@ -15,6 +15,10 @@ stdout 契约（字段恒输出）：
 
 局限：手写 frontmatter 解析只支持单行 key: value（不支持多行/嵌套列表），不要扩展。
 """
+import _console
+
+_console.fix()
+
 import json
 import re
 import sys

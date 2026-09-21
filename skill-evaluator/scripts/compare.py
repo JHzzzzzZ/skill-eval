@@ -4,6 +4,10 @@ LLM 判定用 pi CLI（--mode json，prompt 走 stdin，见 _subprocess.ask_json
 --build-only 输出 prompt（离线测试），--events <jsonl> 离线解析回答。
 无 JSON 回答时保守判 fail（score 0），不静默通过。
 """
+import _console
+
+_console.fix()
+
 import json
 import os
 import re

@@ -8,6 +8,10 @@ Seam: python score.py <results目录> [--out <file>] -> stdout JSON（--out 另�
 
 任一输入缺失/非法 → 对应块输出 "skipped"，不崩溃、不打 0 分。
 """
+import _console
+
+_console.fix()
+
 import json
 import sys
 from pathlib import Path

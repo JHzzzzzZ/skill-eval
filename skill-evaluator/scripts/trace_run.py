@@ -5,6 +5,10 @@
 --build-only      : 只输出将要执行的命令，不运行（调试用）
 trace 中的 triggered 判定：agent 是否执行了至少一次工具调用。
 """
+import _console
+
+_console.fix()
+
 import hashlib
 import json
 import os

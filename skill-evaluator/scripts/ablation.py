@@ -1,6 +1,10 @@
 """#6 消融运行数据准备：按 ## 标题切 SKILL.md，删指定段，其余文件原样复制。
 Seam: python ablation.py --skill <dir> --delete "标题1,标题2" --out <dir> | --list
 """
+import _console
+
+_console.fix()
+
 import json
 import shutil
 import sys

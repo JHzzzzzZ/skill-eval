@@ -235,3 +235,22 @@ def test_relative_and_env_paths_pass(tmp_path):
     out = run_check(d)
     assert out["hardcoded"] == []
     assert out["passed"] is True
+
+
+# --- GBK 控制台守卫：stdout 回显不可编码时降级，不崩、退出码 0 ---
+
+def test_gbk_console_no_crash(tmp_path):
+    # Windows GBK 控制台实锤：回显含 ⇒/中文时 UnicodeEncodeError，--out 已写但退出码非零
+    d = tmp_path / "sample-skill"
+    d.mkdir()
+    (d / "SKILL.md").write_text(
+        '---\nname: s\ndescription: "' + "x" * 120 + '"\n---\n\n# t\n', encoding="utf-8")
+    import os
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONIOENCODING"}
+    env["PYTHONIOENCODING"] = "gbk"
+    r = subprocess.run(
+        [sys.executable, str(SCRIPT), str(d)],
+        capture_output=True, env=env,
+    )
+    assert r.returncode == 0, f"crashed on gbk console: {r.stderr[-300:]}"
+    assert b"UnicodeEncodeError" not in r.stderr

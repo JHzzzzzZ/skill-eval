@@ -3,6 +3,10 @@ Seam: python trigger_judge.py --skill <SKILL.md> --trace <trace.json> [--model m
 
 回答/步骤解析不出 JSON → 保守判"未触发"（不计入误报），绝不静默判触发。
 """
+import _console
+
+_console.fix()
+
 import json
 import os
 import subprocess
