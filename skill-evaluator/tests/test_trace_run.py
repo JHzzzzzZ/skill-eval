@@ -215,20 +215,17 @@ def _write_jsonl(lines) -> str:
     return p
 
 
-def test_early_exit_stops_at_first_tool_call():
+def test_early_exit_without_marker_runs_to_end():
+    # 无 marker（无 skill 场景/离线测试）→ 恒不早停：旧“任意首次工具调用即停”口径已删除
     agg = EventAggregator(early_exit=True)
     for line in EVENT_LINES:
         agg.feed(line)
-        if agg.stop:
-            break
     trace = agg.result()
-    assert agg.stop is True
-    assert trace["early_exit"] is True
+    assert agg.stop is False
+    assert "early_exit" not in trace
     assert trace["triggered"] is True
     assert trace["tool_calls"] == 1
-    # 停在首个工具调用，后面的 turn_end/agent_end 不消费 → 无 answer
-    assert trace["answer"] == ""
-    assert trace["passed"] is True  # early-exit 不计入 errors
+    assert trace["answer"] == "answer"  # 事件流全部消费
 
 
 def test_no_early_exit_consumes_all():
@@ -252,13 +249,14 @@ def test_early_exit_without_tool_call_runs_to_end():
     assert "early_exit" not in trace
 
 
-def test_events_flag_with_early_exit(tmp_path):
-    # --early-exit 离线通路：同样在首个工具调用处截断
+def test_events_flag_with_early_exit_without_skill_runs_full(tmp_path):
+    # --early-exit 离线通路但无 --skill → 无可匹配 marker，跑完整（旧口径已删除）
     f = tmp_path / "events.jsonl"
     f.write_text("\n".join(EVENT_LINES), encoding="utf-8")
     out = json.loads(run_trace(["--events", str(f), "--early-exit"]).stdout)
-    assert out["early_exit"] is True
+    assert "early_exit" not in out
     assert out["tool_calls"] == 1
+    assert out["answer"] == "answer"
 
 
 def test_build_args_with_early_exit_flag_unchanged_command():
@@ -329,15 +327,13 @@ def test_early_exit_with_marker_never_hit_runs_to_end():
     assert trace["answer"] == "answer"
 
 
-def test_early_exit_marker_none_keeps_old_behavior():
-    # 兼容：无 marker（无 skill 场景/离线测试）→ 旧口径任意首次调用即停
+def test_early_exit_marker_none_runs_to_end():
+    # 无 marker（无 skill 场景/离线测试）→ 不再早停；旧“任意首次调用即停”口径已删除
     agg = EventAggregator(early_exit=True)
     for line in MARKER_LINES:
         agg.feed(line)
-        if agg.stop:
-            break
-    assert agg.stop is True
-    assert [s["tool"] for s in agg.result()["steps"]] == ["bash"]
+    assert agg.stop is False
+    assert [s["tool"] for s in agg.result()["steps"]] == ["bash", "read"]
 
 
 def test_events_seam_skill_marker_via_cli(tmp_path):

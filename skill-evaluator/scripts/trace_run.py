@@ -38,7 +38,7 @@ class EventAggregator:
     trig-shouldnot-3 实证过“先探索 4 步才加载”）。因此停止条件是首次
     args 指向被测 SKILL.md 的工具调用（= 加载事件本身），而不是任意首次工具调用：
     后者会在 agent 先探索后加载时把触发 run 误杀成假阴性，系统性低估 recall。
-    skill_marker=None 时退回旧口径（任意首次工具调用即停），供无 skill 场景/离线测试。"""
+    skill_marker=None（没有加载被测 skill）→ 无可匹配的加载事件，恒不早停（跑完整）。"""
 
     def __init__(self, early_exit: bool = False, skill_marker: str | None = None):
         self.early_exit = early_exit
@@ -83,13 +83,13 @@ class EventAggregator:
                             self.answer_parts.append(c["text"])  # ISS-3: 最终回答全文
 
     def _hit_marker(self, raw_args) -> bool:
-        """停止条件：无 marker → 任意工具调用（旧口径）；有 marker → args 指向被测 SKILL.md。
+        """停止条件：args 指向被测 SKILL.md 才算命中；无 marker → 恒不命中（跑完整）。
 
         匹配用 args 的原始值（dict/list 递归取值）而不是 json.dumps——dumps 会把
         Windows 路径的 \\ 转义成 \\\\，归一化后与 marker 永远对不上（冒烟实测踩坑）。
         分隔符/连续斜杠/大小写归一（模型回读时可能用 / 或 \\）。"""
         if not self.skill_marker:
-            return True
+            return False
 
         def text(x):
             if isinstance(x, str):
@@ -254,7 +254,7 @@ def main():
             watchdog = threading.Timer(600, lambda: (killed_by_watchdog.set(), _kill_tree(proc)))
             watchdog.start()
             agg = EventAggregator(early_exit=True,
-                                  skill_marker=str(Path(skills[0]).resolve()) if skills else None)
+                                  skill_marker=str(Path(skills[0]).resolve()) if (skills and not no_skill) else None)
             try:
                 for line in proc.stdout:
                     agg.feed(line)
