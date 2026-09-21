@@ -15,18 +15,18 @@ It is itself a skill (for [pi](https://github.com/earendil-works/pi-coding-agent
 | LLM review | #3 brevity, #6 redundancy, #11 fallback, #16 pre-check, #17/18 I/O contract, #19 side-effect reversibility | `judges/*.md` rubrics + `judge_runner.py` |
 | Historical diff | #14 version evolution | `scripts/evolution.py` |
 
-Several metrics share one sandbox run — see `skill-evaluator/reference.md` (§ Run Scenarios) for the 5-scenario merge.
+Several metrics share one sandbox run — the 5 scenarios are grouped into incremental tiers (T0–T4, default T2); see `skill-evaluator/reference.md` (§ Run Scenarios) and ADR-0010.
 
 ## Layout
 
 ```
 skill-evaluator/
-├── SKILL.md            # orchestration: 8-step flow, indexes only
-├── reference.md        # details: metric map, sandbox, versioning, contracts, fallbacks
+├── SKILL.md            # orchestration: tiered flow (T0–T4, default T2), indexes only
+├── reference.md        # details: tier definitions, metric map, sandbox, versioning, contracts, fallbacks
 ├── judges/             # LLM-judge rubrics (structured JSON output, temp=0)
 ├── scripts/            # deterministic tooling (each script = one documented CLI seam)
-└── tests/              # 111 tests, subprocess-seam based
-docs/adr/               # 9 architecture decisions
+└── tests/              # 137 tests, subprocess-seam based
+docs/adr/               # 10 architecture decisions
 ```
 
 The evaluator is **self-contained**: all scripts and tests live inside the skill package (ADR-0006). Evaluation artifacts (eval sets, reports) live in `skill-evaluator/evalsets/<skill-name>/` and are frozen per version — never regenerated on re-runs.
@@ -37,12 +37,17 @@ The evaluator is **self-contained**: all scripts and tests live inside the skill
 2. Say: *"evaluate this skill: <path>"*
 3. Get `report.json` + `report.md` under `skill-evaluator/evalsets/<name>/results/<version>/`
 
-Optional: set `SKILL_EVAL_MODEL=<provider/id>` to pin the model used for sandbox runs and LLM judging (defaults to the pi default model).
+Optional:
+
+- `SKILL_EVAL_MODEL=<provider/id>`: pin the model used for sandbox runs and LLM judging (defaults to the pi default model).
+- `SKILL_EVAL_REVIEW_MODEL=<provider/id>`: model for AI review of eval sets (must differ from the generation model; if unset, picked interactively on first run).
+
+Tier entry: `--tier <static|review|trigger|core|full>` (default T2); higher tiers reuse lower-tier artifacts (validated against the evaluated skill's content hash).
 
 ## Key contracts
 
-- **Report**: all 19 keys always present; unmeasured metrics are `skipped` (never scored 0); no weighted total — three-tier conclusion only (`all-pass` / `with-warnings` / `has-failures`).
-- **Eval sets**: human-provided preferred; auto-generated ones require human review before freezing; frozen sets are reused across versions (that's what makes #14 evolution comparable).
+- **Report**: all 19 keys always present; unmeasured metrics are `skipped` (never scored 0); no weighted total — three-tier conclusion only (`all-pass` / `with-warnings` / `has-failures`); a `tier` field records the highest tier reached.
+- **Eval sets**: human-provided preferred; auto-generated ones are frozen after AI review with a different model (`reviewed_by: "ai"`), upgradable to `"human"` after manual re-review; frozen sets are reused across versions (that's what makes #14 evolution comparable).
 - **Versioning**: git commit short hash; bare folders get `auto-<hash>` after an evaluator-side snapshot commit.
 - **LLM judge outputs**: must pass `judge_runner.py --validate` before entering a report.
 
@@ -50,7 +55,7 @@ Optional: set `SKILL_EVAL_MODEL=<provider/id>` to pin the model used for sandbox
 
 ```bash
 cd skill-evaluator
-python -m pytest tests        # 111 tests, all green
+python -m pytest tests        # 137 tests, all green
 ```
 
 Design decisions and their reasoning live in `docs/adr/`. See `README_CN.md` for the Chinese version.

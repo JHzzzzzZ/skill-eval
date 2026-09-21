@@ -15,18 +15,18 @@
 | LLM 评审 | #3 正文精简、#6 低冗余、#11 fallback、#16 前置自检、#17/18 输入输出契约、#19 副作用可逆 | `judges/*.md` rubric + `judge_runner.py` |
 | 历史对比 | #14 版本演进 | `scripts/evolution.py` |
 
-多个指标共用同一次沙箱运行——5 类运行场景的合并方式见 `skill-evaluator/reference.md`（§ 运行场景）。
+多个指标共用同一次沙箱运行——5 类运行场景按档位（T0–T4，默认 T2）增量编组，见 `skill-evaluator/reference.md`（§ 运行场景）与 ADR-0010。
 
 ## 目录结构
 
 ```
 skill-evaluator/
-├── SKILL.md            # 编排：8 步流程，只放立即要做的事
-├── reference.md        # 细则：指标映射、沙箱定义、版本号、契约、fallback
+├── SKILL.md            # 编排：五档流程（T0–T4，默认 T2），只放立即要做的事
+├── reference.md        # 细则：档位定义、指标映射、沙箱定义、版本号、契约、fallback
 ├── judges/             # LLM 评审 rubric（结构化 JSON 输出，temperature=0）
 ├── scripts/            # 确定性工具（每个脚本一个有文档的 CLI seam）
-└── tests/              # 111 个测试，全部走 subprocess seam
-docs/adr/               # 6 条架构决策记录
+└── tests/              # 137 个测试，全部走 subprocess seam
+docs/adr/               # 10 条架构决策记录
 ```
 
 评估器**自闭环**：脚本与测试全部在 skill 包内（ADR-0006）。评估产物（评测集、报告）放 `skill-evaluator/evalsets/<skill名>/`，按版本冻结——重跑不重新生成。
@@ -37,12 +37,17 @@ docs/adr/               # 6 条架构决策记录
 2. 会话里说：*"评估这个 skill：`<路径>`"*
 3. 拿到 `skill-evaluator/evalsets/<name>/results/<version>/` 下的 `report.json` + `report.md`（`report.py --html` 另出单文件静态页：报告 + 评测集审核 + SVG 流程图）
 
-可选：设置环境变量 `SKILL_EVAL_MODEL=<provider/id>` 固定沙箱运行和 LLM 评审用的模型（默认用 pi 当前模型）。
+可选：
+
+- `SKILL_EVAL_MODEL=<provider/id>`：固定沙箱运行和 LLM 评审用的模型（默认用 pi 当前模型）
+- `SKILL_EVAL_REVIEW_MODEL=<provider/id>`：评测集 AI 审核用的模型（必须与生成阶段不同源；不设则首次运行交互选择）
+
+档位入口：`--tier <static|review|trigger|core|full>`（默认 T2），高档复用低档产物（按被测 skill 的 content_sha256 判定）。
 
 ## 关键契约
 
-- **报告**：19 个 key 恒定出现；没测的标 `skipped`（绝不打 0 分）；不合成加权总分，只给三档结论（`all-pass` / `with-warnings` / `has-failures`）
-- **评测集**：人工上传优先；自动生成的必须人工审核后才冻结；冻结后跨版本复用（这正是 #14 版本演进可比的前提）
+- **报告**：19 个 key 恒定出现；没测的标 `skipped`（绝不打 0 分）；不合成加权总分，只给三档结论（`all-pass` / `with-warnings` / `has-failures`）；`tier` 字段记录跑到的最高档
+- **评测集**：人工上传优先；自动生成的经 LLM 自动审核（换模型）即冻结，`reviewed_by: "ai"`，人工复核后可升级；冻结后跨版本复用（这正是 #14 版本演进可比的前提）
 - **版本号**：git commit 短 hash；裸文件夹由评估器副本快照后标 `auto-<hash>`
 - **LLM 评审输出**：必须过 `judge_runner.py --validate` 才能进报告
 
@@ -50,7 +55,7 @@ docs/adr/               # 6 条架构决策记录
 
 ```bash
 cd skill-evaluator
-python -m pytest tests        # 111 个测试全绿
+python -m pytest tests        # 137 个测试全绿
 ```
 
 设计决策及理由见 `docs/adr/`。英文版见 `README.md`。

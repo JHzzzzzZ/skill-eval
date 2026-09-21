@@ -56,7 +56,7 @@ evalsets/<name>/v1/
 
 ## 运行场景
 
-档位（tier）定义增量递进的评估深度（ADR-0001），入口参数 `--tier <static|review|trigger|core|full>`（或 T0–T4），**默认 T2**。高档复用低档产物：结果目录里各中间产物记录生成时的 skill content_sha256，一致则复用，不一致则作废重跑。低档先行、后续增量补跑（staged）不重做已完成档。
+档位（tier）定义增量递进的评估深度（ADR-0010），入口参数 `--tier <static|review|trigger|core|full>`（或 T0–T4），**默认 T2**。高档复用低档产物：结果目录里各中间产物记录生成时的 skill content_sha256，一致则复用，不一致则作废重跑。低档先行、后续增量补跑（staged）不重做已完成档。
 
 | 档 | 场景 | 做什么 | 服务指标 |
 |---|---|---|---|
