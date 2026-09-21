@@ -10,6 +10,7 @@ stdout 契约（字段恒输出）：
   "dangerous": [{"pattern": str, "line": int, "file": str, "text": str}],
   "hardcoded": [{"pattern": str, "line": int, "file": str, "text": str}],   # 可移植性闸门（ADR-0008）
   "scan_excluded_dirs": [str],   # 闸门豁免目录（ADR-0011：tests/ 不属运行面）
+  "stale_refs": [str],           # SKILL.md 声明但包内不存在的路径（依赖新鲜度，warning 级）
   "errors": [str], "warnings": [str], "issues": [str],   # issues = errors + warnings
   "passed": bool          # errors 为空即 True（危险命令/缺 name 都算 error）
 }
@@ -80,6 +81,36 @@ def token_estimate(text: str) -> int:
     zh = len(re.findall(r"[\u4e00-\u9fff]", text))
     rest = len(text) - zh
     return zh + max(0, rest) // 4
+
+
+# 依赖新鲜度（ADR-0009 延伸）：SKILL.md 声明的路径引用应能定位到包内文件。
+# 只查“声明了但不存在”（文档漂移），不查语义对错——那是 #8 语义面（judges/deps.md）的事。
+REF_EXTS = ".py .mjs .js .ts .md .json .sh .ps1 .cmd .bat .toml .yaml .yml".split()
+
+
+def find_stale_refs(skill_dir: Path, body: str):
+    refs, seen = [], set()
+
+    def check(ref, require_slash):
+        ref = ref.strip().strip(".,;:)）")
+        if (not ref or ref in seen or "*" in ref or "<" in ref or "://" in ref
+                or ref.startswith(("/", "~", "http")) or not re.search(r"\.\w+$", ref)):
+            return
+        if require_slash and "/" not in ref:
+            return  # 裸文件名多为运行产物（如 process.json），不查
+        ext = ref.rsplit(".", 1)[-1].lower()
+        if f".{ext}" not in REF_EXTS:
+            return
+        seen.add(ref)
+        if not (skill_dir / ref).exists():
+            refs.append(ref)
+
+    for target in re.findall(r"\[[^\]]*\]\(([^)]+)\)", body):   # markdown 链接：意图明确，逐个查
+        check(target.split("#", 1)[0], require_slash=False)
+    for code in re.findall(r"`([^`]+)`", body):                  # 行内代码：可能含命令，拆词后只查带斜杠的路径
+        for tok in code.split():
+            check(tok, require_slash=True)
+    return sorted(set(refs))
 
 
 def scan_patterns(skill_dir: Path, patterns, exclude_paths=None):
@@ -180,6 +211,11 @@ def main():
 
     out["scan_excluded_dirs"] = sorted(
         d for d in SCAN_EXEMPT_DIRS if (skill_dir / d).is_dir())
+
+    # 依赖新鲜度（ADR-0009 延伸）：声明路径漂移 → warning（不 fail 闸门）
+    out["stale_refs"] = find_stale_refs(skill_dir, body)
+    for ref in out["stale_refs"]:
+        out["warnings"].append(f"SKILL.md 声明引用的路径不存在：{ref}（依赖新鲜度）")
 
     # 可移植性闸门（ADR-0008）：宿主环境硬编码 → 整体 fail
     out["hardcoded"] = scan_patterns(skill_dir, HOST_HARDCODE_PATTERNS, exclude_paths)

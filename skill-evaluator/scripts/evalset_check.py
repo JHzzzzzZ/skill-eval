@@ -87,7 +87,22 @@ def main():
         if n < minimums[key]:
             issues.append(f"{sub} 仅 {n} 条，少于最小条数 {minimums[key]}")
 
-    out = {"counts": counts, "minimums": minimums,
+    # meta.counts 新鲜度：冻结后扩条未回写 → warnings 提示（不阻断，passed 只由闸门条数决定）
+    warnings = []
+    meta_path = Path(rest[0]) / "meta.json"
+    if meta_path.is_file():
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            meta = None
+        recorded = (meta or {}).get("counts")
+        if isinstance(recorded, dict):
+            for key in GROUPS:
+                if key in recorded and recorded[key] != counts[key]:
+                    warnings.append(f"meta.json counts[{key}]={recorded[key]} 与实际 {counts[key]} 不符"
+                                    "（冻结后扩条未回写）")
+
+    out = {"counts": counts, "minimums": minimums, "warnings": warnings,
            "passed": not issues, "issues": issues}
     emit(out, out_path)
 

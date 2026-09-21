@@ -90,7 +90,7 @@ def from_static(static, m: dict):
                 "method": METHOD_STATIC, "data": static.get("dangerous"), "note": "危险命令扫描"}
 
 
-def build(d: Path) -> dict:
+def build(d: Path, evalset_dir: Path | None = None) -> dict:
     m = {}
     static = load(d, "static.json")
     score = load(d, "score.json")
@@ -196,7 +196,7 @@ def build(d: Path) -> dict:
     m["#14"] = {"verdict": "skipped", "method": METHOD_DIFF, "data": None, "note": "evolution.py 独立产出"}
 
     # 评测集 AI 审核（#49）：reviewed_by=ai 时给依赖评测集的指标加标注
-    reviewed_by = _evalset_reviewed_by(d)
+    reviewed_by = _evalset_reviewed_by(d, evalset_dir)
     if reviewed_by == "ai":
         ai_note = "评测集 AI 审核，未经人工复核"
         for k in ("#1", "#5", "#9"):
@@ -210,10 +210,21 @@ def build(d: Path) -> dict:
     return report
 
 
-def _evalset_reviewed_by(d: Path):
-    """从 evalsets/<name>/<version>/meta.json 读 reviewed_by（human|ai|None）。
-    results 目录 = evalsets/<name>/results/<version>，评测集与 results 同父。"""
-    meta = load(d.parent.parent / d.name, "meta.json")
+def _evalset_reviewed_by(d: Path, evalset_dir: Path | None = None):
+    """读评测集 meta.json 的 reviewed_by（human|ai|None）。结果目录 =
+    evalsets/<name>/results/<version>，而评测集版本是 evalsets/<name>/v<N>/——
+    版本目录名与结果版本号无关（如 auto-b9d7fab vs v1），不能拼接，只能 glob。
+    --evalset 显式指定优先；未指定时取 v* 中版本号最大的冻结 meta。"""
+    mdir = evalset_dir
+    if mdir is None:
+        base = d.parent.parent  # evalsets/<name>
+        vers = []
+        for p in base.glob("v*/meta.json"):
+            m = re.fullmatch(r"v(\d+)", p.parent.name)
+            if m:
+                vers.append((int(m.group(1)), p.parent))
+        mdir = max(vers)[1] if vers else None
+    meta = load(mdir, "meta.json") if mdir else None
     if isinstance(meta, dict) and meta.get("reviewed_by") in ("human", "ai"):
         return meta["reviewed_by"]
     return None
@@ -525,7 +536,7 @@ def main():
     if not d.is_dir():
         print(f"results 目录不存在: {d}", file=sys.stderr)
         sys.exit(2)
-    report = build(d)
+    report = build(d, evalset_dir)
     if tier:
         report["tier"] = tier
     (d / "report.json").write_text(

@@ -206,6 +206,7 @@ def main():
             marker = str(Path(skills[0]).resolve())
         trace = parse_events(Path(events_file).read_text(encoding="utf-8", errors="replace").splitlines(),
                              early_exit=bool(early_exit), skill_marker=marker)
+        trace["model"] = model or os.environ.get(DEFAULT_MODEL_ENV)  # 宿主 pin：离线重算时至少记意图
         if out_path:
             Path(out_path).write_text(json.dumps(trace, ensure_ascii=False, indent=2), encoding="utf-8")
         print(json.dumps(trace, ensure_ascii=False))
@@ -228,6 +229,16 @@ def main():
         print(json.dumps(trace, ensure_ascii=False))
         return
     cmd[0] = resolved
+    # 宿主 pin（ADR-0009 延伸）：trace 记录实际执行环境，事后可归因（同题方差分析/复现）
+    host = {"model": model or os.environ.get(DEFAULT_MODEL_ENV),
+            "pi": Path(resolved).name, "platform": sys.platform}
+    try:
+        pi_ver = subprocess.run([resolved, "--version"], capture_output=True, text=True,
+                                timeout=15, errors="replace")
+        if pi_ver.returncode == 0:
+            host["pi"] = (pi_ver.stdout or "").strip().splitlines()[-1][:80] if (pi_ver.stdout or "").strip() else host["pi"]
+    except (OSError, subprocess.TimeoutExpired):
+        pass  # 版本探测失败不阻断主流程
     if not Path(worktree).is_dir():
         trace = parse_events([])
         trace["errors"] = [f"worktree 目录不存在: {worktree}"]
@@ -296,7 +307,9 @@ def main():
         trace["errors"] = ["运行超时（600s）"]
         trace["passed"] = False
     if out_path:
+        trace["host"] = host
         Path(out_path).write_text(json.dumps(trace, ensure_ascii=False, indent=2), encoding="utf-8")
+    trace["host"] = host
     print(json.dumps(trace, ensure_ascii=False))
 
 

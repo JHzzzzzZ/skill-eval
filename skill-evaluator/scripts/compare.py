@@ -10,7 +10,6 @@ _console.fix()
 
 import json
 import os
-import re
 import subprocess
 import sys
 from pathlib import Path
@@ -23,6 +22,39 @@ def build_prompt(expect: str, actual: str) -> str:
             f"期望描述：\n{expect}\n\n实际产出：\n{actual}\n\n"
             '只回答一个 JSON 对象：{"match": true/false, "score": 0|1|2, "reason": "一句话理由"}\n'
             "score: 0=不匹配, 1=部分匹配, 2=完全匹配。")
+
+
+def extract_json_object(text: str):
+    """提取文本中第一个花括号配对完整的 JSON 对象（支持嵌套 items[]/字符串内花括号）。
+
+    旧 regex 版 `\{[^{}]*\}` 只能吃扁平对象：嵌套输出会先命中内层对象
+    （trigger_judge 的 items[] 契约被截成单个 item → 缺 triggered → 静默保守判未触发）。
+    """
+    start = text.find("{")
+    while start != -1:
+        depth, in_str, esc = 0, False, False
+        for i in range(start, len(text)):
+            ch = text[i]
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == "\\":
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+            elif ch == '"':
+                in_str = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    try:
+                        return json.loads(text[start:i + 1])
+                    except json.JSONDecodeError:
+                        break  # 这个起点配不成合法 JSON，换下一个 {
+        start = text.find("{", start + 1)
+    return None
 
 
 def extract_answer(events_text: str) -> dict:
@@ -44,12 +76,9 @@ def extract_answer(events_text: str) -> dict:
                 if isinstance(msg, dict) and msg.get("role") == "assistant":
                     for c in msg.get("content", []):
                         if isinstance(c, dict) and c.get("type") == "text":
-                            m = re.search(r"\{[^{}]*\}", c.get("text", ""), re.DOTALL)
-                            if m:
-                                try:
-                                    return json.loads(m.group(0))
-                                except json.JSONDecodeError:
-                                    pass
+                            obj = extract_json_object(c.get("text", ""))
+                            if isinstance(obj, dict):
+                                return obj
         return default
     except Exception:
         return {"match": False, "score": 0, "reason": "回答解析异常"}

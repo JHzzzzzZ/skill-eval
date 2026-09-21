@@ -62,7 +62,7 @@ evalsets/<name>/v1/
 |---|---|---|---|
 | T0 | 静态检查 | static_check.py | #2 #7 #13 |
 | T1 | LLM 评审 | 逐项按 judges/ rubric 评审（4 并发） | #3 #6(评审面) #11 #16 #17 #18 #19 |
-| T2 | 触发评测 | 三组 prompt 各跑一次，带 `--early-exit`（ADR-0007 修订）：事件流出现**首次指向被测 SKILL.md 的工具调用**（渐进式披露下 = agent 决定加载 skill）即终止该次运行省 token；未出现该调用的 run 跑完整，其行为正是 precision 的证据；**triggered 由 `trigger_judge.py` 用 LLM 按最终回答判定**（trace_run.triggered 仅作粗筛），环境故障的 case 不计入 P/R 分母；early-exit 截断的 case 最终回答为空，判定交由 trigger_judge 按已执行的步骤裁决 | #1 |
+| T2 | 触发评测 | 三组 prompt 各跑一次，带 `--early-exit`（ADR-0007 修订）：事件流出现**首次指向被测 SKILL.md 的工具调用**（渐进式披露下 = agent 决定加载 skill）即终止该次运行省 token；未出现该调用的 run 跑完整，其行为正是 precision 的证据；**triggered 由 `trigger_judge.py` 用 LLM 判定**，判定口径与 early-exit 同步：**加载即触发，不要求任务实际完成**，截断运行（回答为空）按已执行步骤裁决（trace_run.triggered 仅作粗筛），环境故障的 case 不计入 P/R 分母 | #1 |
 | T3 | 主运行 Golden Run | 干净 worktree + 加载 skill，跑 cases，采 trace | #4/#8/#9 |
 | T3 | 基线 A/B | 同 cases、同 worktree，但**不加载** skill | #5 |
 | T3 | 重复运行 ×N | 主运行重复 N 次，每次 trace 存档 | #12/#15 |
@@ -79,7 +79,7 @@ evalsets/<name>/v1/
 
 可选 `--thinking <off|minimal|low|medium|high|xhigh|max>` 控制思考档位。LLM 评审（judges/）与触发判定（trigger_judge.py）用**同一个模型配置**，保证与被测运行同源。评测集 AI 审核是唯一例外，见 § 评测集 AI 审核。
 
-可配参数：重复运行 N=3；IDEMPOTENT_MAX_RATIO=0.5（idem.py）；DESCRIPTION_TOKEN_LIMIT=100、NAME_MAX_CHARS=64（static_check.py）；触发集每组最小条数 10（evalset_check.py，环境变量 SKILL_EVAL_TRIGGER_MIN / CLI --min*）；F1_PASS=0.7、COST_CV_MAX=0.5（report.py）。
+可配参数：重复运行 N=3；IDEMPOTENT_MAX_RATIO=0.5（idem.py）；DESCRIPTION_TOKEN_LIMIT=100、NAME_MAX_CHARS=64（static_check.py）；触发集每组最小条数 10（evalset_check.py，环境变量 SKILL_EVAL_TRIGGER_MIN / CLI --min*）；F1_PASS=0.7、COST_CV_MAX=0.5（report.py）；TRIGGER_PASS_SCORE=0.5（trigger_judge.py，--threshold 可覆盖）。
 
 ## 执行载体与扩展点（ADR-0007）
 
@@ -99,8 +99,8 @@ evalsets/<name>/v1/
 - `triggers.json`：`{"should": [bool...], "should_not": [...], "confusable": [...]}`，布尔值 = 该 prompt 是否实际触发
 - `runs.json`：`[{"tool_calls", "tokens", "seconds"}, ...]`，golden（有 skill）各次运行
 - `baseline.json`：同 runs.json 格式，基线（无 skill）运行，缺省则 necessity 输出 `skipped`
-- `trace-<序号>.json`：`{"steps": [{"tool", "args", "args_hash"}, ...], "answer", "tokens", "seconds", "triggered", "errors"}`（trace_run.py 落盘，--out）
-- `static.json`：static_check.py --out（脚本自写 UTF-8；stdout 同步回显。禁 shell 重定向——GBK 控制台会产 GBK 文件）。全部脚本入口接 `scripts/_console.py::fix()`：GBK 控制台下回显不可编码字符降级为替换符，不崩、退出码 0；`--out` 文件不受影响
+- `trace-<序号>.json`：`{"steps": [{"tool", "args", "args_hash"}, ...], "answer", "tokens", "seconds", "triggered", "errors", "host": {"model", "pi", "platform"}}`（trace_run.py 落盘，--out；host 为宿主 pin，事后归因/复现用；离线 --events 重算时仅记 model 意图）
+- `static.json`：static_check.py --out（脚本自写 UTF-8；stdout 同步回显。禁 shell 重定向——GBK 控制台会产 GBK 文件）。全部脚本入口接 `scripts/_console.py::fix()`：GBK 控制台下回显不可编码字符降级为替换符，不崩、退出码 0；`--out` 文件不受影响。输出含 `stale_refs`（SKILL.md 声明但包内不存在的路径引用，warning 级，依赖新鲜度信号）
 - `score.json`：score.py --out（同上）
 - `idem.json`：多次 idem.py --out 结果的聚合 `{"ratio", "idempotent"}`
 - `golden.json`：主运行的 golden trace（#8 唯一数据源）

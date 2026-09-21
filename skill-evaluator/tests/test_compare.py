@@ -65,6 +65,21 @@ def test_answer_without_json_is_error(tmp_path):
     assert "reason" in out
 
 
+def test_nested_json_extracts_outer_object(tmp_path):
+    # 回归：旧 regex（\{[^{}]*\}）会先命中内层对象（字符串内/真嵌套）→ 外层 match 丢失，误判未匹配
+    exp = tmp_path / "expect.txt"; exp.write_text("包含数字 4", encoding="utf-8")
+    act = tmp_path / "actual.md"; act.write_text("2+2=4", encoding="utf-8")
+    text = json.dumps({"match": True, "score": 2,
+                       "reason": '匹配，详情 {"nested": 1}', "detail": {"items": [1, 2]}})
+    events = json.dumps({"type": "agent_end", "messages": [
+        {"role": "assistant", "content": [{"type": "text", "text": text}]}]})
+    f = tmp_path / "events.jsonl"; f.write_text(events, encoding="utf-8")
+    r = run_compare(["--expect", str(exp), "--actual", str(act), "--events", str(f)])
+    assert r.returncode == 0, r.stderr
+    out = json.loads(r.stdout)
+    assert out["match"] is True and out["score"] == 2
+
+
 # --- 全仓复审 P2: 多 case 聚合 ---
 
 def test_aggregate_multiple_cases(tmp_path):

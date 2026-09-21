@@ -90,3 +90,25 @@ def test_out_file_utf8(tmp_path):
     dst = tmp_path / "chk.json"
     run_check(ev, "--out", str(dst))
     assert dst.read_text(encoding="utf-8")  # --out 落盘 UTF-8，无 GBK 风险
+
+
+# --- meta.counts 新鲜度：冻结后扩条未回写 → issue 提示（不阻断闸门） ---
+
+def _mk_entry(d, name):
+    (d / name).write_text(json.dumps({"prompt": "p"}), encoding="utf-8")
+
+
+def test_meta_counts_stale_reported(tmp_path):
+    import subprocess, sys as _sys
+    script = Path(__file__).parent.parent / "scripts" / "evalset_check.py"
+    for g in ("should", "should-not", "confusable"):
+        (tmp_path / "triggers" / g).mkdir(parents=True)
+        for i in range(10):
+            _mk_entry(tmp_path / "triggers" / g, f"{i}.json")
+    (tmp_path / "meta.json").write_text(json.dumps(
+        {"counts": {"should": 6, "should_not": 10, "confusable": 10}}), encoding="utf-8")
+    r = subprocess.run([_sys.executable, str(script), str(tmp_path)],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
+    out = json.loads(r.stdout)
+    assert out["passed"] is True  # 条数闸门本身达标，新鲜度不阻断
+    assert any("counts[should]=6 与实际 10 不符" in w for w in out["warnings"])

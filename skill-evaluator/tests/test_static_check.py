@@ -281,3 +281,18 @@ def test_no_tests_dir_field_empty(tmp_path):
     (d / "SKILL.md").write_text('---\nname: s\ndescription: "x" * 120\n---\n\n# t\n', encoding="utf-8")
     out = run_check(d)
     assert out["scan_excluded_dirs"] == []
+
+
+# --- 依赖新鲜度（ADR-0009 延伸）：声明路径漂移 → warning ---
+
+def test_stale_ref_detected(tmp_path):
+    d = tmp_path / "sample-skill"
+    d.mkdir()
+    body = ('---\nname: s\ndescription: "x" * 120\n---\n\n'
+            '运行 `node tools/todo.mjs`；详见 [细则](docs/reference.md) 和 [存在](real.md)。\n'
+            '外链 [pi](https://example.com) 与绝对路径 `/abs/x.py` 不查。\n')
+    (d / "SKILL.md").write_text(body, encoding="utf-8")
+    (d / "real.md").write_text("ok", encoding="utf-8")
+    out = run_check(d)
+    assert sorted(out["stale_refs"]) == ["docs/reference.md", "tools/todo.mjs"]
+    assert out["passed"] is True  # warning 级，不 fail 闸门

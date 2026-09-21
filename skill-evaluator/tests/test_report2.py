@@ -83,3 +83,30 @@ def test_evolution_method_is_historical_diff(tmp_path):
     out = run_report(tmp_path)
     assert out["metrics"]["#14"]["method"] == "历史对比"
     assert out["metrics"]["#14"]["verdict"] == "skipped"  # evolution.py 独立产出，report.py 不代打
+
+
+# --- reviewed_by 路径修复：evalset 版本目录（v1）≠ results 版本目录（auto-*） ---
+
+def test_reviewed_by_found_via_v_glob(tmp_path):
+    # 回归：旧实现拼 d.parent.parent/d.name → evalsets/<name>/<结果版本号>/meta.json（不存在）
+    name = "sample-skill"
+    (tmp_path / name / "v1").mkdir(parents=True)
+    (tmp_path / name / "v1" / "meta.json").write_text(
+        json.dumps({"frozen_at": "t", "reviewed_by": "ai"}), encoding="utf-8")
+    res = tmp_path / name / "results" / "auto-b9d7fab"
+    res.mkdir(parents=True)
+    out = run_report(res)
+    assert out["reviewed_by"] == "ai"
+    assert "AI 审核" in out["metrics"]["#1"]["note"] or out["metrics"]["#1"]["verdict"] == "skipped"
+
+
+def test_reviewed_by_picks_highest_version(tmp_path):
+    name = "sample-skill"
+    for v, by in (("v2", "ai"), ("v10", "human")):
+        (tmp_path / name / v).mkdir(parents=True)
+        (tmp_path / name / v / "meta.json").write_text(
+            json.dumps({"reviewed_by": by}), encoding="utf-8")
+    res = tmp_path / name / "results" / "auto-x"
+    res.mkdir(parents=True)
+    out = run_report(res)
+    assert out["reviewed_by"] == "human"  # v10 > v2，字典序陷阱
