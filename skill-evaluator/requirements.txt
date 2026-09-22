@@ -1,0 +1,4 @@
+# 运行时零第三方依赖：scripts/ 只用 Python 标准库
+# （json / re / sys / subprocess / hashlib / pathlib / threading / datetime）
+# 要求 Python >= 3.9（用 Path.is_relative_to）
+pytest>=7

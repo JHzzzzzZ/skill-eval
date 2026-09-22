@@ -6,7 +6,7 @@ SKILL.md 的细则层。指标编号 #N 对应 prompt.txt 的 19 条需求。
 
 | 手段 | 指标 | 本期状态 |
 |---|---|---|
-| 静态检查 | #2 name/description 规范与 token 数、#7 调用方式、#13 权限扫描 | ✅ 已实现（static_check.py） |
+| 静态检查 | #2 name/description 规范与 token 数、#7 调用方式、#13 五组规则扫描（危险命令/凭据/注入/外发/混淆） | ✅ 已实现（static_check.py，ADR-0013） |
 | 沙箱运行 | #1 触发精准度、#4 成本、#5 必要性、#8 最小依赖 | ✅ 已实现（trace_run.py + score.py + judges/deps.md 语义面双源） |
 | LLM 评审 | #3 正文精简、#6 低冗余、#11 fallback、#16 前置自检、#17/18 输入输出契约、#19 副作用可逆 | ✅ 已实现（judges/ + judge_runner.py） |
 | 沙箱运行（多次） | #12 稳定性（组内变异系数）、#15 幂等 | ✅ 已实现（重复运行 ×N + idem.py） |
@@ -19,7 +19,9 @@ SKILL.md 的细则层。指标编号 #N 对应 prompt.txt 的 19 条需求。
 
 沙箱 = **git worktree**。被测 skill 的副本仓库上 `git worktree add`，运行在 worktree 内进行，评估产物不落回副本主目录。未来若替换为 Docker，只改本节定义，SKILL.md 流程不变。
 
-权限边界（#13）：worktree 方案下只能做到静态扫描 + trace 审计（看 trace 里是否出现了不该有的命令），做不到强制拦截。扫描规则见 `scripts/static_check.py` 内的 DANGEROUS_PATTERNS。
+权限边界（#13）：worktree 方案下只能做到静态扫描 + trace 审计（看 trace 里是否出现了不该有的命令），做不到强制拦截。扫描规则见 `scripts/static_check.py` 内的五组正则（ADR-0013）：危险命令 / 硬编码凭据 / 注入指令 / 数据外发 / 混淆。
+
+已知漏检（如实告知，不要当成"扫过就是安全"）：自造格式的高熵 token、改写的语义注入、跨段拼接的注入、无读取动词的 `.env` 引用。混淆类命中仅警告，需人工复核。
 
 扫描口径（ADR-0012）：默认排除 `tests/`、`evalsets/` 与扫描器自身源码（`--no-default-excludes` 关闭默认排除）；`--exclude <路径>` 的相对路径按 **skill 目录**解析；单行末尾加 `static-check:ignore` 可抑制命中，被抑制项记入 `ignored` 字段（不静默丢）。
 
@@ -28,6 +30,8 @@ SKILL.md 的细则层。指标编号 #N 对应 prompt.txt 的 19 条需求。
 1. 被测 skill 自带 `.git` → `git rev-parse --short HEAD`
 2. 裸文件夹 → 只读存档原始上传（`uploads/<name>-<时间戳>/`），副本 `git init + commit`，版本号 = `auto-<副本短 hash>`
 3. 副本的 `meta.json` 记录 `content_sha256` 兜底；results 目录另有同名 `meta.json`（内容不同，靠 `schema` 字段区分，ADR-0010）
+
+注意区分两个号：本包 SKILL.md frontmatter 的 `version`（给人看的发布号）与报告里的 `auto-<sha256>` 评估器指纹（ADR-0010，用来判定两份报告能不能横向比）。不要互相替代。
 
 相同内容重复上传 → 相同 hash → 结果落同一目录（幂等 #15）。
 
@@ -90,7 +94,7 @@ evalsets/<name>/v1/
 - `runs.json`：`[{"tool_calls", "tokens", "seconds"}, ...]`，golden（有 skill）各次运行
 - `baseline.json`：同 runs.json 格式，基线（无 skill）运行，缺省则 necessity 输出 `skipped`
 - `trace-<序号>.json`：`{"steps": [{"tool", "args", "args_hash"}, ...], "answer", "tokens", "seconds", "triggered", "errors"}`（trace_run.py 落盘，--out）
-- `static.json`：static_check.py stdout
+- `static.json`：static_check.py stdout（#13 的五组：`dangerous`/`secrets`/`injection`/`exfil`/`obfuscation`，另有 `excluded`/`ignored`/`hardcoded`；契约见脚本 docstring）
 - `score.json`：score.py stdout
 - `idem.json`：多次 idem.py 结果的聚合 `{"ratio", "idempotent"}`
 - `golden.json`：主运行的 golden trace（#8 唯一数据源）
@@ -152,6 +156,8 @@ evalsets/<name>/results/<version>/
 |---|---|
 | 被测路径无 SKILL.md | 终止，报告"不是合法 skill 包" |
 | scripts/judges 缺失 | 报告评估器自身损坏，列出缺失项，终止 |
+| 硬依赖缺失（`bash scripts/check-deps.sh` 报 FAIL） | 终止：缺 python≥3.9/git 时会静默降级，先装齐再跑 |
+| 缺 pi CLI 或模型（自检仅 warn） | 只能跑静态检查；沙箱类与 LLM 评审指标标 `skipped`，报告注明原因 |
 | worktree 创建失败 | 换临时目录 + 提示隔离降级，继续跑 |
 | 沙箱运行崩溃 | 降级为"静态 + LLM 评审"，报告标注哪些指标因降级 `skipped` |
 | 评测集未审核 | #1/#5/#9 标 `skipped`，其余照常 |

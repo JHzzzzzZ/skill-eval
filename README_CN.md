@@ -24,10 +24,12 @@
 skill-evaluator/
 ├── SKILL.md            # 编排：8 步流程，只放立即要做的事
 ├── reference.md        # 细则：指标映射、沙箱定义、版本号、契约、fallback
+├── LICENSE             # MIT
+├── requirements.txt    # 运行时零第三方依赖（标准库）；pytest 仅测试用
 ├── judges/             # LLM 评审 rubric（结构化 JSON 输出，temperature=0）
-├── scripts/            # 确定性工具（每个脚本一个有文档的 CLI seam）
-└── tests/              # 154 个测试，全部走 subprocess seam
-docs/adr/               # 11 条架构决策记录
+├── scripts/            # 确定性工具；check-deps.sh = 前置自检（#16）
+└── tests/              # 169 个测试，全部走 subprocess seam
+docs/adr/               # 13 条架构决策记录
 ```
 
 评估器**自闭环**：脚本与测试全部在 skill 包内（ADR-0006）。评估产物（评测集、报告）放 `skill-evaluator/evalsets/<skill名>/`，按版本冻结——重跑不重新生成。
@@ -35,8 +37,9 @@ docs/adr/               # 11 条架构决策记录
 ## 使用
 
 1. 安装：把 `skill-evaluator/` 复制到 `~/.pi/agent/skills/`
-2. 会话里说：*"评估这个 skill：`<路径>`"*
-3. 拿到 `skill-evaluator/evalsets/<name>/results/<version>/` 下的 `report.json` + `report.md` + `meta.json`（`report.py --skill <被测skill目录>` 顺手记下被测 skill 的内容指纹，ADR-0010；`--html` 另出单文件静态页：报告 + 评测集审核 + SVG 流程图）
+2. 前置自检：`bash scripts/check-deps.sh`（python ≥ 3.9 / git / pytest / pi CLI）
+3. 会话里说：*"评估这个 skill：`<路径>`"*
+4. 拿到 `skill-evaluator/evalsets/<name>/results/<version>/` 下的 `report.json` + `report.md` + `meta.json`（`report.py --skill <被测skill目录>` 顺手记下被测 skill 的内容指纹，ADR-0010；`--html` 另出单文件静态页：报告 + 评测集审核 + SVG 流程图）
 
 可选：设置环境变量 `SKILL_EVAL_MODEL=<provider/id>` 固定沙箱运行和 LLM 评审用的模型（默认用 pi 当前模型）。
 
@@ -52,7 +55,7 @@ docs/adr/               # 11 条架构决策记录
 
 ```bash
 cd skill-evaluator
-python -m pytest tests        # 104 个测试全绿
+python -m pytest tests        # 169 个测试全绿
 ```
 
 设计决策及理由见 `docs/adr/`。英文版见 `README.md`。

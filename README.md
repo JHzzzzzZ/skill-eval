@@ -24,10 +24,12 @@ Several metrics share one sandbox run — see `skill-evaluator/reference.md` (§
 skill-evaluator/
 ├── SKILL.md            # orchestration: 8-step flow, indexes only
 ├── reference.md        # details: metric map, sandbox, versioning, contracts, fallbacks
+├── LICENSE             # MIT
+├── requirements.txt    # zero runtime deps (stdlib); pytest for tests only
 ├── judges/             # LLM-judge rubrics (structured JSON output, temp=0)
-├── scripts/            # deterministic tooling (each script = one documented CLI seam)
-└── tests/              # 154 tests, subprocess-seam based
-docs/adr/               # 11 architecture decisions
+├── scripts/            # deterministic tooling; check-deps.sh = preflight (#16)
+└── tests/              # 169 tests, subprocess-seam based
+docs/adr/               # 13 architecture decisions
 ```
 
 The evaluator is **self-contained**: all scripts and tests live inside the skill package (ADR-0006). Evaluation artifacts (eval sets, reports) live in `skill-evaluator/evalsets/<skill-name>/` and are frozen per version — never regenerated on re-runs.
@@ -35,8 +37,9 @@ The evaluator is **self-contained**: all scripts and tests live inside the skill
 ## Usage
 
 1. Install: copy `skill-evaluator/` into `~/.pi/agent/skills/`
-2. Say: *"evaluate this skill: <path>"*
-3. Get `report.json` + `report.md` + `meta.json` under `skill-evaluator/evalsets/<name>/results/<version>/` — pass `--skill <path>` to have `meta.json` record the skill's own content hash (ADR-0010)
+2. Preflight: `bash scripts/check-deps.sh` (python >= 3.9, git, pytest, pi CLI)
+3. Say: *"evaluate this skill: <path>"*
+4. Get `report.json` + `report.md` + `meta.json` under `skill-evaluator/evalsets/<name>/results/<version>/` — pass `--skill <path>` to have `meta.json` record the skill's own content hash (ADR-0010)
 
 Optional: set `SKILL_EVAL_MODEL=<provider/id>` to pin the model used for sandbox runs and LLM judging (defaults to the pi default model).
 
@@ -52,7 +55,7 @@ Optional: set `SKILL_EVAL_MODEL=<provider/id>` to pin the model used for sandbox
 
 ```bash
 cd skill-evaluator
-python -m pytest tests        # 104 tests, all green
+python -m pytest tests        # 169 tests, all green
 ```
 
 Design decisions and their reasoning live in `docs/adr/`. See `README_CN.md` for the Chinese version.

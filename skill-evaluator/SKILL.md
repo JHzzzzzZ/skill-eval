@@ -2,6 +2,9 @@
 name: skill-evaluator
 description: Evaluate a skill package against 19 quality metrics. Only runs when explicitly asked (e.g. "评估这个 skill"), never auto-triggers.
 disable-model-invocation: true
+version: 1.0.0
+license: MIT
+compatibility: "需要 python3 >= 3.9（仅标准库）与 git；沙箱运行与 LLM 评审另需 pi CLI 和已配置模型（SKILL_EVAL_MODEL 或 pi 默认模型）；测试需 pytest。已实测 Windows(Git Bash) + Python 3.12。"
 ---
 
 # Skill Evaluator
@@ -16,7 +19,7 @@ disable-model-invocation: true
 
 ## 流程
 
-1. **前置自检**：确认 `scripts/`、`judges/`、`reference.md` 存在；被测路径下有 `SKILL.md`。任一缺失 → 走 [reference.md § Fallback](./reference.md)
+1. **前置自检**：跑 `bash scripts/check-deps.sh`（python/git/pytest/pi + 包内文件齐备，缺硬依赖不要继续）；再确认被测路径下有 `SKILL.md`。任一缺失 → 走 [reference.md § Fallback](./reference.md)
 2. **存档与定版**：原始上传只读存档到 `uploads/<name>-<时间戳>/`；副本上 `git init + commit`。版本号规则见 [reference.md § 版本号](./reference.md)
 3. **静态检查**：运行 `scripts/static_check.py <skill目录>`，覆盖 #2/#7/#13
 4. **评测集**：检查 `evalsets/<name>/` 是否已冻结；无则走 [reference.md § 评测集冻结](./reference.md)（自动生成 → 交人工审核，审核通过前不得进入第 5 步）。冻结后跑 `scripts/evalset_check.py <evalset目录> --skill <skill目录>` 做质量自检，命中照抄/重复/冲突先改写再冻（ADR-0011）
