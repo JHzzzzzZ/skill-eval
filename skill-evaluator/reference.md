@@ -131,6 +131,7 @@ temperature=0、单次、结构化 JSON 输出（`{items: [{name, pass, quote}],
 evalsets/<name>/results/<version>/
 ├── report.json   # tier + 19 个 key=指标名，值={verdict: pass|warn|fail|skipped, method, data, note}
 ├── report.md     # 每条指标一节：分数/证据/建议
+├── report.html   # --html：report.md 的渲染媒介 + 评测集审核界面；报告 tab 不得比 report.md 少信息
 └── meta.json     # tier、reviewed_by、skill content_sha256（产物复用判定依据）
 ```
 
@@ -138,6 +139,7 @@ evalsets/<name>/results/<version>/
 - `tier` 记录本次跑到的最高档位；#14 evolution diff 时先比 tier 再比分数，档位不同不直接比指标值
 - 各中间产物记录生成时的 skill content_sha256；高档复用低档产物时校验一致，不一致则该产物作废重跑
 - 19 条指标全部出现；未测的标 `skipped` 并注明原因，不打 0 分
+- **data 渲染**（report.md / report.html 共用一套）：已知形状（#15 `per_pair`、#12 `cost_by_case`+`cv_by_case`、#4 `cost`、#9 `per_case`）→ 摘要行 + 表格；HTML 侧表格之后一律附折叠的原始 JSON（`report.json` 同源），judge 面（`items`）另加 score/reason 摘要行；无表可渲染时 ≤400 字符内联、>400 折叠（md 侧 >400 只写「完整 data 见 report.json」指针）；单元格 >800 字符截断并标注。**不得静默截断**（旧实现 `[:2000]` 会把 2165 字符的 #15 data 切成非法 JSON）。渲染层不得反向改 `report.json` 的形状
 - 评测集 `reviewed_by: "ai"` 时，报告与 #1/#5/#9 的结论处注明「评测集 AI 审核，未经人工复核」
 - 不合成加权总分；结论分三档：必测全过 / 有警告 / 有失败
 - `report.json` 机器可读，供 #14 版本演进做横向 diff

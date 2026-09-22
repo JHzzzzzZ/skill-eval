@@ -25,7 +25,7 @@ skill-evaluator/
 ├── reference.md        # details: tier definitions, metric map, sandbox, versioning, contracts, fallbacks
 ├── judges/             # LLM-judge rubrics (structured JSON output, temp=0)
 ├── scripts/            # deterministic tooling (each script = one documented CLI seam)
-└── tests/              # 162 tests, subprocess-seam based
+└── tests/              # 166 tests, subprocess-seam based
 docs/adr/               # 10 architecture decisions
 ```
 
@@ -55,7 +55,7 @@ Tier entry: `--tier <static|review|trigger|core|full>` (default T2); higher tier
 
 ```bash
 cd skill-evaluator
-python -m pytest tests        # 162 tests, all green
+python -m pytest tests        # 166 tests, all green
 ```
 
 Design decisions and their reasoning live in `docs/adr/`. See `README_CN.md` for the Chinese version.

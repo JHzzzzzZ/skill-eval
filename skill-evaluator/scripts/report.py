@@ -167,7 +167,7 @@ def build(d: Path, evalset_dir: Path | None = None) -> dict:
                    "note": dep_note}
     if isinstance(score, dict) and isinstance(score.get("cost"), dict) \
             and isinstance(score["cost"].get("tool_calls"), dict):
-        # #12/#51（ADR-0012）：裁决用**组内（逐 case）** 变异系数中位数——
+        # #12（ADR-0012）：裁决用**组内（逐 case）** 变异系数中位数——
         # pooled 会把 case 间的难度差算成“不稳定”（实测：组间均值极差 8.5 步 → pooled cv 0.65，
         # 组内中位数 0.45）。无逐 case 数据（旧产物/旧 harness）时回退 pooled 并在 note 标注口径。
         cost_data = score["cost"]
@@ -447,6 +447,8 @@ h4{margin:14px 0 4px}.hint{color:#6b7280}
 .rv-note{flex:1;min-width:180px;border:1px solid #dde2e7;border-radius:6px;padding:3px 8px;font-size:13px}
 table{border-collapse:collapse;width:100%;font-size:13px}
 td,th{border:1px solid #dde2e7;padding:4px 8px;text-align:left}
+details summary{cursor:pointer;color:#475569;font-size:13px}
+details pre{max-height:420px}
 </style></head><body>
 <header><h1 style="margin:0;font-size:20px">Skill 评估报告</h1>
 <p style="margin:4px 0 0">结论：<span class="badge __CLS__">__CONCLUSION__</span>__META__</p></header>
@@ -510,27 +512,157 @@ function rvSubmit(){var root=document.getElementById('rv-root');if(!root)return;
 </body></html>'''
 
 
+DATA_INLINE_MAX = 400  # 无表可渲染时的内联阈值（字符）；超过则折叠
+CELL_MAX = 800  # 表格单元格截断阈值（字符）；全文在折叠的原始 data 里
+# data 渲染口径（见 reference.md § 报告契约）：表格优先 → 原始 JSON 折叠；短 data 内联；**不静默截断**
+# （旧实现 [:2000] 会把 #15 这种 2165 字符的 data 切成非法 JSON）
+
+
+def _fmt(v, nd=3) -> str:
+    """数值 → 短字符串（浮点去尾零）；None → —。"""
+    if v is None:
+        return "—"
+    if isinstance(v, bool):
+        return "是" if v else "否"
+    if isinstance(v, float):
+        s = f"{v:.{nd}f}".rstrip("0").rstrip(".")
+        return s or "0"
+    return str(v)
+
+
+def _cell(v) -> str:
+    """表格单元格文本：压平空白；超 CELL_MAX 截断（全文仍在折叠的原始 data 里）。"""
+    if v is None:
+        return ""
+    text = json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else str(v)
+    text = " ".join(text.split())
+    return text if len(text) <= CELL_MAX else text[:CELL_MAX] + "…（截断，全文见原始 data）"
+
+
+def _md_cell(v) -> str:
+    return _cell(v).replace("|", "\\|")
+
+
+def _data_table(metric: str, data):
+    """已知形状的 data → (摘要行, 列名, 行)；无表可渲染返回 None。
+
+    只覆盖“同构行数组”型 data（#15/#12/#4/#9），形状与 report.json 同源，
+    渲染层不得反过来改 report.json 的形状。"""
+    if not isinstance(data, dict):
+        return None
+    if metric == "#15":
+        pairs = data.get("per_pair")
+        if not isinstance(pairs, list) or not pairs:
+            return None
+        summary = (f"ratio {_fmt(data.get('ratio'))} · 幂等 {_fmt(data.get('idempotent_pairs'))}"
+                   f"/{_fmt(data.get('pairs'))} 对 · 判定："
+                   f"{'幂等' if data.get('idempotent') else '不幂等'}")
+        rows = [[p.get("case"), p.get("pair"), _fmt(p.get("ratio")),
+                 f"{_fmt(p.get('repeated_steps'))}/{_fmt(p.get('total_steps'))}",
+                 "✓" if p.get("idempotent") else "✗"]
+                for p in pairs if isinstance(p, dict)]
+        return summary, ["case", "pair", "ratio", "repeated/total", "幂等"], rows
+    if metric == "#12":
+        per = data.get("cost_by_case")
+        if not isinstance(per, dict) or not per:
+            return None
+        cv_by_case = data.get("cv_by_case") if isinstance(data.get("cv_by_case"), dict) else {}
+        summary = (f"口径 {data.get('cv_scope')} · cv 中位数 {_fmt(data.get('cv_median'))}"
+                   f" · 最大 {_fmt(data.get('cv_max'))}@{_fmt(data.get('cv_max_case'))}"
+                   f" · pooled {_fmt(data.get('cv_pooled'))} · 阈值 {_fmt(data.get('cv_threshold'))}")
+        rows = []
+        for c, comps in per.items():
+            comps = comps if isinstance(comps, dict) else {}
+            tc = comps.get("tool_calls") if isinstance(comps.get("tool_calls"), dict) else {}
+            rows.append([c,
+                         f"{_fmt(tc.get('mean'))} ({_fmt(tc.get('std'))}, {_fmt(tc.get('n'))})",
+                         _fmt((comps.get("tokens") or {}).get("mean")),
+                         _fmt((comps.get("seconds") or {}).get("mean")),
+                         _fmt(cv_by_case.get(c))])
+        return summary, ["case", "tool_calls 均值(标准差, n)", "tokens 均值", "秒 均值", "组内 cv"], rows
+    if metric == "#4":
+        labels = {"tool_calls": "工具步数", "tokens": "tokens", "seconds": "秒"}
+        rows = [[labels[k]] + [_fmt((data.get(k) or {}).get(x)) for x in ("mean", "std", "n", "min", "max")]
+                for k in ("tool_calls", "tokens", "seconds") if isinstance(data.get(k), dict)]
+        if not rows:
+            return None
+        return f"单次运行成本（{len(rows)} 个分量，pooled）", ["分量", "均值", "标准差", "n", "最小", "最大"], rows
+    if metric == "#9":
+        per = data.get("per_case")
+        if not isinstance(per, list) or not per:
+            return None
+        summary = f"mean_score {_fmt(data.get('mean_score'))} · {data.get('note') or ''}".strip(" ·")
+        rows = [[p.get("name"), "✓" if p.get("match") else "✗", _fmt(p.get("score")), _cell(p.get("reason"))]
+                for p in per if isinstance(p, dict)]
+        return summary, ["case", "匹配", "score", "理由"], rows
+    return None
+
+
+def _html_table(summary, cols, rows) -> str:
+    head = "".join(f"<th>{_esc(c)}</th>" for c in cols)
+    body = "".join("<tr>" + "".join(f"<td>{_esc(c)}</td>" for c in r) + "</tr>" for r in rows)
+    out = (f"<p style='margin:6px 0 2px;font-size:13px;color:#475569'>{_esc(summary)}</p>"
+           if summary else "")
+    return out + f"<table><tr>{head}</tr>{body}</table>"
+
+
+def _md_table(summary, cols, rows) -> list:
+    out = ([summary, ""] if summary else [])
+    out.append("| " + " | ".join(str(c) for c in cols) + " |")
+    out.append("|" + "---|" * len(cols))
+    out += ["| " + " | ".join(_md_cell(c) for c in r) + " |" for r in rows]
+    return out
+
+
+def _raw_html(data) -> str:
+    """原始 data：短的内联，长的一律折叠——不再静默截断（旧实现 [:2000] 会切断 JSON）。"""
+    raw = json.dumps(data, ensure_ascii=False, indent=2)
+    if len(raw) <= DATA_INLINE_MAX:
+        return f"<pre>{_esc(raw)}</pre>"
+    return (f"<details><summary>原始 data（{len(raw)} 字符，与 report.json 同源）</summary>"
+            f"<pre>{_esc(raw)}</pre></details>")
+
+
+def _judge_summary(data) -> str:
+    """LLM 评审面摘要：score + reason（旧 HTML 只渲染 items，丢了 evidence/reason）。"""
+    bits = []
+    score = data.get("score")
+    if isinstance(score, (int, float)) and not isinstance(score, bool):
+        bits.append(f"score {_fmt(score)}")
+    if data.get("reason"):
+        bits.append(str(data["reason"]))
+    return " · ".join(bits)
+
+
 def render_html(report: dict, evalset_dir=None, skill_arg=None) -> str:
     # #19/#20：按 ID 顺序 + 中文指标名；#38：评测集审核同页；#43：SVG 流程图
     cards = []
     for k in ALL_KEYS:
         v = report["metrics"][k]
+        data = v.get("data")
         items_html = ""
-        if isinstance(v.get("data"), dict) and isinstance(v["data"].get("items"), list):
+        if isinstance(data, dict) and isinstance(data.get("items"), list):
+            summary = _judge_summary(data)
             trs = "".join(
                 f"<tr><td>{_esc(i['name'])}</td><td>{'✓' if i['pass'] else '✗'}</td>"
                 f"<td><code>{_esc(i['quote'][:80])}</code></td></tr>"
-                for i in v["data"]["items"])
-            items_html = f"<table><tr><th>检查点</th><th>结果</th><th>原文引用</th></tr>{trs}</table>"
-        data_html = ""
-        if v.get("data") is not None and not items_html:
-            data_html = f"<pre>{_esc(json.dumps(v['data'], ensure_ascii=False, indent=2)[:2000])}</pre>"
+                for i in data["items"])
+            items_html = ((f"<p style='margin:6px 0 2px;font-size:13px;color:#475569'>{_esc(summary)}</p>"
+                           if summary else "")
+                          + f"<table><tr><th>检查点</th><th>结果</th><th>原文引用</th></tr>{trs}</table>")
+        table_html = ""
+        if data is not None and not items_html:
+            tbl = _data_table(k, data)
+            if tbl:
+                table_html = _html_table(*tbl)
+        # 原始 data 一律可见（表格是视图，折叠里是原文）：report.html 不得比 report.md 少信息
+        raw_html = _raw_html(data) if data is not None else ""
         cards.append(
             f"<div class='card'><h3 style='margin:0'>{k} · {_esc(DIM_NAMES.get(k, ''))} "
             f"<span class='badge {v['verdict']}'>{v['verdict']}</span>"
             f"<small style='color:#64748b'>（{_esc(v['method'])}）</small></h3>"
             f"<p style='font-size:13px;color:#475569'>{_esc(v.get('note') or '')}</p>"
-            f"{items_html}{data_html}</div>")
+            f"{items_html}{table_html}{raw_html}</div>")
     cls = report["conclusion"]
     meta_bits = []
     if report.get("tier"):
@@ -559,10 +691,21 @@ def render_md(report: dict) -> str:
         method = {METHOD_STATIC: "静态检查", METHOD_RUN: "沙箱运行",
                   METHOD_JUDGE: "LLM评审", METHOD_COMPARE: "对比",
                   METHOD_DIFF: "历史对比"}.get(v["method"], v["method"])
-        # #20：中文指标名 + 中文测量手段，data 保留原样供核对推导
+        # #20：中文指标名 + 中文测量手段；data 渲染：表格优先，长 data 只留指针（report.json 是权威）
         lines.append(f"### {k} · {name} [{v['verdict']}]（{method}）{note}")
-        if v.get("data") is not None:
-            lines.append(f"```json\n{json.dumps(v['data'], ensure_ascii=False, indent=2)}\n```")
+        data = v.get("data")
+        if data is not None:
+            if isinstance(data, dict) and isinstance(data.get("items"), list):
+                lines += _md_table(_judge_summary(data), ["检查点", "结果", "原文引用"],
+                                   [[i["name"], "✓" if i["pass"] else "✗", i["quote"]] for i in data["items"]])
+            else:
+                tbl = _data_table(k, data)
+                if tbl:
+                    lines += _md_table(*tbl)
+                else:
+                    raw = json.dumps(data, ensure_ascii=False, indent=2)
+                    lines.append(f"```json\n{raw}\n```" if len(raw) <= DATA_INLINE_MAX
+                                 else f"完整 data 见 `report.json`（{len(raw)} 字符）")
         lines.append("")
     return "\n".join(lines)
 

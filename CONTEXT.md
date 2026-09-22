@@ -38,7 +38,7 @@ static_check 的编号检查项：被测 skill 出现宿主环境硬编码（绝
 一次沙箱运行的完整记录：工具调用序列、每步 token、耗时、产物路径、报错。
 
 ### Report
-评估产出。`report.json`（机器可读，key 为指标名，附档位字段）+ `report.md`（人可读）。未测的指标标 `skipped`，不打 0 分。
+评估产出。`report.json`（机器可读，key 为指标名，附档位字段）+ `report.md`（人可读）+ `report.html`（--html：report.md 的渲染媒介 + 评测集审核界面）。三者同一份 data，**网页不得比 Markdown 少信息**。未测的指标标 `skipped`，不打 0 分。
 
 ### 版本（Version）
 同一 skill 的不同迭代。版本对比 = 读历史 report.json 做横向 diff，不重跑旧版本。
