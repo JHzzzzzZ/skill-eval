@@ -25,6 +25,10 @@ DIM_NAMES = {
     "#16": "前置自检", "#17": "输入契约", "#18": "输出契约", "#19": "副作用可逆",
 }
 
+# #13 的五个静态规则组（ADR-0013）：用于 note 里的命中摘要
+DIM_13_GROUPS = {"dangerous": "危险命令", "secrets": "硬编码凭据",
+                 "injection": "注入指令", "exfil": "数据外发", "obfuscation": "混淆"}
+
 ALL_KEYS = [f"#{i}" for i in range(1, 20)]
 THREE_TIER = {"pass", "warn", "fail", "skipped"}
 METHOD_STATIC = "静态检查"
@@ -168,7 +172,6 @@ def from_static(static, m: dict):
     if not isinstance(static, dict):
         return
     errors = static.get("errors", [])
-    has_danger = bool(static.get("dangerous"))
     invoke_err = any("invoke" in e for e in errors)
     m_err = any("name" in e or "description" in e for e in errors)
     token_warn = any("token" in w for w in static.get("warnings", []))
@@ -180,8 +183,25 @@ def from_static(static, m: dict):
                else "pass" if static.get("invoke", {}).get("resolved") in ("human", "agent", "both")
                else "skipped",
                "method": METHOD_STATIC, "data": static.get("invoke"), "note": "调用方式 frontmatter 校验"}
-    m["#13"] = {"verdict": "fail" if has_danger else "pass",
-                "method": METHOD_STATIC, "data": static.get("dangerous"), "note": "危险命令扫描"}
+    # #13 权限最小化（ADR-0013）：五组静态规则。四组命中即 fail，混淆仅 warn（待人工复核）。
+    # 旧的 static.json（无四组新字段）走同一分支：get→None→[]，verdict 与旧版一致。
+    hard_groups = ("dangerous", "secrets", "injection", "exfil")
+    groups = {k: (static.get(k) or []) for k in (*hard_groups, "obfuscation")}
+    hit = [k for k in hard_groups if groups[k]]
+    note = "五组静态规则（危险命令/凭据/注入/外发/混淆）"
+    if hit:
+        note += "；命中：" + "、".join(f"{DIM_13_GROUPS.get(k, k)}×{len(groups[k])}" for k in hit)
+    elif groups["obfuscation"]:
+        note += f"；仅混淆×{len(groups['obfuscation'])}（警告）"
+    # 排除/抑制必须可见（ADR-0012）：不静默丢指标
+    excluded, ignored = static.get("excluded") or [], static.get("ignored") or []
+    if excluded:
+        shown = "、".join(excluded[:3]) + ("…" if len(excluded) > 3 else "")
+        note += f"；未扫描 {len(excluded)} 处（{shown}）"
+    if ignored:
+        note += f"；行内抑制 {len(ignored)} 行"
+    m["#13"] = {"verdict": "fail" if hit else "warn" if groups["obfuscation"] else "pass",
+                "method": METHOD_STATIC, "data": groups, "note": note}
 
 
 def build(d: Path) -> dict:
@@ -325,7 +345,7 @@ def conclusion(m: dict) -> str:
 FLOW_STEPS = [  # SKILL.md 的 8 步流程（#43 流程图数据源）
     ("1 前置自检", "scripts/judges/reference.md 存在；被测路径有 SKILL.md，缺失走 Fallback"),
     ("2 存档与定版", "只读存档 uploads/，副本 git init+commit，版本号 = 短 hash"),
-    ("3 静态检查", "static_check.py：#2 规范、#7 调用方式、#13 危险命令、可移植性闸门"),
+    ("3 静态检查", "static_check.py：#2 规范、#7 调用方式、#13 五组规则、可移植性闸门"),
     ("4 评测集", "检查冻结的 evalsets/<name>/vN/；未冻结则生成后等人工审核"),
     ("5 沙箱运行", "git worktree 内实跑 pi CLI：触发（带 early-exit）+ 主运行 + 基线 A/B + 重复 ×N"),
     ("6 LLM 评审", "judges/ 逐项计分 rubric，judge_runner.py --validate 通过才进报告"),
