@@ -9,6 +9,7 @@ _console.fix()
 
 import json
 import re
+import statistics
 import sys
 from pathlib import Path
 
@@ -90,6 +91,30 @@ def from_static(static, m: dict):
                 "method": METHOD_STATIC, "data": static.get("dangerous"), "note": "危险命令扫描"}
 
 
+def cv_of(comp):
+    """变异系数（#12，ADR-0012）：std/mean；n<2 或字段不合法 → None（不参与裁决）。
+
+    均值 0 时与旧实现同口径（无波动 0；有波动 99，保守判不稳）。
+    """
+    if not isinstance(comp, dict):
+        return None
+    n = comp.get("n")
+    if not isinstance(n, int) or isinstance(n, bool) or n < 2:
+        return None
+    mean = comp.get("mean")
+    if isinstance(mean, bool) or not isinstance(mean, (int, float)):
+        return None
+    std = comp.get("std")  # score.py 已输出 std；var 是旧产物的兼容路径
+    if isinstance(std, bool) or not isinstance(std, (int, float)):
+        var = comp.get("var")
+        if isinstance(var, bool) or not isinstance(var, (int, float)):
+            return None
+        std = var ** 0.5
+    if mean == 0:
+        return 0.0 if std == 0 else 99.0
+    return std / mean
+
+
 def build(d: Path, evalset_dir: Path | None = None) -> dict:
     m = {}
     static = load(d, "static.json")
@@ -142,21 +167,50 @@ def build(d: Path, evalset_dir: Path | None = None) -> dict:
                    "note": dep_note}
     if isinstance(score, dict) and isinstance(score.get("cost"), dict) \
             and isinstance(score["cost"].get("tool_calls"), dict):
-        tc = score["cost"]["tool_calls"]
-        n = tc.get("n", 1)
-        mean, std = tc.get("mean", 0), tc.get("std", 0)  # score.py 已改输 std；兼容旧 var
-        if "std" not in tc and "var" in tc:
-            std = tc["var"] ** 0.5
-        cv = (std / mean) if mean else (0 if std == 0 else 99)
-        stable = n >= 2 and cv <= COST_CV_MAX
+        # #12/#51（ADR-0012）：裁决用**组内（逐 case）** 变异系数中位数——
+        # pooled 会把 case 间的难度差算成“不稳定”（实测：组间均值极差 8.5 步 → pooled cv 0.65，
+        # 组内中位数 0.45）。无逐 case 数据（旧产物/旧 harness）时回退 pooled 并在 note 标注口径。
+        cost_data = score["cost"]
+        pooled = cost_data["tool_calls"]
+        n = pooled.get("n", 1)
+        pooled_cv = cv_of(pooled)
+        raw_cases = score.get("cost_by_case") if isinstance(score.get("cost_by_case"), dict) else None
+        cv_cases = {}
+        for c, comps in (raw_cases or {}).items():
+            cv = cv_of(comps.get("tool_calls") if isinstance(comps, dict) else None)
+            if cv is not None:
+                cv_cases[str(c)] = cv
         if n < 2:
-            note = "仅单次运行，无稳定性证据"
-        elif stable:
-            note = f"变异系数 {cv:.2f} ≤ {COST_CV_MAX}，稳定"
+            verdict, note = "warn", "仅单次运行，无稳定性证据"
+            data = {"cv_scope": "within-case" if cv_cases else "pooled", "cost": cost_data}
+        elif cv_cases:
+            med = statistics.median(cv_cases.values())
+            worst = max(cv_cases, key=lambda c: cv_cases[c])
+            tail = (f"；pooled 口径 {pooled_cv:.2f}（含跨 case 难度差，仅作参考）"
+                    if pooled_cv is not None else "")
+            if med <= COST_CV_MAX:
+                verdict = "pass"
+                note = (f"组内（逐 case）变异系数中位数 {med:.2f} ≤ {COST_CV_MAX}，稳定"
+                        f"（最大 {cv_cases[worst]:.2f} @ {worst}）{tail}")
+            else:
+                verdict = "warn"
+                note = (f"组内（逐 case）变异系数中位数 {med:.2f} 超过阈值 {COST_CV_MAX}，不稳定"
+                        f"（最大 {cv_cases[worst]:.2f} @ {worst}）{tail}")
+            data = {"cv_scope": "within-case", "cv_threshold": COST_CV_MAX,
+                    "cv_median": round(med, 3), "cv_max": round(cv_cases[worst], 3),
+                    "cv_max_case": worst, "cv_by_case": {c: round(v, 3) for c, v in cv_cases.items()},
+                    "cv_pooled": None if pooled_cv is None else round(pooled_cv, 3),
+                    "cost_by_case": raw_cases, "cost": cost_data}
         else:
-            note = f"变异系数 {cv:.2f} > {COST_CV_MAX}，不稳定"
-        m["#12"] = {"verdict": "pass" if stable else "warn", "method": METHOD_RUN,
-                    "data": score["cost"], "note": note}
+            stable = pooled_cv is not None and pooled_cv <= COST_CV_MAX
+            shown = 0.0 if pooled_cv is None else pooled_cv
+            note = (f"变异系数 {shown:.2f} ≤ {COST_CV_MAX}，稳定（pooled 口径：无逐 case 数据）"
+                    if stable else
+                    f"变异系数 {shown:.2f} > {COST_CV_MAX}，不稳定（pooled 口径：无逐 case 数据）")
+            verdict = "pass" if stable else "warn"
+            data = {"cv_scope": "pooled", "cv_threshold": COST_CV_MAX,
+                    "cv_pooled": None if pooled_cv is None else round(pooled_cv, 3), "cost": cost_data}
+        m["#12"] = {"verdict": verdict, "method": METHOD_RUN, "data": data, "note": note}
 
     m["#9"] = {"verdict": "skipped", "method": METHOD_COMPARE, "data": None, "note": "无 expect/actual 对比"}
     if isinstance(compare, dict) and (compare.get("score") is not None

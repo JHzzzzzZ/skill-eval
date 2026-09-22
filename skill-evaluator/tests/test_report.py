@@ -163,6 +163,66 @@ def test_stability_note_matches_verdict_when_stable(tmp_path):
     assert "稳定" in out["metrics"]["#12"]["note"]
 
 
+def test_stability_uses_within_case_cv_not_pooled(tmp_path):
+    # ADR-0012 回归（run3 实测形态）：case 间难度差大 → pooled cv 0.65 > 0.5，
+    # 但每个 case 组内稳定（中位数 0.45）→ 应判 pass，而不是把 case 差当“不稳定”
+    def st(mean, std, n=4):
+        return {"mean": mean, "std": std, "n": n, "min": mean - 1, "max": mean + 1}
+    per_case = {"c1": {"tool_calls": st(15.0, 6.82)}, "c2": {"tool_calls": st(14.2, 10.89)},
+                "c3": {"tool_calls": st(8.8, 3.27)}, "c4": {"tool_calls": st(6.5, 3.04)},
+                "c5": {"tool_calls": st(9.5, 2.29)}}
+    write_inputs(tmp_path, {"score.json": {
+        "trigger": "skipped",
+        "cost": {"tool_calls": st(10.8, 6.99, 20), "tokens": "skipped", "seconds": "skipped"},
+        "cost_by_case": per_case, "necessity": "skipped", "passed": True}})
+    out = run_report(tmp_path)
+    m = out["metrics"]["#12"]
+    assert m["verdict"] == "pass"
+    assert "组内（逐 case）" in m["note"] and "≤" in m["note"] and "稳定" in m["note"]
+    assert m["data"]["cv_scope"] == "within-case"
+    assert m["data"]["cv_pooled"] > 0.5  # 旧口径的分歧点被记在 data 里，不丢信息
+    assert m["data"]["cv_median"] == 0.455 and m["data"]["cv_max_case"] == "c2"
+
+
+def test_stability_within_case_unstable_warns(tmp_path):
+    # 组内真不稳（中位数 > 阈值）→ warn，且 note 不出现 "≤"（与 verdict 同极性）
+    def st(mean, std, n=4):
+        return {"mean": mean, "std": std, "n": n}
+    per_case = {c: {"tool_calls": st(10.0, 8.0)} for c in ("c1", "c2", "c3")}
+    write_inputs(tmp_path, {"score.json": {
+        "trigger": "skipped", "cost": {"tool_calls": st(10.0, 8.0, 12), "tokens": "skipped",
+                                       "seconds": "skipped"},
+        "cost_by_case": per_case, "necessity": "skipped", "passed": True}})
+    out = run_report(tmp_path)
+    m = out["metrics"]["#12"]
+    assert m["verdict"] == "warn"
+    assert "不稳定" in m["note"] and "≤" not in m["note"]
+    assert m["data"]["cv_median"] == 0.8
+
+
+def test_stability_falls_back_to_pooled_without_case_data(tmp_path):
+    # 无 cost_by_case（旧产物）→ 旧口径 + note 标注口径来源，行为不变
+    write_inputs(tmp_path, {"score.json": {
+        "trigger": "skipped",
+        "cost": {"tool_calls": {"mean": 10, "std": 6, "n": 3}, "tokens": "skipped",
+                 "seconds": "skipped"},
+        "necessity": "skipped", "passed": True}})
+    m = run_report(tmp_path)["metrics"]["#12"]
+    assert m["verdict"] == "warn" and "pooled 口径" in m["note"] and m["data"]["cv_scope"] == "pooled"
+
+
+def test_stability_single_run_per_case_uses_pooled_note(tmp_path):
+    # case 只有单次运行（n<2）→ cv 无定义，回退 pooled 的“仅单次运行”口径，不虚假判稳
+    write_inputs(tmp_path, {"score.json": {
+        "trigger": "skipped",
+        "cost": {"tool_calls": {"mean": 10, "std": 0, "n": 1}, "tokens": "skipped",
+                 "seconds": "skipped"},
+        "cost_by_case": {"c1": {"tool_calls": {"mean": 10, "std": 0, "n": 1}}},
+        "necessity": "skipped", "passed": True}})
+    m = run_report(tmp_path)["metrics"]["#12"]
+    assert m["verdict"] == "warn" and "仅单次运行" in m["note"]
+
+
 # --- #8 双源裁决（#29/#30）：trace 报错 + judges/deps.json ---
 
 def test_deps_judge_semantic_fail(tmp_path):

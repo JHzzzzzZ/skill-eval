@@ -54,6 +54,25 @@ def stats(runs: list, key: str):
     return {"mean": mean, "std": var ** 0.5, "n": n, "min": min(vals), "max": max(vals)}
 
 
+def by_case(runs: list):
+    """按 runs 条目的 case 字段分组（ADR-0012）。
+
+    全部条目都带非空 case → {case: [run, ...]}；任一条缺 case / 类型不对 → {}（整块不产出）。
+    半截分组比不分组更危险（会把两个 case 混进一组），宁可退回 pooled 口径。
+    """
+    if not isinstance(runs, list) or not runs:
+        return {}
+    groups = {}
+    for r in runs:
+        if not isinstance(r, dict):
+            return {}
+        c = r.get("case")
+        if not isinstance(c, str) or not c.strip():
+            return {}
+        groups.setdefault(c, []).append(r)
+    return groups
+
+
 def necessity(runs: list, baseline: list):
     """#5/#11：golden（有 skill）vs baseline（无 skill）三分量对比。
 
@@ -95,11 +114,17 @@ def main():
     baseline = load_json(d / "baseline.json") or []
     trigger = prf1(triggers) if triggers is not None else "skipped"
     cost = {k: stats(runs, k) for k in ("tool_calls", "tokens", "seconds")}
+    # ADR-0012：逐 case 统计（#12 稳定性用组内 cv，避免把 case 间的难度差算成抖动）
+    groups = by_case(runs)
+    cost_by_case = ({c: {k: stats(rs, k) for k in ("tool_calls", "tokens", "seconds")}
+                     for c, rs in sorted(groups.items())} if groups else None)
     necessity_out = necessity(runs, baseline)
     # passed = 本轮至少有一项真实测量（全部 skipped 则本轮评估无效）
     measured = [trigger != "skipped"] + [v != "skipped" for v in cost.values()]
     out = {"trigger": trigger, "cost": cost, "necessity": necessity_out,
            "passed": any(measured)}
+    if cost_by_case:
+        out["cost_by_case"] = cost_by_case  # 缺 case 字段时不产出（旧产物/旧 harness 保持原样）
     text = json.dumps(out, ensure_ascii=False)
     if out_path:
         out_path.write_text(text, encoding="utf-8")

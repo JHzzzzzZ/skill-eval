@@ -167,6 +167,42 @@ def test_cost_stats_include_n(tmp_path):
     assert out["cost"]["tokens"]["max"] == 200
 
 
+# --- ADR-0012: 逐 case 统计（#12 组内口径的数据源） ---
+
+def test_cost_by_case_grouped_when_case_present(tmp_path):
+    runs = [{"case": "c1", "tool_calls": 2, "tokens": 100, "seconds": 1.0},
+            {"case": "c1", "tool_calls": 4, "tokens": 200, "seconds": 2.0},
+            {"case": "c2", "tool_calls": 10, "tokens": 500, "seconds": 5.0},
+            {"case": "c2", "tool_calls": 12, "tokens": 700, "seconds": 7.0}]
+    out = run_score(tmp_path, {"should": [], "should_not": [], "confusable": []}, runs)
+    assert set(out["cost_by_case"]) == {"c1", "c2"}
+    assert out["cost_by_case"]["c1"]["tool_calls"]["n"] == 2
+    assert out["cost_by_case"]["c2"]["tool_calls"]["mean"] == 11
+    # pooled 口径不变（#4 仍按 20 次运行给单次成本区间）
+    assert out["cost"]["tool_calls"]["n"] == 4
+    assert out["cost"]["tool_calls"]["min"] == 2
+
+
+def test_no_case_field_keeps_output_without_cost_by_case(tmp_path):
+    # 旧 harness/旧产物（无 case 字段）→ 不产出 cost_by_case，report.py 走 pooled 回退
+    runs = [{"tool_calls": 2, "tokens": 100, "seconds": 1.0},
+            {"tool_calls": 4, "tokens": 200, "seconds": 2.0}]
+    out = run_score(tmp_path, {"should": [], "should_not": [], "confusable": []}, runs)
+    assert "cost_by_case" not in out
+
+
+def test_partial_case_field_falls_back_to_pooled(tmp_path):
+    # 半截分组比不分组更危险（会把两个 case 混成一组）→ 整块不产出
+    runs = [{"case": "c1", "tool_calls": 2, "tokens": 100, "seconds": 1.0},
+            {"tool_calls": 4, "tokens": 200, "seconds": 2.0}]
+    out = run_score(tmp_path, {"should": [], "should_not": [], "confusable": []}, runs)
+    assert "cost_by_case" not in out
+    # 空 case 值同样视为缺失
+    assert "cost_by_case" not in run_score(
+        tmp_path, {"should": [], "should_not": [], "confusable": []},
+        [{"case": "", "tool_calls": 1, "tokens": 1, "seconds": 1.0}])
+
+
 # --- --out ---
 
 def test_out_writes_utf8_file(tmp_path):
