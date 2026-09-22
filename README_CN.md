@@ -14,8 +14,9 @@
 | 沙箱运行 | #1 触发 P/R/F1、#4 成本统计、#5 必要性 A/B、#8 最小依赖、#9 结果可验证、#10 过程审计、#12 稳定性、#15 幂等 | `scripts/trace_run.py`、`score.py`、`trigger_judge.py`、`idem.py`、`compare.py`、`process.py` |
 | LLM 评审 | #3 正文精简、#6 低冗余、#11 fallback、#16 前置自检、#17/18 输入输出契约、#19 副作用可逆 | `judges/*.md` rubric + `judge_runner.py` |
 | 历史对比 | #14 版本演进 | `scripts/evolution.py` |
+| 可信度 | #1 触发集质量（照抄 description / 重复 / 跨组冲突）、#12 跨模型一致率 | `scripts/evalset_check.py`、`model_robust.py` |
 
-多个指标共用同一次沙箱运行——5 类运行场景的合并方式见 `skill-evaluator/reference.md`（§ 运行场景）。
+多个指标共用同一次沙箱运行——6 类运行场景的合并方式见 `skill-evaluator/reference.md`（§ 运行场景）。
 
 ## 目录结构
 
@@ -25,8 +26,8 @@ skill-evaluator/
 ├── reference.md        # 细则：指标映射、沙箱定义、版本号、契约、fallback
 ├── judges/             # LLM 评审 rubric（结构化 JSON 输出，temperature=0）
 ├── scripts/            # 确定性工具（每个脚本一个有文档的 CLI seam）
-└── tests/              # 104 个测试，全部走 subprocess seam
-docs/adr/               # 6 条架构决策记录
+└── tests/              # 154 个测试，全部走 subprocess seam
+docs/adr/               # 11 条架构决策记录
 ```
 
 评估器**自闭环**：脚本与测试全部在 skill 包内（ADR-0006）。评估产物（评测集、报告）放 `skill-evaluator/evalsets/<skill名>/`，按版本冻结——重跑不重新生成。
@@ -35,7 +36,7 @@ docs/adr/               # 6 条架构决策记录
 
 1. 安装：把 `skill-evaluator/` 复制到 `~/.pi/agent/skills/`
 2. 会话里说：*"评估这个 skill：`<路径>`"*
-3. 拿到 `skill-evaluator/evalsets/<name>/results/<version>/` 下的 `report.json` + `report.md`（`report.py --html` 另出单文件静态页：报告 + 评测集审核 + SVG 流程图）
+3. 拿到 `skill-evaluator/evalsets/<name>/results/<version>/` 下的 `report.json` + `report.md` + `meta.json`（`report.py --skill <被测skill目录>` 顺手记下被测 skill 的内容指纹，ADR-0010；`--html` 另出单文件静态页：报告 + 评测集审核 + SVG 流程图）
 
 可选：设置环境变量 `SKILL_EVAL_MODEL=<provider/id>` 固定沙箱运行和 LLM 评审用的模型（默认用 pi 当前模型）。
 
@@ -45,6 +46,7 @@ docs/adr/               # 6 条架构决策记录
 - **评测集**：人工上传优先；自动生成的必须人工审核后才冻结；冻结后跨版本复用（这正是 #14 版本演进可比的前提）
 - **版本号**：git commit 短 hash；裸文件夹由评估器副本快照后标 `auto-<hash>`
 - **LLM 评审输出**：必须过 `judge_runner.py --validate` 才能进报告
+- **评估器指纹**：`report.json` 与 `results/meta.json` 记录评估器自身的内容 sha256；两个版本的指纹不同时，`evolution.py` 标 `comparable=false`，不把差异读成回归（ADR-0010）
 
 ## 开发
 
