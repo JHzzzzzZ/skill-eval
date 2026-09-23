@@ -55,7 +55,7 @@ def stats(runs: list, key: str):
 
 
 def by_case(runs: list):
-    """按 runs 条目的 case 字段分组（ADR-0012）。
+    """按 runs 条目的 case 字段分组（ADR-0016）。
 
     全部条目都带非空 case → {case: [run, ...]}；任一条缺 case / 类型不对 → {}（整块不产出）。
     半截分组比不分组更危险（会把两个 case 混进一组），宁可退回 pooled 口径。
@@ -114,7 +114,7 @@ def main():
     baseline = load_json(d / "baseline.json") or []
     trigger = prf1(triggers) if triggers is not None else "skipped"
     cost = {k: stats(runs, k) for k in ("tool_calls", "tokens", "seconds")}
-    # ADR-0012：逐 case 统计（#12 稳定性用组内 cv，避免把 case 间的难度差算成抖动）
+    # ADR-0016：逐 case 统计（#12 稳定性用组内 cv，避免把 case 间的难度差算成抖动）
     groups = by_case(runs)
     cost_by_case = ({c: {k: stats(rs, k) for k in ("tool_calls", "tokens", "seconds")}
                      for c, rs in sorted(groups.items())} if groups else None)

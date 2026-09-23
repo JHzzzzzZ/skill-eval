@@ -14,8 +14,9 @@ It is itself a skill (for [pi](https://github.com/earendil-works/pi-coding-agent
 | Sandbox runs | #1 trigger precision/recall/F1, #4 cost stats, #5 necessity A/B, #8 minimal deps, #9 result verification, #10 process audit, #12 stability, #15 idempotency | `scripts/trace_run.py`, `score.py`, `trigger_judge.py`, `idem.py`, `compare.py`, `process.py` |
 | LLM review | #3 brevity, #6 redundancy, #11 fallback, #16 pre-check, #17/18 I/O contract, #19 side-effect reversibility | `judges/*.md` rubrics + `judge_runner.py` |
 | Historical diff | #14 version evolution | `scripts/evolution.py` |
+| Trustworthiness | #1 eval-set quality (description echo / duplicates / cross-group conflicts), #12 cross-model agreement | `scripts/evalset_check.py`, `model_robust.py` |
 
-Several metrics share one sandbox run — the 5 scenarios are grouped into incremental tiers (T0–T4, default T2); see `skill-evaluator/reference.md` (§ Run Scenarios) and ADR-0010.
+Several metrics share one sandbox run — the 6 scenarios are grouped into incremental tiers (T0–T4, default T2); see `skill-evaluator/reference.md` (§ Run Scenarios) and ADR-0014.
 
 ## Layout
 
@@ -23,10 +24,12 @@ Several metrics share one sandbox run — the 5 scenarios are grouped into incre
 skill-evaluator/
 ├── SKILL.md            # orchestration: tiered flow (T0–T4, default T2), indexes only
 ├── reference.md        # details: tier definitions, metric map, sandbox, versioning, contracts, fallbacks
+├── LICENSE             # MIT
+├── requirements.txt    # zero runtime deps (stdlib); pytest for tests only
 ├── judges/             # LLM-judge rubrics (structured JSON output, temp=0)
-├── scripts/            # deterministic tooling (each script = one documented CLI seam)
-└── tests/              # 166 tests, subprocess-seam based
-docs/adr/               # 10 architecture decisions
+├── scripts/            # deterministic tooling; check-deps.sh = preflight (#16)
+└── tests/              # 229 tests, subprocess-seam based
+docs/adr/               # 16 architecture decisions
 ```
 
 The evaluator is **self-contained**: all scripts and tests live inside the skill package (ADR-0006). Evaluation artifacts (eval sets, reports) live in `skill-evaluator/evalsets/<skill-name>/` and are frozen per version — never regenerated on re-runs.
@@ -34,8 +37,9 @@ The evaluator is **self-contained**: all scripts and tests live inside the skill
 ## Usage
 
 1. Install: copy `skill-evaluator/` into `~/.pi/agent/skills/`
-2. Say: *"evaluate this skill: <path>"*
-3. Get `report.json` + `report.md` under `skill-evaluator/evalsets/<name>/results/<version>/`
+2. Preflight: `bash scripts/check-deps.sh` (python >= 3.9, git, pytest, pi CLI)
+3. Say: *"evaluate this skill: <path>"*
+4. Get `report.json` + `report.md` + `meta.json` under `skill-evaluator/evalsets/<name>/results/<version>/` — pass `--skill <path>` to have `meta.json` record the skill's own content hash (ADR-0010)
 
 Optional:
 
@@ -50,12 +54,13 @@ Tier entry: `--tier <static|review|trigger|core|full>` (default T2); higher tier
 - **Eval sets**: human-provided preferred; auto-generated ones are frozen after AI review with a different model (`reviewed_by: "ai"`), upgradable to `"human"` after manual re-review; frozen sets are reused across versions (that's what makes #14 evolution comparable).
 - **Versioning**: git commit short hash; bare folders get `auto-<hash>` after an evaluator-side snapshot commit.
 - **LLM judge outputs**: must pass `judge_runner.py --validate` before entering a report.
+- **Evaluator fingerprint**: `report.json` and `results/meta.json` record the evaluator's own content hash; `evolution.py` flags `comparable=false` when two versions came from different evaluators, instead of reading the diff as a regression (ADR-0010).
 
 ## Development
 
 ```bash
 cd skill-evaluator
-python -m pytest tests        # 166 tests, all green
+python -m pytest tests        # 229 tests, all green
 ```
 
 Design decisions and their reasoning live in `docs/adr/`. See `README_CN.md` for the Chinese version.

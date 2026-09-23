@@ -1,7 +1,8 @@
-"""#14 版本演进：扫描 evalsets/<name>/results/*/report.json，输出跨版本指标变化。
+"""#14 版本演进：扫描 evalsets/<name>/results/*/report.json，输出跨版本指标变化 + 评估器指纹可比性。
 Seam: python evolution.py <evalsets/<name>> [--out <file>]
 
 版本排序按语义化数字（v2 < v10），非字典序。
+评估器指纹（ADR-0010）不同的版本之间，指标差异不构成被测 skill 的回归证据 → comparable=false。
 """
 import _console
 
@@ -47,6 +48,36 @@ def collect(base: Path):
     return versions, reports
 
 
+def evaluator_versions(results: Path, versions, reports) -> dict:
+    """每个版本由哪个评估器指纹产生：优先 report.json，回退同目录 meta.json（旧报告两者都可能没有）。"""
+    out = {}
+    for v in versions:
+        ev = reports.get(v, {}).get("evaluator")
+        ver = ev.get("version") if isinstance(ev, dict) else None
+        if not ver:
+            try:
+                meta = json.loads((results / v / "meta.json").read_text(encoding="utf-8"))
+                ev2 = meta.get("evaluator")
+                ver = ev2.get("version") if isinstance(ev2, dict) else None
+            except (OSError, json.JSONDecodeError, AttributeError, ValueError):
+                ver = None
+        out[v] = ver
+    return out
+
+
+def comparability(versions, ev_versions):
+    """指纹不一致 → 不可比；部分缺失 → 可比性未知（None）；全一致 → True。"""
+    known = {v: k for v, k in ev_versions.items() if k}
+    if not versions:
+        return None, "无版本可比"
+    if len(set(known.values())) > 1:
+        detail = "，".join(f"{v}={k}" for v, k in known.items())
+        return False, f"评估器指纹不一致（{detail}）：指标差异可能来自评估器变更，不构成被测 skill 的回归证据"
+    if len(known) < len(versions):
+        return None, f"{len(versions) - len(known)} 个版本未记录评估器指纹（旧报告），可比性未知"
+    return True, f"所有版本同一评估器指纹（{next(iter(known.values()))}），指标差异可比"
+
+
 def main():
     args = sys.argv[1:]
     if not args:
@@ -74,6 +105,8 @@ def main():
         print(f"目录不存在: {base}", file=sys.stderr)
         sys.exit(2)
     versions, reports = collect(base)
+    ev_versions = evaluator_versions(base / "results", versions, reports)
+    comparable, ev_note = comparability(versions, ev_versions)
 
     all_keys = set()
     for r in reports.values():
@@ -87,7 +120,8 @@ def main():
             changes.append({"metric": k, "from": seq[0], "to": seq[-1], "versions": versions})
 
     out = {"versions": versions, "changes": changes, "latest_conclusion":
-           reports[versions[-1]].get("conclusion") if versions else None}
+           reports[versions[-1]].get("conclusion") if versions else None,
+           "evaluator_versions": ev_versions, "comparable": comparable, "evaluator_note": ev_note}
     if out_path:
         out_path.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(out, ensure_ascii=False))

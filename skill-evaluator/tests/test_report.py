@@ -77,6 +77,59 @@ def test_static_dangerous_is_fail(tmp_path):
     assert out["conclusion"] == "has-failures"
 
 
+# --- Slice 16b: #13 五组规则 + 排除/抑制可见性（ADR-0013 / ADR-0012）---
+
+def _static(**over):
+    base = {"name": "s", "description": "d", "description_tokens": 50,
+            "invoke": {"resolved": "both"}, "errors": [], "warnings": [],
+            "dangerous": [], "secrets": [], "injection": [], "exfil": [],
+            "obfuscation": [], "excluded": [], "ignored": [], "passed": True}
+    base.update(over)
+    return base
+
+
+def test_static_secrets_is_fail(tmp_path):
+    write_inputs(tmp_path, {"static.json": _static(
+        secrets=[{"pattern": "p"}], errors=["发现 1 处硬编码凭据（#13）"], passed=False)})
+    out = run_report(tmp_path)
+    assert out["metrics"]["#13"]["verdict"] == "fail"
+    assert "凭据" in out["metrics"]["#13"]["note"]
+
+
+def test_static_obfuscation_is_warn_not_fail(tmp_path):
+    write_inputs(tmp_path, {"static.json": _static(
+        obfuscation=[{"pattern": "p"}],
+        warnings=["发现 1 处混淆痕迹，需人工复核（#13，仅警告）"])})
+    out = run_report(tmp_path)
+    assert out["metrics"]["#13"]["verdict"] == "warn"
+    assert out["conclusion"] == "with-warnings"
+
+
+def test_static_13_groups_do_not_leak_into_2_and_7(tmp_path):
+    # static_check 的新 error 文案含“凭据/注入/外发”，不能被 report.py 的子串分流误判成 #2/#7
+    errs = ["发现 1 处硬编码凭据（#13）", "发现 1 处注入类指令（#13）",
+            "发现 1 处数据外发或凭据读取（#13）"]
+    write_inputs(tmp_path, {"static.json": _static(
+        secrets=[{"pattern": "p"}], injection=[{"pattern": "p"}],
+        exfil=[{"pattern": "p"}], errors=errs, passed=False)})
+    out = run_report(tmp_path)
+    assert out["metrics"]["#2"]["verdict"] == "pass"
+    assert out["metrics"]["#7"]["verdict"] == "pass"
+    assert out["metrics"]["#13"]["verdict"] == "fail"
+
+
+def test_static_excluded_and_ignored_visible_in_note(tmp_path):
+    # #13 的 note 必须显示排除了什么、抑制了几行（不静默丢）
+    write_inputs(tmp_path, {"static.json": _static(
+        excluded=["tests", "evalsets", "scripts/static_check.py"],
+        ignored=[{"pattern": "p", "line": 73, "file": "reference.md", "text": "x"}])})
+    out = run_report(tmp_path)
+    note = out["metrics"]["#13"]["note"]
+    assert "未扫描 3 处" in note and "tests" in note
+    assert "行内抑制 1 行" in note
+    assert out["metrics"]["#13"]["verdict"] == "pass"
+
+
 # --- Slice 17: 触发/成本/必要性/幂等/对比 ---
 
 def test_score_inputs(tmp_path):
@@ -164,7 +217,7 @@ def test_stability_note_matches_verdict_when_stable(tmp_path):
 
 
 def test_stability_uses_within_case_cv_not_pooled(tmp_path):
-    # ADR-0012 回归（run3 实测形态）：case 间难度差大 → pooled cv 0.65 > 0.5，
+    # ADR-0016 回归（run3 实测形态）：case 间难度差大 → pooled cv 0.65 > 0.5，
     # 但每个 case 组内稳定（中位数 0.45）→ 应判 pass，而不是把 case 差当“不稳定”
     def st(mean, std, n=4):
         return {"mean": mean, "std": std, "n": n, "min": mean - 1, "max": mean + 1}

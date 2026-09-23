@@ -1,12 +1,16 @@
-"""报告生成（17/18 的自我应用：固定输出契约）。Seam: python report.py <results目录>
+"""报告生成（17/18 的自我应用：固定输出契约）。
+Seam: python report.py <results目录> [--html] [--evalset <evalsets/<name>/vN>] [--skill <被测skill目录>]
 
-读同目录中间产物（static.json/score.json/idem.json/compare.json/golden.json/judges/*.json），
-产出 report.json（19 key，机器可读）+ report.md（人可读）。契约见 tests/test_report.py 模块注释。
+读同目录中间产物（static.json/score.json/idem.json/compare.json/golden.json/evalset.json/
+model_robust.json/judges/*.json），产出 report.json（19 key，机器可读）+ report.md（人可读）
++ meta.json（本次运行的元数据：评估器指纹 + 被测 skill 指纹 + 评测集来源，ADR-0010）。
+契约见 tests/test_report.py 模块注释。
 """
 import _console
 
 _console.fix()
 
+import hashlib
 import json
 import re
 import statistics
@@ -15,6 +19,8 @@ from pathlib import Path
 
 F1_PASS = 0.7  # 触发评测及格线（可配）
 COST_CV_MAX = 0.5  # #12 稳定性阈值：tool_calls 变异系数上限（可配）
+META_SCHEMA = "skill-eval/results-meta/1"  # 与 uploads/、evalsets/ 下的同名 meta.json 靠此字段区分
+EVALUATOR_ROOT = Path(__file__).resolve().parent.parent  # 评估器自身目录（指纹范围）
 
 # #19/#20：每个指标的中文含义（report.md 与 report.json 的 note 均引用，不能只写 #N）
 DIM_NAMES = {
@@ -24,6 +30,10 @@ DIM_NAMES = {
     "#12": "稳定性", "#13": "权限最小化", "#14": "版本演进", "#15": "幂等可恢复",
     "#16": "前置自检", "#17": "输入契约", "#18": "输出契约", "#19": "副作用可逆",
 }
+
+# #13 的五个静态规则组（ADR-0013）：用于 note 里的命中摘要
+DIM_13_GROUPS = {"dangerous": "危险命令", "secrets": "硬编码凭据",
+                 "injection": "注入指令", "exfil": "数据外发", "obfuscation": "混淆"}
 
 ALL_KEYS = [f"#{i}" for i in range(1, 20)]
 THREE_TIER = {"pass", "warn", "fail", "skipped"}
@@ -61,6 +71,101 @@ def load_judge(d: Path, name: str):
     return data
 
 
+def _sha256_files(root: Path, files) -> str:
+    """按相对路径 + 内容逐个喂进 sha256（路径也参与，改名同样改变指纹）。"""
+    h = hashlib.sha256()
+    for p in files:
+        h.update(p.relative_to(root).as_posix().encode("utf-8"))
+        h.update(b"\0")
+        h.update(p.read_bytes())
+    return h.hexdigest()
+
+
+def evaluator_fingerprint(root: Path = None) -> dict:
+    """评估器指纹（ADR-0010）：scripts/*.py + judges/*.md + SKILL.md + reference.md 的内容 sha256。
+
+    用途：results/meta.json 与 report.json 记录"这份报告由哪个评估器产生"；#14 跨版本对比时
+    评估器换过版 → 指标差异不再构成被测 skill 的回归证据。
+    用内容指纹而非人手 semver：零维护、无法忘记更新、可复现。
+    """
+    root = Path(root or EVALUATOR_ROOT)
+    try:
+        files = sorted([p for p in list((root / "scripts").glob("*.py"))
+                        + list((root / "judges").glob("*.md"))
+                        + [root / "SKILL.md", root / "reference.md"] if p.is_file()],
+                       key=lambda p: p.relative_to(root).as_posix())
+    except OSError:
+        files = []
+    if not files:
+        return {"version": "unknown", "content_sha256": None, "files": 0}
+    digest = _sha256_files(root, files)
+    return {"version": "auto-" + digest[:8], "content_sha256": digest, "files": len(files)}
+
+
+def skill_fingerprint(skill_dir) -> dict:
+    """被测 skill 的内容指纹（ADR-0003 的 content_sha256 兜底字段，落进 results/meta.json）。
+
+    裸文件夹上传时结果目录名只有 auto-<hash>，vN 命名则完全看不出评的是哪份内容——
+    这个字段是"单看 results 目录也能知道评的哪份 skill"的唯一来源。
+    """
+    if not skill_dir:
+        return None
+    root = Path(skill_dir)
+    if not root.is_dir():
+        return {"path": str(skill_dir), "content_sha256": None, "files": 0, "note": "目录不存在"}
+    files = sorted((p for p in root.rglob("*")
+                    if p.is_file() and ".git" not in p.parts and "__pycache__" not in p.parts
+                    and p.suffix != ".pyc"),
+                   key=lambda p: p.relative_to(root).as_posix())
+    return {"path": str(root), "content_sha256": _sha256_files(root, files), "files": len(files)}
+
+
+def evalset_meta(evalset_dir) -> dict:
+    """评测集来源：目录名给 name/version，同目录 meta.json 给冻结标记（reference.md § 评测集冻结）。"""
+    if not evalset_dir:
+        return None
+    d = Path(evalset_dir)
+    meta = {"name": d.parent.name, "version": d.name, "frozen": False}
+    frozen = load(d, "meta.json")
+    if isinstance(frozen, dict):
+        meta["frozen"] = bool(frozen.get("frozen_at") or frozen.get("reviewed_by"))
+        for k in ("frozen_at", "reviewed_by"):
+            if frozen.get(k):
+                meta[k] = frozen[k]
+    else:
+        meta["note"] = "无 meta.json（未冻结或旧评测集）"
+    return meta
+
+
+def build_meta(report: dict, skill_dir=None, evalset_dir=None) -> dict:
+    """评估器写入的字段。键名避开人工字段：results/meta.json 可能已有人填的运行记录
+    （model/sandbox/skipped_reason，以及字符串形式的 skill/evalset），所以用
+    skill_fingerprint / evalset_source 而不是 skill / evalset（ADR-0010）。"""
+    verdicts = [v["verdict"] for v in report["metrics"].values()]
+    return {
+        "schema": META_SCHEMA,
+        "generated_at": report["generated_at"],
+        "conclusion": report["conclusion"],
+        "evaluator": report["evaluator"],
+        "skill_fingerprint": skill_fingerprint(skill_dir),
+        "metrics": {"total": len(verdicts),
+                    "measured": sum(1 for v in verdicts if v != "skipped"),
+                    "skipped": sum(1 for v in verdicts if v == "skipped")},
+        "evalset_source": evalset_meta(evalset_dir),
+    }
+
+
+def write_meta(d: Path, meta: dict) -> None:
+    """写 results/meta.json：已存在则**合并保留**人工填写的键，只覆盖评估器自己的键。
+
+    人工记录（model/sandbox/skipped_reason/skill_path 等）无法由评估器重建，静默覆盖
+    等于丢证据；因此评估器字段一律用自己的键名，合并时以评估器新值优先。
+    """
+    old = load(d, "meta.json")
+    merged = {**old, **meta} if isinstance(old, dict) else meta
+    (d / "meta.json").write_text(json.dumps(merged, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def verdict_of_ratio(ratio) -> str:
     """#5：LLM 评审分数是 pass 项数/总项数（0~1），全过 pass、有挂 warn、全挂 fail。"""
     return "pass" if ratio >= 1 else "warn" if ratio > 0 else "fail"
@@ -74,7 +179,6 @@ def from_static(static, m: dict):
     if not isinstance(static, dict):
         return
     errors = static.get("errors", [])
-    has_danger = bool(static.get("dangerous"))
     invoke_warn = any("disable-model-invocation" in w for w in static.get("warnings", []))
     m_err = any("name" in e or "description" in e for e in errors)
     token_warn = any("token" in w for w in static.get("warnings", []))
@@ -87,12 +191,29 @@ def from_static(static, m: dict):
                else "skipped",
                "method": METHOD_STATIC, "data": static.get("invoke"),
                "note": "调用方式 frontmatter 校验（disable-model-invocation：true=human，缺省=both）"}
-    m["#13"] = {"verdict": "fail" if has_danger else "pass",
-                "method": METHOD_STATIC, "data": static.get("dangerous"), "note": "危险命令扫描"}
+    # #13 权限最小化（ADR-0013）：五组静态规则。四组命中即 fail，混淆仅 warn（待人工复核）。
+    # 旧的 static.json（无四组新字段）走同一分支：get→None→[]，verdict 与旧版一致。
+    hard_groups = ("dangerous", "secrets", "injection", "exfil")
+    groups = {k: (static.get(k) or []) for k in (*hard_groups, "obfuscation")}
+    hit = [k for k in hard_groups if groups[k]]
+    note = "五组静态规则（危险命令/凭据/注入/外发/混淆）"
+    if hit:
+        note += "；命中：" + "、".join(f"{DIM_13_GROUPS.get(k, k)}×{len(groups[k])}" for k in hit)
+    elif groups["obfuscation"]:
+        note += f"；仅混淆×{len(groups['obfuscation'])}（警告）"
+    # 排除/抑制必须可见（ADR-0012）：不静默丢指标
+    excluded, ignored = static.get("excluded") or [], static.get("ignored") or []
+    if excluded:
+        shown = "、".join(excluded[:3]) + ("…" if len(excluded) > 3 else "")
+        note += f"；未扫描 {len(excluded)} 处（{shown}）"
+    if ignored:
+        note += f"；行内抑制 {len(ignored)} 行"
+    m["#13"] = {"verdict": "fail" if hit else "warn" if groups["obfuscation"] else "pass",
+                "method": METHOD_STATIC, "data": groups, "note": note}
 
 
 def cv_of(comp):
-    """变异系数（#12，ADR-0012）：std/mean；n<2 或字段不合法 → None（不参与裁决）。
+    """变异系数（#12，ADR-0016）：std/mean；n<2 或字段不合法 → None（不参与裁决）。
 
     均值 0 时与旧实现同口径（无波动 0；有波动 99，保守判不稳）。
     """
@@ -149,6 +270,14 @@ def build(d: Path, evalset_dir: Path | None = None) -> dict:
             m["#5"] = {"verdict": "pass" if (tok or {}).get("improvement", 0) > 0 else "fail",
                        "method": METHOD_RUN, "data": n,
                        "note": "三分量对比（#11）：token 为主判据，步数/耗时并列呈现"}
+    # #1 触发集质量（ADR-0002 的执行检查）：照抄 description 的 prompt 会让 P/R 虚高 → 降级为 warn，
+    # 不做整体闸门（与 ADR-0008 的区别：那是客观硬事实，这里是启发式阈值，疑似不该一票否决）
+    ev = load(d, "evalset.json")
+    if isinstance(ev, dict) and ev.get("clean") is False and m["#1"]["verdict"] != "skipped":
+        m["#1"]["verdict"] = "fail" if m["#1"]["verdict"] == "fail" else "warn"
+        m["#1"]["data"] = {**(m["#1"]["data"] or {}), "evalset_quality": ev}
+        m["#1"]["note"] = (m["#1"].get("note") or "") + f"；触发集质量警告：{ev.get('note')}"
+
     if isinstance(golden, dict):
         errs = [e for e in golden.get("errors", []) if any(
             w in str(e).lower() for w in ("not found", "notfound", "no such", "import", "command not found", "不存在"))]
@@ -167,7 +296,7 @@ def build(d: Path, evalset_dir: Path | None = None) -> dict:
                    "note": dep_note}
     if isinstance(score, dict) and isinstance(score.get("cost"), dict) \
             and isinstance(score["cost"].get("tool_calls"), dict):
-        # #12（ADR-0012）：裁决用**组内（逐 case）** 变异系数中位数——
+        # #12（ADR-0016）：裁决用**组内（逐 case）** 变异系数中位数——
         # pooled 会把 case 间的难度差算成“不稳定”（实测：组间均值极差 8.5 步 → pooled cv 0.65，
         # 组内中位数 0.45）。无逐 case 数据（旧产物/旧 harness）时回退 pooled 并在 note 标注口径。
         cost_data = score["cost"]
@@ -211,6 +340,18 @@ def build(d: Path, evalset_dir: Path | None = None) -> dict:
             data = {"cv_scope": "pooled", "cv_threshold": COST_CV_MAX,
                     "cv_pooled": None if pooled_cv is None else round(pooled_cv, 3), "cost": cost_data}
         m["#12"] = {"verdict": verdict, "method": METHOD_RUN, "data": data, "note": note}
+
+    # #12 跨模型一致性（ADR-0011：折进稳定性，不新增第 20 指标）：
+    # 组内变异系数与跨模型一致率分写在同一 data 下，不混成一个数字。
+    # 保守口径：跨模型只能**降级**（发现漂移），不能升级——它不能代替组内重复运行。
+    mr = load(d, "model_robust.json")
+    if isinstance(mr, dict) and mr.get("skipped") is False and mr.get("robust") is not None:
+        rank = {"skipped": 0, "pass": 1, "warn": 2, "fail": 3}
+        cross = "pass" if mr["robust"] else "warn"
+        m["#12"] = {"verdict": max((m["#12"]["verdict"], cross), key=lambda v: rank.get(v, 0)),
+                    "method": METHOD_RUN,
+                    "data": {"intra_model_cost": m["#12"].get("data"), "model_robust": mr},
+                    "note": (m["#12"].get("note") or "") + f"；跨模型一致性：{mr.get('note')}"}
 
     m["#9"] = {"verdict": "skipped", "method": METHOD_COMPARE, "data": None, "note": "无 expect/actual 对比"}
     if isinstance(compare, dict) and (compare.get("score") is not None
@@ -260,6 +401,7 @@ def build(d: Path, evalset_dir: Path | None = None) -> dict:
     from datetime import datetime
     report = {"metrics": m, "conclusion": conclusion(m),
               "reviewed_by": reviewed_by,
+              "evaluator": evaluator_fingerprint(),
               "generated_at": datetime.now().isoformat(timespec="seconds")}
     return report
 
@@ -296,9 +438,9 @@ def conclusion(m: dict) -> str:
 FLOW_STEPS = [  # SKILL.md 的 8 步流程（#43 流程图数据源）
     ("1 前置自检", "scripts/judges/reference.md 存在；被测路径有 SKILL.md，缺失走 Fallback"),
     ("2 存档与定版", "只读存档 uploads/，副本 git init+commit，版本号 = 短 hash"),
-    ("3 静态检查", "static_check.py：#2 规范、#7 调用方式、#13 危险命令、可移植性闸门"),
-    ("4 评测集", "检查冻结的 evalsets/<name>/vN/；未冻结则生成后 LLM 自动审核（换模型）即冻结（reviewed_by=ai）"),
-    ("5 沙箱运行", "按档增量跑 pi CLI：T2 触发（early-exit）→ T3 主运行+基线+重复 → T4 审计/消融"),
+    ("3 静态检查", "static_check.py：#2 规范、#7 调用方式、#13 五组规则、可移植性闸门"),
+    ("4 评测集", "检查冻结的 evalsets/<name>/vN/；未冻结则生成 → 条数闸门 + 触发集质量自检 → LLM 自动审核（换模型）即冻结（reviewed_by=ai）"),
+    ("5 沙箱运行", "按档增量跑 pi CLI：T2 触发（early-exit）→ T3 主运行+基线+重复（可选跨模型 model_robust.py）→ T4 审计/消融"),
     ("6 LLM 评审", "judges/ 逐项计分 rubric，judge_runner.py --validate 通过才进报告"),
     ("7 计算", "score.py（P/R/F1、成本、三分量必要性）+ idem.py（幂等）"),
     ("8 报告", "report.py：report.json + report.md（--html 加静态页），19 指标恒出现"),
@@ -683,6 +825,8 @@ def render_md(report: dict) -> str:
         head.append(f"**档位：{report['tier']}**")
     if report.get("reviewed_by") == "ai":
         head.append("**评测集 AI 审核，未经人工复核**")
+    ev = report.get("evaluator") or {}
+    head.append(f"**评估器指纹：{ev.get('version', 'unknown')}**（{ev.get('files', 0)} 个文件的内容 sha256）")
     lines = head + [""]
     for k in ALL_KEYS:  # #19：严格按指标 ID 顺序
         v = report["metrics"][k]
@@ -727,7 +871,8 @@ def main():
         else:
             rest.append(args[i]); i += 1
     if len(rest) != 1:
-        print("usage: report.py <results目录> [--tier <static|review|trigger|core|full>] [--html] [--evalset <evalsets/<name>/vN>] [--skill <被测skill目录>]", file=sys.stderr)
+        print("usage: report.py <results目录> [--tier <static|review|trigger|core|full>] "
+              "[--html] [--evalset <evalsets/<name>/vN>] [--skill <被测skill目录>]", file=sys.stderr)
         sys.exit(2)
     d = Path(rest[0])
     if not d.is_dir():
@@ -736,12 +881,16 @@ def main():
     report = build(d, evalset_dir)
     if tier:
         report["tier"] = tier
+    meta = build_meta(report, skill_arg, evalset_dir)
     (d / "report.json").write_text(
         json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     (d / "report.md").write_text(render_md(report), encoding="utf-8")
+    write_meta(d, meta)
     if html:
         (d / "report.html").write_text(render_html(report, evalset_dir, skill_arg), encoding="utf-8")
-    print(json.dumps({"conclusion": report["conclusion"], "written": True}, ensure_ascii=False))
+    print(json.dumps({"conclusion": report["conclusion"], "written": True,
+                      "meta_schema": META_SCHEMA,
+                      "evaluator": report["evaluator"]["version"]}, ensure_ascii=False))
 
 
 if __name__ == "__main__":

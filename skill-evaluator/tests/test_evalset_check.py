@@ -1,9 +1,8 @@
-"""evalset_check.py 断链修复前先立契约：条数闸门的计数口径、配置优先级、坏文件不计。
+"""Seam: python scripts/evalset_check.py <evalset目录> --skill <skill目录> [--out f]
 
-Seam: python scripts/evalset_check.py <evalsets/<name>/vN> [--out <file>] [--min N]
-[--min-should N] [--min-not N] [--min-confusable N] -> stdout JSON
-{"counts": {"should", "should_not", "confusable"}, "minimums", "passed", "issues"}
-三组触发集各 ≥ 最小条数（默认 10）才 passed；cases 不在本闸门范围。
+触发集质量自检（ADR-0002 的执行检查）：should prompt 照抄 description / 组内近似重复 /
+同句同时出现在 should 与 should-not → clean=false，#1 数字可能虚高。
+stdout: {"checked", "clean", "echoes_description", "echoes_name", "duplicates", "conflicts", "note"}
 """
 import json
 import subprocess
@@ -12,103 +11,135 @@ from pathlib import Path
 
 SCRIPT = Path(__file__).parent.parent / "scripts" / "evalset_check.py"
 
+DESC = "评估一个 skill 包的质量，产出 19 条指标的报告。只在用户明确要求时运行。"
+CLEAN_PROMPTS = [
+    "帮我看看这个技能到底靠不靠谱",
+    "这周五前给我一份体检结论，我想知道该先改哪里",
+    "我写了个说明书，你帮我挑挑毛病",
+]
 
-def run_check(ev: Path, *args, env=None):
-    import os
-    e = dict(os.environ)
-    e.pop("SKILL_EVAL_TRIGGER_MIN", None)
-    if env:
-        e.update(env)
-    r = subprocess.run([sys.executable, str(SCRIPT), str(ev), *args],
-                       capture_output=True, text=True, encoding="utf-8", errors="replace", env=e)
-    assert r.returncode == 0, f"evalset_check.py failed: {r.stderr}"
+
+def make_skill(tmp_path, description=DESC, name="skill-evaluator"):
+    d = tmp_path / "skill"
+    d.mkdir(exist_ok=True)
+    (d / "SKILL.md").write_text(
+        f"---\nname: {name}\ndescription: {description}\n---\n\n# S\n\n正文\n", encoding="utf-8")
+    return d
+
+
+def make_evalset(tmp_path, should=(), should_not=(), confusable=()):
+    d = tmp_path / "evalsets" / "sk" / "v1"
+    for group, prompts in (("should", should), ("should-not", should_not), ("confusable", confusable)):
+        g = d / "triggers" / group
+        g.mkdir(parents=True, exist_ok=True)
+        for i, p in enumerate(prompts):
+            (g / f"s{i}.json").write_text(json.dumps({"prompt": p}, ensure_ascii=False), encoding="utf-8")
+    return d
+
+
+def run(evalset, skill):
+    r = subprocess.run([sys.executable, str(SCRIPT), str(evalset), "--skill", str(skill)],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
+    assert r.returncode == 0, r.stderr
     return json.loads(r.stdout)
 
 
-def make_evalset(tmp_path: Path, counts: dict):
-    ev = tmp_path / "evalsets" / "s" / "v1"
-    for sub, n in counts.items():
-        d = ev / "triggers" / sub
-        d.mkdir(parents=True, exist_ok=True)
-        for i in range(1, n + 1):
-            (d / f"{i}.json").write_text(json.dumps({"prompt": f"p{i}"}), encoding="utf-8")
-    return ev
+# --- 干净触发集 ---
+
+def test_clean_evalset(tmp_path):
+    ev = make_evalset(tmp_path, should=CLEAN_PROMPTS,
+                      should_not=["明天天气怎么样", "帮我订一张去上海的票"])
+    out = run(ev, make_skill(tmp_path))
+    assert out["clean"] is True
+    assert out["checked"] == 5
+    assert out["echoes_description"] == [] and out["duplicates"] == [] and out["conflicts"] == []
 
 
-def test_below_default_min_fails(tmp_path):
-    # 默认最小 10：6/3/4 全不达标（现状 todo-add v1 就是这个形状）
-    ev = make_evalset(tmp_path, {"should": 6, "should-not": 3, "confusable": 4})
-    out = run_check(ev)
-    assert not out["passed"]
-    assert out["minimums"] == {"should": 10, "should_not": 10, "confusable": 10}
-    assert len(out["issues"]) == 3
+# --- 照抄 description ---
+
+def test_echo_of_description_flagged(tmp_path):
+    ev = make_evalset(tmp_path, should=[DESC])
+    out = run(ev, make_skill(tmp_path))
+    assert out["clean"] is False
+    assert len(out["echoes_description"]) == 1
+    assert out["echoes_description"][0]["coverage"] == 1.0
+    assert "照抄" in out["note"] or "高度重合" in out["note"]
 
 
-def test_meeting_default_min_passes(tmp_path):
-    ev = make_evalset(tmp_path, {"should": 10, "should-not": 10, "confusable": 10})
-    out = run_check(ev)
-    assert out["passed"] and not out["issues"]
-    assert out["counts"] == {"should": 10, "should_not": 10, "confusable": 10}
+def test_punctuation_rewrite_still_flagged(tmp_path):
+    # 只换标点/空格不算改写：normalize 之后仍是同一串
+    ev = make_evalset(tmp_path, should=["评估一个skill包的质量, 产出19条指标的报告! 只在用户明确要求时运行"])
+    out = run(ev, make_skill(tmp_path))
+    assert out["clean"] is False
+    assert out["echoes_description"][0]["coverage"] >= 0.9
 
 
-def test_env_override(tmp_path):
-    # 环境变量 SKILL_EVAL_TRIGGER_MIN 抬高/降低三组默认值
-    ev = make_evalset(tmp_path, {"should": 6, "should-not": 6, "confusable": 6})
-    out = run_check(ev, env={"SKILL_EVAL_TRIGGER_MIN": "6"})
-    assert out["passed"] and out["minimums"] == {"should": 6, "should_not": 6, "confusable": 6}
+def test_name_echo_flagged(tmp_path):
+    ev = make_evalset(tmp_path, should=["帮我用 skill-evaluator 这个技能跑一遍"])
+    out = run(ev, make_skill(tmp_path))
+    assert out["clean"] is False
+    assert len(out["echoes_name"]) == 1
 
 
-def test_cli_overrides_env_and_per_group(tmp_path):
-    ev = make_evalset(tmp_path, {"should": 5, "should-not": 3, "confusable": 5})
-    # --min 全局 5，但 --min-not 单独收紧到 3
-    out = run_check(ev, "--min", "5", "--min-not", "3",
-                    env={"SKILL_EVAL_TRIGGER_MIN": "99"})
-    assert out["passed"]
-    assert out["minimums"] == {"should": 5, "should_not": 3, "confusable": 5}
+# --- 覆盖度虚高：组内重复 / 跨组冲突 ---
+
+def test_duplicate_prompts_flagged(tmp_path):
+    ev = make_evalset(tmp_path, should=["帮我看看这个技能到底靠不靠谱",
+                                        "帮我看看这个技能到底靠不靠得住"])
+    out = run(ev, make_skill(tmp_path))
+    assert out["clean"] is False
+    assert len(out["duplicates"]) == 1
+    assert out["duplicates"][0]["coverage"] >= 0.8
 
 
-def test_bad_json_not_counted_but_flagged(tmp_path):
-    ev = make_evalset(tmp_path, {"should": 10, "should-not": 10, "confusable": 10})
-    bad = ev / "triggers" / "should" / "x.json"
-    bad.write_text("{oops", encoding="utf-8")
-    empty = ev / "triggers" / "should" / "y.json"
-    empty.write_text(json.dumps({"prompt": "  "}), encoding="utf-8")
-    out = run_check(ev)
-    assert out["counts"]["should"] == 10  # 坏文件不计数
-    assert not out["passed"]              # 但记入 issues 拦下
-    assert any("x.json" in s for s in out["issues"]) and any("y.json" in s for s in out["issues"])
+def test_conflict_between_groups_flagged(tmp_path):
+    same = "帮我看看这个技能到底靠不靠谱"
+    ev = make_evalset(tmp_path, should=[same], should_not=[same])
+    out = run(ev, make_skill(tmp_path))
+    assert out["clean"] is False
+    assert len(out["conflicts"]) == 1
 
 
-def test_missing_dir_counts_zero(tmp_path):
-    ev = make_evalset(tmp_path, {"should": 10, "should-not": 10})
-    out = run_check(ev)
-    assert out["counts"]["confusable"] == 0 and not out["passed"]
+# --- 不做过度判定 ---
+
+def test_no_triggers_dir_is_unjudged(tmp_path):
+    d = tmp_path / "evalsets" / "sk" / "v1"
+    d.mkdir(parents=True)
+    out = run(d, make_skill(tmp_path))
+    assert out["checked"] == 0
+    assert out["clean"] is None  # 无触发集 → 不判质量，不是"干净"
+    assert "#1" in out["note"]
 
 
-def test_out_file_utf8(tmp_path):
-    ev = make_evalset(tmp_path, {"should": 10, "should-not": 10, "confusable": 10})
-    dst = tmp_path / "chk.json"
-    run_check(ev, "--out", str(dst))
-    assert dst.read_text(encoding="utf-8")  # --out 落盘 UTF-8，无 GBK 风险
+def test_invalid_json_recorded_not_crash(tmp_path):
+    ev = make_evalset(tmp_path, should=CLEAN_PROMPTS)
+    (ev / "triggers" / "should" / "bad.json").write_text("{不是 json", encoding="utf-8")
+    out = run(ev, make_skill(tmp_path))
+    assert out["checked"] == 3
+    assert len(out["errors"]) == 1
+    assert "无法解析" in out["note"]
 
 
-# --- meta.counts 新鲜度：冻结后扩条未回写 → issue 提示（不阻断闸门） ---
-
-def _mk_entry(d, name):
-    (d / name).write_text(json.dumps({"prompt": "p"}), encoding="utf-8")
-
-
-def test_meta_counts_stale_reported(tmp_path):
-    import subprocess, sys as _sys
-    script = Path(__file__).parent.parent / "scripts" / "evalset_check.py"
-    for g in ("should", "should-not", "confusable"):
-        (tmp_path / "triggers" / g).mkdir(parents=True)
-        for i in range(10):
-            _mk_entry(tmp_path / "triggers" / g, f"{i}.json")
-    (tmp_path / "meta.json").write_text(json.dumps(
-        {"counts": {"should": 6, "should_not": 10, "confusable": 10}}), encoding="utf-8")
-    r = subprocess.run([_sys.executable, str(script), str(tmp_path)],
+def test_missing_evalset_dir_exits_2(tmp_path):
+    r = subprocess.run([sys.executable, str(SCRIPT), str(tmp_path / "nope"),
+                        "--skill", str(make_skill(tmp_path))],
                        capture_output=True, text=True, encoding="utf-8", errors="replace")
-    out = json.loads(r.stdout)
-    assert out["passed"] is True  # 条数闸门本身达标，新鲜度不阻断
-    assert any("counts[should]=6 与实际 10 不符" in w for w in out["warnings"])
+    assert r.returncode == 2
+    assert "traceback" not in r.stderr.lower()
+
+
+def test_skill_without_skill_md_exits_2(tmp_path):
+    ev = make_evalset(tmp_path, should=CLEAN_PROMPTS)
+    empty = tmp_path / "empty_skill"
+    empty.mkdir()
+    r = subprocess.run([sys.executable, str(SCRIPT), str(ev), "--skill", str(empty)],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
+    assert r.returncode == 2
+    assert "traceback" not in r.stderr.lower()
+
+
+def test_missing_skill_arg_exits_2(tmp_path):
+    ev = make_evalset(tmp_path, should=CLEAN_PROMPTS)
+    r = subprocess.run([sys.executable, str(SCRIPT), str(ev)], capture_output=True, text=True, encoding="utf-8", errors="replace")
+    assert r.returncode == 2
+    assert "usage" in r.stderr

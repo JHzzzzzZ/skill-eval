@@ -167,7 +167,7 @@ def test_cost_stats_include_n(tmp_path):
     assert out["cost"]["tokens"]["max"] == 200
 
 
-# --- ADR-0012: 逐 case 统计（#12 组内口径的数据源） ---
+# --- ADR-0016: 逐 case 统计（#12 组内口径的数据源） ---
 
 def test_cost_by_case_grouped_when_case_present(tmp_path):
     runs = [{"case": "c1", "tool_calls": 2, "tokens": 100, "seconds": 1.0},
