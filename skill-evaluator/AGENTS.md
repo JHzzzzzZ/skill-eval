@@ -18,6 +18,7 @@ Generated: 2026-09-22T13:43:08.578Z
 | 改中间产物文件名 | `reference.md § 中间产物契约`（下游脚本按名读，改名即断链） |
 | 改版本号 / 指纹 | `docs/adr/0003`、`docs/adr/0010` + `scripts/report.py:67-160`（指纹+meta 层） |
 | 改档位定义 / 增量补跑 | `docs/adr/0014` + `SKILL.md` 档位表 + `scripts/report.py` 的 `tier` 字段 |
+| 改指标多源规则（主源/辅证） | `docs/adr/0017` + `scripts/report.py`（#3/#8 合成处） |
 | 改 #12 稳定性口径 | `docs/adr/0016` + `scripts/score.py`（`cost_by_case`）+ `scripts/report.py`（`cv_of`） |
 | 改扫描口径 / 五组规则表 | `docs/adr/0012`（口径 + 作用域，唯一来源）、`docs/adr/0013`（五组分级）+ `scripts/static_check.py:45-123` |
 | 改 fallback 行为 | `reference.md § Fallback` 表 |
@@ -28,7 +29,7 @@ SKILL.md 的 9 步，按五档（T0–T4，默认 T2）增量执行（ADR-0014�
 
 1. 前置自检（`bash scripts/check-deps.sh` → python≥3.9/git/pytest/pi + 包内文件齐备；再确认被测有 `SKILL.md`）
 2. 存档定版（原始上传只读存档 `uploads/`；副本 `git init` → 版本号）
-3. `static_check.py` → `static.json`（#2/#7 + #13 五组规则 + 可移植性闸门）
+3. `static_check.py` → `static.json`（#2/#7 + #13 五组规则 + #3 正文行数主源 + 可移植性闸门）
 4. 评测集冻结；冻结前先 `evalset_count.py` 卡条数（三组各 ≥10），再 `evalset_check.py` → `evalset.json`（#1 可信度），通过后 LLM 自动审核（`reviewed_by: "ai"`）即冻结
 5. 沙箱运行 `trace_run.py`（触发 / golden / baseline / 重复 ×3 / 可选跨模型）→ `triggers.json`、`runs.json`、`golden.json`、`baseline.json`
 6. LLM 评审：按 `judges/*.md` 产出 → `judge_runner.py --validate` 通过 → `judges/<metric>.json`
@@ -39,7 +40,7 @@ SKILL.md 的 9 步，按五档（T0–T4，默认 T2）增量执行（ADR-0014�
 
 | 文件 | 指标 | 评什么 |
 |---|---|---|
-| `brevity.md` | #3 | SKILL.md ≤150 行、无下沉细节、有索引 |
+| `brevity.md` | #3 语义面 | 无下沉细节、有索引（行数由 `static_check.py` 测，ADR-0017） |
 | `redundancy.md` | #6 | 无概念科普 / 复读 frontmatter / 与附属文件重复 / 客套 |
 | `fallback.md` | #11 | 失败有重试/降级/终止，依赖缺失行为明确，失败可见 |
 | `precheck.md` | #16 | 环境校验置前且覆盖完整 |
@@ -47,7 +48,7 @@ SKILL.md 的 9 步，按五档（T0–T4，默认 T2）增量执行（ADR-0014�
 | `side-effects.md` | #19 | 无未防护不可逆操作、有 dry-run / 确认 |
 | `deps.md` | #8 语义面 | 依赖已声明、无未打包外部环境依赖、凭据走 fallback |
 
-`deps.md` **不在** `report.py` 的 judges 映射表里——#8 是双源合成：trace 报错（实跑面）优先，无报错才用 `judges/deps.json`（语义面），见 `scripts/report.py:232-243`。
+`deps.md` **不在** `report.py` 的 judges 映射表里——#8 是双源合成：trace 报错（实跑面）优先，无报错才用 `judges/deps.json`（语义面），见 `scripts/report.py:232-243`。同类的多源指标（ADR-0017）：#3 = 静态行数主源 + `judges/brevity.json` 辅证；#6 = 评审 + 消融（消融覆盖）。主源优先，辅证不丢。
 
 统一输出契约（`judge_runner.py` 强制；7 份 rubric 都写着同一句"不要自行发挥"）：
 

@@ -5,7 +5,7 @@ Snapshot: 2026-09-22 21:50 local · Commit: 33166d4 · Branch: main
 后续提交：`8711b78`（#13 五组规则）、`f5f0213`（包内补齐 LICENSE/依赖/前置自检）——数字已按 169 tests / 13 ADR 复核。
 ⚠ 生成期间仓库有另一个写入者正在编辑（mtimes 21:47–21:48）。本文件描述的是 21:50 的状态。
 
-**合并后复核（两条并行线合并，2026-09-23）**：本文件的**计数已更新**（229 tests / 16 ADR / 14 个脚本），但 `CODE MAP` 与正文里的**行号来自合并前快照**，未逐条重算；引用具体行号前先复核。新增：五档流程（T0–T4，ADR-0014）、`scripts/evalset_count.py`（条数闸门）、`evalset_check.py`（触发集质量自检）、`model_robust.py`（跨模型一致率）。
+**合并后复核（两条并行线合并，2026-09-23）**：本文件的**计数已更新**（237 tests / 17 ADR / 14 个脚本），但 `CODE MAP` 与正文里的**行号来自合并前快照**，未逐条重算；引用具体行号前先复核。新增：五档流程（T0–T4，ADR-0014）、`scripts/evalset_count.py`（条数闸门）、`evalset_check.py`（触发集质量自检）、`model_robust.py`（跨模型一致率）、指标多源（ADR-0017，#3 行数改静态主源）。
 
 ## OVERVIEW
 
@@ -23,10 +23,9 @@ skill-evaluator/        # 产品本体（自闭环，ADR-0006）
 ├── LICENSE             # MIT
 ├── scripts/            # 14 个确定性 CLI + check-deps.sh 前置自检，扁平单层
 ├── judges/             # 7 份 LLM 评审 rubric（md）
-└── tests/              # 229 个测试，扁平单层，无 conftest
-docs/adr/               # 16 条架构决策（0001–0016）
-evalsets/               # ⚠ 被 gitignore：评测集 + 运行产物，本地态
-```
+└── tests/              # 237 个测试，扁平单层；conftest.py 只设 PYTHONIOENCODING
+docs/adr/               # 17 条架构决策（0001–0017）
+evalsets/               # ⚠ 被 gitignore：评测集 + 运行产物，本地态```
 
 非显然点：
 
@@ -90,6 +89,7 @@ evalsets/               # ⚠ 被 gitignore：评测集 + 运行产物，本地�
 - **不写死机器路径**，包括解释器路径（统一 `sys.executable`）——命中即触发可移植性闸门整体 fail（ADR-0008/0009）。
 - **不把 LLM 评审存成 `judge-*.json` 或放 results 根目录**：`report.py` 只认 `judges/<metric>.json`（`reference.md:104`）。本仓历史产物里有 5 个 `judge-*.json` 反例，别照抄。
 - **不用 0 填充未测指标**，不合成加权总分（ADR-0004）。
+- **不把可数事实交给 LLM 判**：#3 的行数固定走 `static_check.py`（`skill_md_body_lines` 主源），rubric 只留语义两项；要改阈值就改 `SKILL_MD_BODY_MAX_LINES`，不要在 rubric 里重写一条（ADR-0017）。
 - **不改 #13 的命中分级**：五组静态规则中 `dangerous`/`secrets`/`injection`/`exfil` 命中即 fail，只有 `obfuscation` 是 warn（待人工复核）——把混淆也提成 fail 会误杀（ADR-0013，`report.py:186-203`）。
 - **不在 ADR 里写操作步骤**，也不把决策重复进 `SKILL.md`（ADR-0001 定义单点）。
 
@@ -103,7 +103,7 @@ cd skill-evaluator                    # 所有相对路径以此目录为基准
 bash scripts/check-deps.sh            # 前置自检，退出码 0 = 可跑（缺硬依赖不要继续）
 pip install -r requirements.txt       # 仅跑测试时需要（pytest>=7）
 
-python -m pytest tests                # 全量：229 个测试
+python -m pytest tests                # 全量：237 个测试
 python -m pytest tests/test_idem.py   # 单文件
 python -m pytest tests -k "idem or report"
 

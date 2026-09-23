@@ -10,9 +10,9 @@
 
 | 测量手段 | 指标 | 工具 |
 |---|---|---|
-| 静态检查 | #2 name/description 规范与 token 预算、#7 调用方式、#13 危险命令扫描 | `scripts/static_check.py` |
+| 静态检查 | #2 name/description 规范与 token 预算、#7 调用方式、#13 危险命令扫描、#3 正文行数（主源） | `scripts/static_check.py` |
 | 沙箱运行 | #1 触发 P/R/F1、#4 成本统计、#5 必要性 A/B、#8 最小依赖、#9 结果可验证、#10 过程审计、#12 稳定性、#15 幂等 | `scripts/trace_run.py`、`score.py`、`trigger_judge.py`、`idem.py`、`compare.py`、`process.py` |
-| LLM 评审 | #3 正文精简、#6 低冗余、#11 fallback、#16 前置自检、#17/18 输入输出契约、#19 副作用可逆 | `judges/*.md` rubric + `judge_runner.py` |
+| LLM 评审 | #3 正文精简（语义两项，辅证）、#6 低冗余、#11 fallback、#16 前置自检、#17/18 输入输出契约、#19 副作用可逆 | `judges/*.md` rubric + `judge_runner.py` |
 | 历史对比 | #14 版本演进 | `scripts/evolution.py` |
 | 可信度 | #1 触发集质量（照抄 description / 重复 / 跨组冲突）、#12 跨模型一致率 | `scripts/evalset_check.py`、`model_robust.py` |
 

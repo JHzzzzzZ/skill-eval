@@ -10,9 +10,9 @@ It is itself a skill (for [pi](https://github.com/earendil-works/pi-coding-agent
 
 | Method | Metrics | Tooling |
 |---|---|---|
-| Static analysis | #2 name/description rules & token budget, #7 invocation mode, #13 dangerous-command scan | `scripts/static_check.py` |
+| Static analysis | #2 name/description rules & token budget, #7 invocation mode, #13 dangerous-command scan, #3 body line count (primary source) | `scripts/static_check.py` |
 | Sandbox runs | #1 trigger precision/recall/F1, #4 cost stats, #5 necessity A/B, #8 minimal deps, #9 result verification, #10 process audit, #12 stability, #15 idempotency | `scripts/trace_run.py`, `score.py`, `trigger_judge.py`, `idem.py`, `compare.py`, `process.py` |
-| LLM review | #3 brevity, #6 redundancy, #11 fallback, #16 pre-check, #17/18 I/O contract, #19 side-effect reversibility | `judges/*.md` rubrics + `judge_runner.py` |
+| LLM review | #3 brevity (two semantic checkpoints, supporting evidence), #6 redundancy, #11 fallback, #16 pre-check, #17/18 I/O contract, #19 side-effect reversibility | `judges/*.md` rubrics + `judge_runner.py` |
 | Historical diff | #14 version evolution | `scripts/evolution.py` |
 | Trustworthiness | #1 eval-set quality (description echo / duplicates / cross-group conflicts), #12 cross-model agreement | `scripts/evalset_check.py`, `model_robust.py` |
 
