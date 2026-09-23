@@ -147,11 +147,11 @@ evalsets/<name>/v1/
 
 ## LLM 评审
 
-**调用口径（ADR-0020）**：每条 rubric 一次**独立单发**调用——prompt = rubric 全文 + 被测文件（+ rubric 自声明的附属文件），不携带编排 agent 的历史/探索上下文；固定可重放。pi CLI 没有采样参数（无 `--temperature`/`--seed`），所以“temperature=0”写不了，只能靠“同一 prompt + 单发 + 留原始事件流”压住漂移：实测同 prompt 重复 4 次逐项一致，而同一 rubric 换带上下文的 agent 判会得出不同分（#16 1.0 vs 0.5）。默认单次；要更高的可信度就开 `JUDGE_SAMPLES=3` 取中位数（成本 ×3，需在报告注明口径）。
+**调用口径（ADR-0020/0022）**：每条 rubric 一次**独立单发**调用——prompt = rubric 全文 + 被测文件（+ rubric 自声明的附属文件），不携带编排 agent 的历史/探索上下文，且必须带 **`--no-tools`**（实测带工具时判官会 cd 进真实仓库、自造实验、在包目录里留下宿主硬编码文件）；固定可重放。pi CLI 没有采样参数（无 `--temperature`/`--seed`），所以“temperature=0”写不了，只能靠“同一 prompt + 单发 + 无工具 + 留原始事件流”压住漂移：实测同 prompt 重复 4 次逐项一致，而同一 rubric 换带上下文的 agent 判会得出不同分（#16 1.0 vs 0.5）。默认单次；要更高的可信度就开 `JUDGE_SAMPLES=3` 取中位数（成本 ×3，需在报告注明口径）。
 
 输出：结构化 JSON（`{items: [{name, pass, quote}], score, evidence, reason}`，evidence 必须引用原文；**score = pass 项数/总项数**，0~1 两位小数，judge_runner.py 强制校验）。rubric 文件在 `judges/`。
 
-流程门禁：主 agent 按 rubric 产出 JSON → 运行 `python scripts/judge_runner.py --validate <文件>` → `valid=true` 才能进报告；校验失败把 errors 原文回给 LLM 重产一次，再失败则该指标标 `skipped` 并注明。原始事件流存 `raw/judge-events/<metric>.events.jsonl`（裁决有争议时可回看模型到底看到了什么）。
+流程门禁：主 agent 按 rubric 产出 JSON → 运行 `python scripts/judge_runner.py --validate <文件>` → `valid=true` 才能进报告；校验失败把 errors 原文回给 LLM 重产一次，再失败则该指标标 `skipped` 并注明。原始事件流存 `raw/judge-events/<metric>.events.jsonl`（裁决有争议时可回看模型到底看到了什么）；事件流里出现 `tool_execution_start` 则该次评审作废重跑（ADR-0022）。
 
 检查点极性：每个 rubric 的检查点分两向——**能力清单**（做到才 pass，如 precheck 的环境校验置前）与**问题清单**（无此类问题才 pass，如 deps 的无未打包外部依赖）。极性逐条定义，同一 rubric 内可混向（实际也混）；items 契约与 score 公式不感知极性，新写 rubric 时只需保证每条检查点的 pass 条件在文案里可判定，不需要把措辞统一成一向。
 
