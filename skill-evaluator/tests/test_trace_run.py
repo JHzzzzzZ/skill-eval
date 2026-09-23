@@ -373,3 +373,76 @@ def test_early_exit_marker_matches_forward_slash_readback():
                        "args": {"path": "c:/s/x/SKILL.md"}})
     agg.feed(line)
     assert agg.stop is True
+
+
+# --- ADR-0007 修订二：相对路径加载（cd <skill目录> && cat SKILL.md）也要早停 ---
+
+def marker_agg(**kw):
+    kw.setdefault("skill_marker", "C:/wt/skill/SKILL.md")
+    kw.setdefault("cwd", "C:/wt/skill")
+    return EventAggregator(early_exit=True, **kw)
+
+
+def bash_step(command: str) -> str:
+    return json.dumps({"type": "tool_execution_start", "toolCallId": "t", "toolName": "bash",
+                       "args": {"command": command}})
+
+
+def test_early_exit_matches_cd_then_relative_read():
+    # 实测漏检形态：4 条探针 0 次早停全因这个写法（绝对路径子串匹配对不上）
+    agg = marker_agg()
+    agg.feed(bash_step("cd C:/wt/skill && cat SKILL.md && echo done"))
+    assert agg.stop is True
+
+
+def test_early_exit_matches_bare_relative_read_from_skill_cwd():
+    # cwd 就是被测 skill 目录时，agent 直接写 `cat SKILL.md`
+    agg = marker_agg()
+    agg.feed(bash_step("wc -l SKILL.md reference.md"))
+    assert agg.stop is True
+
+
+def test_early_exit_matches_relative_path_from_parent_cwd():
+    # cd 到 worktree 根、skill 在子目录：相对路径带目录成分
+    agg = EventAggregator(early_exit=True, skill_marker="C:/wt/sub/SKILL.md", cwd="C:/wt")
+    agg.feed(bash_step("sed -n '1,40p' sub/SKILL.md"))
+    assert agg.stop is True
+
+
+def test_early_exit_not_fooled_by_name_only_search():
+    # 只按名字查找、没读内容 → 不算加载（否则 should-not 会被误杀）
+    agg = marker_agg()
+    agg.feed(bash_step("find . -name SKILL.md"))
+    assert agg.stop is False
+
+
+def test_early_exit_not_fooled_by_verb_in_other_pipeline_segment():
+    # 实测误报：动词在另一段管道里（`| head -20`）不算读了 SKILL.md
+    agg = marker_agg()
+    agg.feed(bash_step('ls ~/.pi/agent/skills/; find . -name "SKILL.md" 2>/dev/null | head -20'))
+    assert agg.stop is False
+
+
+def test_early_exit_hits_when_find_exec_reads_the_file():
+    # 同一段里真的读了内容（-exec cat）→ 算加载
+    agg = marker_agg()
+    agg.feed(bash_step("find . -name SKILL.md -exec cat {} \\;"))
+    assert agg.stop is True
+
+
+def test_early_exit_not_fooled_by_other_dir_skill_md():
+    # 别的目录下同名文件不命中
+    agg = marker_agg()
+    agg.feed(bash_step("cd C:/wt/other && cat SKILL.md"))
+    agg.feed(bash_step("cat ../other/SKILL.md"))
+    assert agg.stop is False
+
+
+def test_early_exit_relative_without_cwd_is_conservative():
+    # 离线解析没给 cwd → 相对路径无法定锚，保守不早停（不误杀）
+    agg = EventAggregator(early_exit=True, skill_marker="C:/wt/skill/SKILL.md")
+    agg.feed(bash_step("cd C:/wt/skill && cat SKILL.md"))
+    assert agg.stop is True   # 带绝对 cd 目标仍可解析
+    agg2 = EventAggregator(early_exit=True, skill_marker="C:/wt/skill/SKILL.md")
+    agg2.feed(bash_step("cat SKILL.md"))
+    assert agg2.stop is False

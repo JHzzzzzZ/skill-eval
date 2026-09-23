@@ -21,6 +21,10 @@ SKILL.md 的细则层。指标编号 #N 对应 prompt.txt 的 19 条需求。
 
 沙箱 = **git worktree**。被测 skill 的副本仓库上 `git worktree add`，运行在 worktree 内进行，评估产物不落回副本主目录。未来若替换为 Docker，只改本节定义，SKILL.md 流程不变。
 
+每次 run 前重置工作树（ADR-0018）：触发/沙箱 run 共用同一个 worktree 时，前一个 run 写下的文件会被后一个 run 读到（实测并发探针里，一条 run 写的 `scratch/scan_all.py` 被另一条 run 当成仓库内容分析）。跑之前 `git -C <worktree> clean -fdx`，或每个 run 单独 `git worktree add`。
+
+prompt 不写沙箱外路径（ADR-0018）：worktree 只限定 cwd，不限定 agent 的写权限——实测一条带真实仓库路径的探针 prompt 让 agent 走出 worktree，改了评估器仓库自己的 `README.md`（已回滚）。评测集里的 prompt 只能引用沙箱内路径。
+
 权限边界（#13）：worktree 方案下只能做到静态扫描 + trace 审计（看 trace 里是否出现了不该有的命令），做不到强制拦截。扫描规则见 `scripts/static_check.py` 内的五组正则（ADR-0013）：危险命令 / 硬编码凭据 / 注入指令 / 数据外发 / 混淆。
 
 已知漏检（如实告知，不要当成"扫过就是安全"）：自造格式的高熵 token、改写的语义注入、跨段拼接的注入、无读取动词的 `.env` 引用。混淆类命中仅警告，需人工复核。
@@ -32,6 +36,18 @@ SKILL.md 的细则层。指标编号 #N 对应 prompt.txt 的 19 条需求。
 1. 被测 skill 自带 `.git` → `git rev-parse --short HEAD`
 2. 裸文件夹 → 只读存档原始上传（`uploads/<name>-<时间戳>/`），副本 `git init + commit`，版本号 = `auto-<副本短 hash>`
 3. 副本的 `meta.json` 记录 `content_sha256` 兜底；results 目录另有同名 `meta.json`（内容不同，靠 `schema` 字段区分，ADR-0010）
+
+换行保真（ADR-0019）：副本、副本内的 worktree 必须与存档**字节一致**，否则同一份上传会产出两个
+`content_sha256`，ADR-0003/0010 的指纹就认不出“评的是哪份内容”（实测 Windows `core.autocrlf=true`
+时 51 个文件里 15 个被重写成 CRLF）。副本 repo 一律先关转换再开始干活：
+
+```bash
+mkdir <副本> && tar -cf - -C <存档> . | tar -xf - -C <副本>   # 字节拷贝，别用 git clone
+cd <副本> && git init -q && git config core.autocrlf false && git add -A && git commit -qm snapshot
+git worktree add <沙箱目录> HEAD                                # worktree 继承副本的本地 config
+```
+
+校验：对存档与 worktree 逐个文件比字节，必须 0 处不同（实测修复前 51 个里 15 个不同）。
 
 注意区分两个号：本包 SKILL.md frontmatter 的 `version`（给人看的发布号）与报告里的 `auto-<sha256>` 评估器指纹（ADR-0010，用来判定两份报告能不能横向比）。不要互相替代。
 
@@ -74,7 +90,7 @@ evalsets/<name>/v1/
 |---|---|---|---|
 | T0 | 静态检查 | static_check.py | #2 #7 #13 #3（行数主源） |
 | T1 | LLM 评审 | 逐项按 judges/ rubric 评审（4 并发） | #3（语义两项，辅证） #6(评审面) #11 #16 #17 #18 #19 |
-| T2 | 触发评测 | 三组 prompt 各跑一次，带 `--early-exit`（ADR-0007 修订）：事件流出现**首次指向被测 SKILL.md 的工具调用**（渐进式披露下 = agent 决定加载 skill）即终止该次运行省 token；未出现该调用的 run 跑完整，其行为正是 precision 的证据；**triggered 由 `trigger_judge.py` 用 LLM 判定**，判定口径与 early-exit 同步：**加载即触发，不要求任务实际完成**，截断运行（回答为空）按已执行步骤裁决（trace_run.triggered 仅作粗筛），环境故障的 case 不计入 P/R 分母 | #1 |
+| T2 | 触发评测 | 三组 prompt 各跑一次，带 `--early-exit`（ADR-0007 修订、ADR-0018）：事件流出现**首次指向被测 SKILL.md 的工具调用**（渐进式披露下 = agent 决定加载 skill）即终止该次运行省 token——判定按**路径解析**（相对路径按同串 `cd` 目标/运行 cwd 解析），不是绝对路径子串；未出现该调用的 run 跑完整，其行为正是 precision 的证据；**triggered 由 `trigger_judge.py` 用 LLM 判定**，判定口径与 early-exit 同步：**加载即触发，不要求任务实际完成**，截断运行（回答为空）按已执行步骤裁决（trace_run.triggered 仅作粗筛），环境故障的 case 不计入 P/R 分母。**`#7 resolved=human` 时整档不跑**：#1 记 `skipped`（载体测不到“按 description 触发”，ADR-0018） | #1 |
 | T3 | 主运行 Golden Run | 干净 worktree + 加载 skill，跑 cases，采 trace | #4/#8/#9 |
 | T3 | 基线 A/B | 同 cases、同 worktree，但**不加载** skill | #5 |
 | T3 | 重复运行 ×N | 主运行重复 N 次，每次 trace 存档 | #12（组内）/#15 |
@@ -92,7 +108,7 @@ evalsets/<name>/v1/
 
 可选 `--thinking <off|minimal|low|medium|high|xhigh|max>` 控制思考档位。LLM 评审（judges/）与触发判定（trigger_judge.py）用**同一个模型配置**，保证与被测运行同源。评测集 AI 审核是唯一例外，见 § 评测集 AI 审核。
 
-可配参数：重复运行 N=3；IDEMPOTENT_MAX_RATIO=0.5（idem.py）；DESCRIPTION_TOKEN_LIMIT=100、NAME_MAX_CHARS=64、SKILL_MD_BODY_MAX_LINES=150（static_check.py；#3 行数主源，超限仅 warn，ADR-0017）、`--exclude <路径>`（相对 skill 目录解析）、`--no-default-excludes`（static_check.py）；触发集每组最小条数 10（evalset_count.py，环境变量 SKILL_EVAL_TRIGGER_MIN / CLI --min*）；F1_PASS=0.7、COST_CV_MAX=0.5（report.py，#12 作用于逐 case 变异系数中位数，无逐 case 数据时回落 pooled，见 ADR-0016）；ECHO_COVERAGE_MAX=0.6、DUP_COVERAGE_MAX=0.8（evalset_check.py）；ANSWER_SIM_MIN=0.5、AGREEMENT_MIN=0.8（model_robust.py）；TRIGGER_PASS_SCORE=0.5（trigger_judge.py，--threshold 可覆盖）。
+可配参数：重复运行 N=3；IDEMPOTENT_MAX_RATIO=0.5（idem.py）；DESCRIPTION_TOKEN_LIMIT=100、NAME_MAX_CHARS=64、SKILL_MD_BODY_MAX_LINES=150（static_check.py；#3 行数主源，超限仅 warn，ADR-0017）、`--exclude <路径>`（相对 skill 目录解析）、`--no-default-excludes`（static_check.py）；触发集每组最小条数 10（evalset_count.py，环境变量 SKILL_EVAL_TRIGGER_MIN / CLI --min*）；F1_PASS=0.7、COST_CV_MAX=0.5（report.py，#12 作用于逐 case 变异系数中位数，无逐 case 数据时回落 pooled，见 ADR-0016）；ECHO_COVERAGE_MAX=0.6、DUP_COVERAGE_MAX=0.8（evalset_check.py）；ANSWER_SIM_MIN=0.5、AGREEMENT_MIN=0.8（model_robust.py）；TRIGGER_PASS_SCORE=0.5（trigger_judge.py，--threshold 可覆盖）；JUDGE_SAMPLES=1（LLM 评审单发次数，3 = 逐项取中位数，ADR-0020）。
 
 ## 执行载体与扩展点（ADR-0007）
 
@@ -125,14 +141,17 @@ evalsets/<name>/v1/
 - `models/<模型名>/trace-<序号>.json`：跨模型运行的逐 case trace（序号 = 评测集顺序，各模型必须一致）
 - `meta.json`：`{"schema": "skill-eval/results-meta/1", "generated_at", "conclusion", "evaluator", "skill_fingerprint", "evalset_source", "metrics"}`（report.py 写入，ADR-0010）；已存在时**合并保留**人工填写的键（model/sandbox/skipped_reason 等），不静默覆盖
 - `judges/<metric>.json`：judge_runner.py 校验通过的 LLM 评审输出，metric ∈ {brevity, redundancy, fallback, precheck, contract, side-effects}（**不要**存成 judge-*.json 或放 results 根目录，report.py 只认 judges/<metric>.json）
+- `raw/judge-events/<metric>.events.jsonl`：该次评审的 pi 事件流原文（ADR-0020，可选但推荐——pi 无温度参数，可复现性靠证据留档）
 
 `score.py <results目录>` 读同目录三件套；`idem.py <trace1> <trace2>` 出幂等比例。统计口径：均值/标准差/n/min/max（#10/#28）；必要性为 tokens/tool_calls/seconds 三分量各自提升率（#11）。
 
 ## LLM 评审
 
-temperature=0、单次、结构化 JSON 输出（`{items: [{name, pass, quote}], score, evidence, reason}`，evidence 必须引用原文；**score = pass 项数/总项数**，0~1 两位小数，judge_runner.py 强制校验）。rubric 文件在 `judges/`。
+**调用口径（ADR-0020）**：每条 rubric 一次**独立单发**调用——prompt = rubric 全文 + 被测文件（+ rubric 自声明的附属文件），不携带编排 agent 的历史/探索上下文；固定可重放。pi CLI 没有采样参数（无 `--temperature`/`--seed`），所以“temperature=0”写不了，只能靠“同一 prompt + 单发 + 留原始事件流”压住漂移：实测同 prompt 重复 4 次逐项一致，而同一 rubric 换带上下文的 agent 判会得出不同分（#16 1.0 vs 0.5）。默认单次；要更高的可信度就开 `JUDGE_SAMPLES=3` 取中位数（成本 ×3，需在报告注明口径）。
 
-流程门禁：主 agent 按 rubric 产出 JSON → 运行 `python scripts/judge_runner.py --validate <文件>` → `valid=true` 才能进报告；校验失败把 errors 原文回给 LLM 重产一次，再失败则该指标标 `skipped` 并注明。
+输出：结构化 JSON（`{items: [{name, pass, quote}], score, evidence, reason}`，evidence 必须引用原文；**score = pass 项数/总项数**，0~1 两位小数，judge_runner.py 强制校验）。rubric 文件在 `judges/`。
+
+流程门禁：主 agent 按 rubric 产出 JSON → 运行 `python scripts/judge_runner.py --validate <文件>` → `valid=true` 才能进报告；校验失败把 errors 原文回给 LLM 重产一次，再失败则该指标标 `skipped` 并注明。原始事件流存 `raw/judge-events/<metric>.events.jsonl`（裁决有争议时可回看模型到底看到了什么）。
 
 检查点极性：每个 rubric 的检查点分两向——**能力清单**（做到才 pass，如 precheck 的环境校验置前）与**问题清单**（无此类问题才 pass，如 deps 的无未打包外部依赖）。极性逐条定义，同一 rubric 内可混向（实际也混）；items 契约与 score 公式不感知极性，新写 rubric 时只需保证每条检查点的 pass 条件在文案里可判定，不需要把措辞统一成一向。
 
@@ -190,6 +209,7 @@ evalsets/<name>/results/<version>/
 | 评测集未审核 | #1/#5/#9 标 `skipped`，其余照常 |
 | 触发集未做质量自检 | #1 只按 F1 判（不降级），meta.json 里评测集来源照记 |
 | 跨模型未跑 | #12 只出组内信号，不扣分 |
+| `disable-model-invocation: true`（#7=human） | #1 标 `skipped`：不跑触发评测（ADR-0018）；已实测的数据留在 `data` 里作证据 |
 
 ## 三期工具
 

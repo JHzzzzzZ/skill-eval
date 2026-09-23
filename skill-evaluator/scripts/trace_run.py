@@ -12,6 +12,7 @@ _console.fix()
 import hashlib
 import json
 import os
+import posixpath
 import re
 import shutil
 import subprocess
@@ -27,6 +28,12 @@ from _subprocess import kill_tree as _kill_tree  # 共享：杀进程树（Windo
 kill_tree = _kill_tree
 
 
+# 读取类动词（ADR-0007 修订二）：token 只报文件名时，要求同一条命令里有读取动词才算加载；
+# `find . -name SKILL.md` 这类只列名字、不读内容的调用不算——旧口径会在这一步误杀 should-not。
+READ_VERBS = re.compile(r"\b(?:cat|bat|less|more|head|tail|sed|awk|nl|open|type|gc|get-content|"
+                        r"read|read_text|readlines|wc|grep|rg|strings|diff|source|cut|sort|tr)\b")
+
+
 class EventAggregator:
     """逐行聚合 pi --mode json 事件流。feed(line) 增量消费，result() 出 trace。
 
@@ -40,9 +47,11 @@ class EventAggregator:
     后者会在 agent 先探索后加载时把触发 run 误杀成假阴性，系统性低估 recall。
     skill_marker=None（没有加载被测 skill）→ 无可匹配的加载事件，恒不早停（跑完整）。"""
 
-    def __init__(self, early_exit: bool = False, skill_marker: str | None = None):
+    def __init__(self, early_exit: bool = False, skill_marker: str | None = None,
+                 cwd: str | None = None):
         self.early_exit = early_exit
         self.skill_marker = skill_marker
+        self.cwd = cwd  # 解析相对路径 token 的基准（实测：agent 用 `cd <dir> && cat SKILL.md`）
         self.stop = False
         self.steps, self.errors, self.usage_totals, self.answer_parts = [], [], [], []
 
@@ -83,25 +92,73 @@ class EventAggregator:
                             self.answer_parts.append(c["text"])  # ISS-3: 最终回答全文
 
     def _hit_marker(self, raw_args) -> bool:
-        """停止条件：args 指向被测 SKILL.md 才算命中；无 marker → 恒不命中（跑完整）。
+        """停止条件：args 解析到被测 SKILL.md 才算命中；无 marker → 恒不命中（跑完整）。
 
         匹配用 args 的原始值（dict/list 递归取值）而不是 json.dumps——dumps 会把
         Windows 路径的 \\ 转义成 \\\\，归一化后与 marker 永远对不上（冒烟实测踩坑）。
-        分隔符/连续斜杠/大小写归一（模型回读时可能用 / 或 \\）。"""
+        分隔符/连续斜杠/大小写归一（模型回读时可能用 / 或 \\）。
+
+        ADR-0007 修订二（实测：4 条触发探针 0 次早停）：agent 普遍用
+        `cd <skill目录> && cat SKILL.md` 这种**相对路径**加载，而旧实现只做绝对路径
+        子串匹配 → 加载了也不停，白跑完整 run（单条 85~358s / 3.7 万~9.4 万 token）。
+        现按“路径解析”判：逐 token 解析到 <skill目录>/SKILL.md——相对路径按同一条
+        命令里最近的 `cd` 目标解析，否则按运行 cwd（self.cwd）；裸文件名还要求**同一条
+        简单命令**（按管道/`;`/`&&` 切分）里有读取动词——`find . -name SKILL.md | head -20`
+        这类只列名字、不读内容的调用不算加载（实测误报两次）。
+        """
         if not self.skill_marker:
             return False
 
-        def text(x):
+        def strings(x):
             if isinstance(x, str):
-                return x
-            if isinstance(x, dict):
-                return " ".join(text(v) for v in x.values())
-            if isinstance(x, (list, tuple)):
-                return " ".join(text(v) for v in x)
-            return str(x)
+                yield x
+            elif isinstance(x, dict):
+                for v in x.values():
+                    yield from strings(v)
+            elif isinstance(x, (list, tuple)):
+                for v in x:
+                    yield from strings(v)
 
         norm = lambda s: re.sub(r"/+", "/", str(s).replace("\\", "/")).lower()
-        return norm(self.skill_marker) in norm(text(raw_args))
+
+        def absolute(p: str) -> str:
+            """归一化后是真绝对路径才返回（盘符或根目录开头），否则空串。"""
+            p = posixpath.normpath(p)
+            return p if re.match(r"^[a-z]:/", p) or p.startswith("/") else ""
+
+        marker = absolute(norm(self.skill_marker))
+        if not marker:
+            return False
+        # marker 可传目录（--skill <dir>）或文件（--skill <dir>/SKILL.md）：统一成文件路径
+        file_marker = marker if marker.endswith(".md") else marker + "/skill.md"
+        root = absolute(norm(self.cwd)) if self.cwd else ""
+        if marker in norm(" ".join(strings(raw_args))):
+            return True  # 绝对路径直配（read 工具 / 显式传绝对路径）
+
+        def resolve(tok: str, base: str) -> str:
+            got = absolute(tok)
+            if got:
+                return got
+            return posixpath.normpath(f"{base}/{tok}") if base else ""
+
+        for s in strings(raw_args):
+            base = root
+            # 按管道/命令分隔符切成“简单命令”：读取动词与 SKILL.md 必须落在同一段里
+            # （实测误报：`find . -name SKILL.md | head -20` 里的 head 曾让整个调用命中）
+            for seg in re.split(r"[;&|\n]+", norm(s)):
+                toks = [t for t in re.split(r"[\s'\"`()<>]+", seg) if t]
+                for i, tok in enumerate(toks):
+                    if tok == "cd" and i + 1 < len(toks):  # 同一串里跟踪 cd 目标
+                        base = resolve(toks[i + 1], base) or base
+                targets = [t for t in toks
+                           if t.endswith("skill.md") and resolve(t, base) == file_marker]
+                if not targets:
+                    continue
+                if any("/" in t for t in targets):
+                    return True  # 带目录分隔符 = 明确指到文件
+                if READ_VERBS.search(seg):
+                    return True  # 裸文件名：同一段里要真有读取动词
+        return False
 
     def result(self) -> dict:
         trace = {
@@ -120,9 +177,10 @@ class EventAggregator:
         return trace
 
 
-def parse_events(lines, early_exit: bool = False, skill_marker: str | None = None) -> dict:
+def parse_events(lines, early_exit: bool = False, skill_marker: str | None = None,
+                 cwd: str | None = None) -> dict:
     """把 pi --mode json 的事件流聚合为 trace。非法行计入 errors，不中断。"""
-    agg = EventAggregator(early_exit, skill_marker)
+    agg = EventAggregator(early_exit, skill_marker, cwd)
     for line in lines:
         agg.feed(line)
         if agg.stop:
@@ -205,7 +263,7 @@ def main():
         if not no_skill and skills:
             marker = str(Path(skills[0]).resolve())
         trace = parse_events(Path(events_file).read_text(encoding="utf-8", errors="replace").splitlines(),
-                             early_exit=bool(early_exit), skill_marker=marker)
+                             early_exit=bool(early_exit), skill_marker=marker, cwd=worktree)
         trace["model"] = model or os.environ.get(DEFAULT_MODEL_ENV)  # 宿主 pin：离线重算时至少记意图
         if out_path:
             Path(out_path).write_text(json.dumps(trace, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -265,7 +323,8 @@ def main():
             watchdog = threading.Timer(600, lambda: (killed_by_watchdog.set(), _kill_tree(proc)))
             watchdog.start()
             agg = EventAggregator(early_exit=True,
-                                  skill_marker=str(Path(skills[0]).resolve()) if (skills and not no_skill) else None)
+                                  skill_marker=str(Path(skills[0]).resolve()) if (skills and not no_skill) else None,
+                                  cwd=worktree)
             try:
                 for line in proc.stdout:
                     agg.feed(line)

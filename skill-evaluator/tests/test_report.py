@@ -155,6 +155,33 @@ def test_low_f1_is_fail(tmp_path):
     assert out["metrics"]["#1"]["verdict"] == "fail"
 
 
+def test_human_invoke_skill_skips_trigger_eval(tmp_path):
+    # disable-model-invocation=true（#7 resolved=human）：载体测不到“按 description 触发”，
+    # 照跑只会把载体限制记成 skill 的 fail → 标 skipped；实测数据仍留在 data 里作证据
+    write_inputs(tmp_path, {
+        "static.json": {"name": "s", "description": "d", "description_tokens": 10,
+                        "invoke": {"resolved": "human", "allowed": ["human"]},
+                        "errors": [], "warnings": [], "passed": True},
+        "score.json": {"trigger": {"precision": 0.5, "recall": 0.0, "f1": 0.0},
+                       "cost": "skipped", "necessity": "skipped", "passed": True}})
+    out = run_report(tmp_path)
+    m = out["metrics"]["#1"]
+    assert m["verdict"] == "skipped"
+    assert "human" in m["note"]
+    assert m["data"] == {"precision": 0.5, "recall": 0.0, "f1": 0.0}  # 证据不静默丢
+
+
+def test_both_invoke_skill_still_scored(tmp_path):
+    # 缺省（both）不受影响：照旧按 F1 裁决
+    write_inputs(tmp_path, {
+        "static.json": {"name": "s", "description": "d", "description_tokens": 10,
+                        "invoke": {"resolved": "both"},
+                        "errors": [], "warnings": [], "passed": True},
+        "score.json": {"trigger": {"precision": 0.5, "recall": 0.5, "f1": 0.5},
+                       "cost": "skipped", "necessity": "skipped", "passed": True}})
+    assert run_report(tmp_path)["metrics"]["#1"]["verdict"] == "fail"
+
+
 def test_idem_and_compare(tmp_path):
     write_inputs(tmp_path, {
         "idem.json": {"ratio": 0.2, "idempotent": True},

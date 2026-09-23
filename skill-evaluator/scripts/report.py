@@ -270,6 +270,14 @@ def build(d: Path, evalset_dir: Path | None = None) -> dict:
             m["#5"] = {"verdict": "pass" if (tok or {}).get("improvement", 0) > 0 else "fail",
                        "method": METHOD_RUN, "data": n,
                        "note": "三分量对比（#11）：token 为主判据，步数/耗时并列呈现"}
+    # #1 人调用型（#7 resolved=human）不适用触发评测：pi 的 formatSkillsForPrompt 会把
+    # disable-model-invocation=true 的 skill 从提示中滤除（实测：--skill 加载后模型答
+    # “无 available_skills 段”）——“按 description 触发”在该载体上结构上不可能，照跑只是把
+    # 载体限制记成 skill 的 fail。已实测的数据不丢，原样留在 data 里作证据，但不改判。
+    if isinstance(static, dict) and (static.get("invoke") or {}).get("resolved") == "human":
+        m["#1"] = {"verdict": "skipped", "method": METHOD_RUN, "data": m["#1"]["data"],
+                   "note": ("调用方式为 human（disable-model-invocation=true）：不跑触发评测，"
+                            "本指标不适用（SKILL.md 未声明触发式调用）")}
     # #1 触发集质量（ADR-0002 的执行检查）：照抄 description 的 prompt 会让 P/R 虚高 → 降级为 warn，
     # 不做整体闸门（与 ADR-0008 的区别：那是客观硬事实，这里是启发式阈值，疑似不该一票否决）
     ev = load(d, "evalset.json")

@@ -277,6 +277,20 @@ def test_evaluator_self_check_passes():
     assert "tests" in out["excluded"] and "evalsets" in out["excluded"]
 
 
+def test_self_check_ignores_skillrepos_copies(tmp_path):
+    # 跑过一次真实评测后，评估器目录里会出现 .skillrepos/<name>/ 副本（含 static_check.py 的
+    # 正则表）——副本不进排负面时，自检会在自己的副本上自命中 4 处 exfil（实测 237 测试挂 1）。
+    d = make_skill(tmp_path, "---\nname: s\ndescription: d\n---\nbody\n")
+    copy = d / ".skillrepos" / "s" / "scripts"
+    copy.mkdir(parents=True)
+    (copy / "static_check.py").write_text(
+        'EXFIL = [r"(?:\\.ssh/|id_rsa)", r"nc .* -e"]\n', encoding="utf-8")
+    out = run_check(d)
+    assert out["exfil"] == []      # 副本被剪枝，不扫
+    assert out["passed"] is True
+    assert any(".skillrepos" in e for e in out["excluded"])
+
+
 # --- #13 静态面扩为五组规则（ADR-0013）---
 
 def test_all_five_13_groups_always_present(tmp_path):
