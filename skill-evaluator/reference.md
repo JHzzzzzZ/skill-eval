@@ -23,7 +23,9 @@ SKILL.md 的细则层。指标编号 #N 对应 prompt.txt 的 19 条需求。
 
 每次 run 前重置工作树（ADR-0018）：触发/沙箱 run 共用同一个 worktree 时，前一个 run 写下的文件会被后一个 run 读到（实测并发探针里，一条 run 写的 `scratch/scan_all.py` 被另一条 run 当成仓库内容分析）。跑之前 `git -C <worktree> clean -fdx`，或每个 run 单独 `git worktree add`。
 
-prompt 不写沙箱外路径（ADR-0018）：worktree 只限定 cwd，不限定 agent 的写权限——实测一条带真实仓库路径的探针 prompt 让 agent 走出 worktree，改了评估器仓库自己的 `README.md`（已回滚）。评测集里的 prompt 只能引用沙箱内路径。
+prompt 不写沙箱外路径（ADR-0018/0027）：worktree 只限定 cwd，不限定 agent 的写权限——实测一条带真实仓库路径的探针 prompt 让 agent 走出 worktree，改了评估器仓库自己的 `README.md`（已回滚）。评测集里的 prompt 只能引用沙箱内路径；`evalset_check.py` 会把绝对路径 / `..` 逃逸报成 `out_of_sandbox`（clean=false）。
+
+越界检测（ADR-0027）：跑 run 时带上 `--guard-repo <评估器仓库>`（可重复），trace 里会多出 `guard.escaped_writes`（run 前后 `git status` 的新增条目）；`--guard-revert` 才回退（未跟踪→删、已跟踪改动→`git checkout --`）。默认只报告，避免吃掉并行写入者的改动。
 
 权限边界（#13）：worktree 方案下只能做到静态扫描 + trace 审计（看 trace 里是否出现了不该有的命令），做不到强制拦截。扫描规则见 `scripts/static_check.py` 内的五组正则（ADR-0013）：危险命令 / 硬编码凭据 / 注入指令 / 数据外发 / 混淆。
 
@@ -108,7 +110,12 @@ evalsets/<name>/v1/
 
 可选 `--thinking <off|minimal|low|medium|high|xhigh|max>` 控制思考档位。LLM 评审（judges/）与触发判定（trigger_judge.py）用**同一个模型配置**，保证与被测运行同源。评测集 AI 审核是唯一例外，见 § 评测集 AI 审核。
 
-可配参数：重复运行 N=3；IDEMPOTENT_MAX_RATIO=0.5（idem.py）；DESCRIPTION_TOKEN_LIMIT=100、NAME_MAX_CHARS=64、SKILL_MD_BODY_MAX_LINES=150（static_check.py；#3 行数主源，超限仅 warn，ADR-0017）、`--exclude <路径>`（相对 skill 目录解析）、`--no-default-excludes`（static_check.py）；触发集每组最小条数 10（evalset_count.py，环境变量 SKILL_EVAL_TRIGGER_MIN / CLI --min*）；F1_PASS=0.7、COST_CV_MAX=0.5（report.py，#12 作用于逐 case 变异系数中位数，无逐 case 数据时回落 pooled，见 ADR-0016）；ECHO_COVERAGE_MAX=0.6、DUP_COVERAGE_MAX=0.8（evalset_check.py）；ANSWER_SIM_MIN=0.5、AGREEMENT_MIN=0.8（model_robust.py）；TRIGGER_PASS_SCORE=0.5（trigger_judge.py，--threshold 可覆盖）；JUDGE_SAMPLES=1（LLM 评审单发次数，3 = 逐项取中位数，ADR-0020）。
+可配参数：重复运行 N=3；IDEMPOTENT_MAX_RATIO=0.5（idem.py）；DESCRIPTION_TOKEN_LIMIT=100、NAME_MAX_CHARS=64、SKILL_MD_BODY_MAX_LINES=150（static_check.py；#3 行数主源，超限仅 warn，ADR-0017）、`--exclude <路径>`（相对 skill 目录解析）、`--no-default-excludes`（static_check.py）；触发集每组最小条数 10（evalset_count.py，环境变量 SKILL_EVAL_TRIGGER_MIN / CLI --min*）；F1_PASS=0.7、COST_CV_MAX=0.5（report.py，#12 作用于逐 case 变异系数中位数，无逐 case 数据时回落 pooled，见 ADR-0016）；ECHO_COVERAGE_MAX=0.6、DUP_COVERAGE_MAX=0.8（evalset_check.py）；ANSWER_SIM_MIN=0.5、AGREEMENT_MIN=0.8（model_robust.py）；TRIGGER_PASS_SCORE=0.5（trigger_judge.py，--threshold 可覆盖）；ARGS_MAX_CHARS=2000（trace_run.py，仅对字符串形态的 args 生效，ADR-0024）；JUDGE_SAMPLES=1（LLM 评审单发次数，3 = 跑 3 次后 `judge_runner.py --merge` 逐项多数票，ADR-0028）。
+
+判据口径（容易被误读，单独列）：#5 = 三分量多数票（tokens/tool_calls/seconds 各一票，ADR-0026）；
+#6 = 消融对比量按 `higher_is_better` 定向（ADR-0026）；#8 = 全部 golden trace 取并集，依赖信号分强弱档
+（弱档要求报错里带含分隔符的路径，agent 自己写错相对路径不算，ADR-0025）；#10 = 需 `--case` 才能把判据
+限定在用例范围内（ADR-0024）；#14 = 需 `evolution.json` 才能裁决（ADR-0025）；#1 = human 型不适用（ADR-0018）。
 
 ## 执行载体与扩展点（ADR-0007）
 
@@ -132,7 +139,12 @@ evalsets/<name>/v1/
 - `static.json`：static_check.py --out（脚本自写 UTF-8；stdout 同步回显。禁 shell 重定向——GBK 控制台会产 GBK 文件）。全部脚本入口接 `scripts/_console.py::fix()`：GBK 控制台下回显不可编码字符降级为替换符，不崩、退出码 0；`--out` 文件不受影响。含 #13 的五组（`dangerous`/`secrets`/`injection`/`exfil`/`obfuscation`）、`hardcoded`、`excluded`/`ignored`（ADR-0012）、`scan_excluded_dirs`（ADR-0012：运行面之外）、`stale_refs`（依赖新鲜度，ADR-0009 延伸：SKILL.md 声明但包内不存在的路径引用，warning 级）、`skill_md_body_lines`/`skill_md_body_max_lines`（#3 行数主源与自描述阈值，ADR-0017：口径 = frontmatter 之后全文行数，含空行与代码块）
 - `score.json`：score.py --out（同上）；含 `cost`（多次运行汇总）+ `cost_by_case`（逐 case，仅全条目带 case 时出现）
 - `idem.json`：多次 idem.py --out 结果的聚合 `{"ratio", "idempotent"}`
-- `golden.json`：主运行的 golden trace（#8 唯一数据源）
+- `golden.json`：主运行的 golden trace（#8 的数据源之一）；同时存在 `traces/golden-*.json` 时，
+  #8 取**全部** golden trace 的报错并集（`data.sources` 记录条数，ADR-0025）
+- `ablation.json`：`{"metric", "full", "ablated", "higher_is_better", "deleted": [...]}`（#6 实证，
+  兼容旧 `f1_full`/`f1_ablated`；只有 `reason` 时保留评审面裁决，ADR-0026）
+- `evolution.json`：`evolution.py --out` 的跨版本对比（#14 的数据源，ADR-0025）
+- `traces/`：逐 run 的原始 trace；`--guard-repo` 时另带 `guard.escaped_writes`（越界写入，ADR-0027）
 - `compare.json`：compare.py 裁决（#9）
 - `process.json`：process.py 裁决（#10）
 - `ablation.json`：`{"f1_full", "f1_ablated", "deleted": [...]}`（#6 实证）
@@ -152,6 +164,9 @@ evalsets/<name>/v1/
 输出：结构化 JSON（`{items: [{name, pass, quote}], score, evidence, reason}`，evidence 必须引用原文；**score = pass 项数/总项数**，0~1 两位小数，judge_runner.py 强制校验）。rubric 文件在 `judges/`。
 
 流程门禁：主 agent 按 rubric 产出 JSON → 运行 `python scripts/judge_runner.py --validate <文件>` → `valid=true` 才能进报告；校验失败把 errors 原文回给 LLM 重产一次，再失败则该指标标 `skipped` 并注明。原始事件流存 `raw/judge-events/<metric>.events.jsonl`（裁决有争议时可回看模型到底看到了什么）；事件流里出现 `tool_execution_start` 则该次评审作废重跑（ADR-0022）。
+
+`JUDGE_SAMPLES=3` 时：同一 prompt 跑 3 次 → `python scripts/judge_runner.py --merge <a.json> <b.json> <c.json> --out judges/<metric>.json`
+（逐项多数票，分歧项与各次得分留在输出里，ADR-0028）。
 
 检查点极性：每个 rubric 的检查点分两向——**能力清单**（做到才 pass，如 precheck 的环境校验置前）与**问题清单**（无此类问题才 pass，如 deps 的无未打包外部依赖）。极性逐条定义，同一 rubric 内可混向（实际也混）；items 契约与 score 公式不感知极性，新写 rubric 时只需保证每条检查点的 pass 条件在文案里可判定，不需要把措辞统一成一向。
 
@@ -213,9 +228,17 @@ evalsets/<name>/results/<version>/
 
 ## 三期工具
 
-- `scripts/process.py --skill <SKILL.md> --trace <trace.json>`：#10 过程审计，LLM 对照声明与 trace 找无意义步骤，裁决 `{meaningless, score, reason}` 落 `process.json`
-- `scripts/ablation.py --skill <dir> --delete "标题" --out <dir>`：#6 消融——按 ## 标题删段生成消融副本，用消融副本重跑触发评测对比 F1（judges/redundancy.md 的 evidence 提供候选段落）
-- `scripts/evolution.py evalsets/<name>`：#14 版本演进——读 results/*/report.json，输出跨版本每指标 verdict 变化与最新结论
+- `scripts/process.py --skill <SKILL.md> --trace <trace.json> [--case <用例.json>]`：#10 过程审计，
+  LLM 对照声明与 trace 找无意义步骤，裁决 `{meaningless, score, reason}` 落 `process.json`。
+  **给 `--case` 时判据限定在用例范围内**（用例没要求的后续步骤不算无意义，ADR-0024）；
+  与 #9（expect vs actual）结论相反时，报告里要写明分歧，不直接采信任一方
+- `scripts/ablation.py --skill <dir> --delete "标题" --out <dir>`：#6 消融——按 ## 标题删段生成消融副本，
+  再用消融副本跑对比。`ablation.json` 形状：`{"metric": str, "full": num, "ablated": num,
+  "higher_is_better": bool, "deleted": [...]}`（兼容旧 `f1_full`/`f1_ablated`）——human 型 skill 不跑 T2，
+  对比量改用 T3 成本/质量分（ADR-0026）；只有 `reason` 时保留评审面裁决并附原因
+- `scripts/evolution.py evalsets/<name> [--out <results/<version>/evolution.json>]`：#14 版本演进——读
+  results/*/report.json，输出跨版本每指标 verdict 变化与最新结论；`--out` 落到某个版本目录后，
+  `report.py` 才会把 #14 判成 pass（comparable=true）/warn（false），否则 skipped（ADR-0025）
 
 三者实调 LLM 时同样走 `SKILL_EVAL_MODEL` 环境变量或显式 `--model`。
 

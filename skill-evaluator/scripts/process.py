@@ -18,15 +18,25 @@ from compare import extract_answer  # 同一 JSON 提取逻辑
 from _subprocess import ask_json, build_mode_args
 
 
-def build_prompt(skill_text: str, trace: dict) -> str:
+def build_prompt(skill_text: str, trace: dict, case: dict | None = None) -> str:
     steps = json.dumps(trace.get("steps", []), ensure_ascii=False, indent=2)
-    errors = json.dumps(trace.get("errors", []), ensure_ascii=False)
+    scope = ""
+    if case:
+        scope = (
+            "\n本次运行的**用例范围**（判分必须限定在这个范围内）：\n"
+            f"- 用户请求：{case.get('prompt', '')}\n"
+            f"- 期望产出：{case.get('expect', '')}\n"
+            "用例没要求的步骤（例如用例只说「只跑 T0」，那就不会出现评测集/触发/评审步骤）"
+            "**不算无意义**；只把「与 skill 声明流程无关、与用例要求无关」的步骤记为无意义。\n"
+        )
     return (
-        "你是 skill 运行过程审计员。对照 skill 的声明和实际执行 trace，找出\"无意义步骤\"：\n"
+        "你是 skill 运行过程审计员。对照 skill 的声明、用例范围和实际执行 trace，找出\"无意义步骤\"：\n"
         "- 与声明的流程无关的操作\n"
         "- 重复已完成的工作（如重复下载/重复读取同一文件）\n"
-        "- 超出步骤范围的探索性操作\n\n"
-        f"skill 声明：\n{skill_text}\n\n"
+        "- 超出用例范围、且与声明流程无关的探索性操作\n"
+        "- 不得把「用例没要求的后续步骤未出现」当作问题（那是用例限定的）\n\n"
+        f"skill 声明：\n{skill_text}\n"
+        f"{scope}\n"
         f"实际 trace 步骤：\n{steps}\n\n"
         f"运行报错：\n{errors_placeholder(trace)}\n\n"
         '只回答一个 JSON 对象：{"meaningless": ["步骤描述..."], "score": 0|1|2, "reason": "一句话"}\n'
@@ -40,7 +50,7 @@ def errors_placeholder(trace: dict) -> str:
 
 def main():
     args = sys.argv[1:]
-    skill_file = trace_file = model = thinking = events_file = out_path = None
+    skill_file = trace_file = model = thinking = events_file = out_path = case_file = None
     build_only = False
     i = 0
     while i < len(args):
@@ -48,6 +58,8 @@ def main():
             skill_file = args[i + 1]; i += 2
         elif args[i] == "--trace":
             trace_file = args[i + 1]; i += 2
+        elif args[i] == "--case":
+            case_file = args[i + 1]; i += 2
         elif args[i] == "--model":
             model = args[i + 1]; i += 2
         elif args[i] == "--thinking":
@@ -61,15 +73,17 @@ def main():
         else:
             i += 1
     if not skill_file or not trace_file:
-        print("usage: process.py --skill <SKILL.md> --trace <trace.json>", file=sys.stderr)
+        print("usage: process.py --skill <SKILL.md> --trace <trace.json> [--case <用例.json>]",
+              file=sys.stderr)
         sys.exit(2)
     try:
         skill_text = Path(skill_file).read_text(encoding="utf-8", errors="replace")
         trace = json.loads(Path(trace_file).read_text(encoding="utf-8"))
+        case = json.loads(Path(case_file).read_text(encoding="utf-8")) if case_file else None
     except (OSError, json.JSONDecodeError) as e:
         print(f"read fail: {e}", file=sys.stderr)
         sys.exit(2)
-    prompt = build_prompt(skill_text, trace)
+    prompt = build_prompt(skill_text, trace, case)
 
     if build_only:
         print(json.dumps({"prompt": prompt}, ensure_ascii=False))
@@ -90,7 +104,7 @@ def main():
         answer = {"meaningless": [], "score": 0,
                   "reason": f"LLM 回答无合法 score 字段: {str(answer)[:200]}"}
     if out_path:
-        Path(out_path).write_text(json.dumps(answer, ensure_ascii=False), encoding="utf-8")
+        _console.write_text(out_path, json.dumps(answer, ensure_ascii=False))
     print(json.dumps(answer, ensure_ascii=False))
 
 

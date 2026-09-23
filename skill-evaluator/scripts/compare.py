@@ -129,7 +129,7 @@ def main():
             out = {"mean_score": mean, "match": matched * 2 > len(per),
                    "per_case": per, "note": f"{matched}/{len(per)} case 匹配"}
         if out_path:
-            Path(out_path).write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
+            _console.write_text(out_path, json.dumps(out, ensure_ascii=False, indent=2))
         print(json.dumps(out, ensure_ascii=False))
         return
 
@@ -162,7 +162,7 @@ def main():
     if not isinstance(answer.get("match"), bool):
         answer = {"match": False, "score": 0, "reason": f"LLM 回答无合法 match 字段: {str(answer)[:200]}"}
     if out_path:
-        Path(out_path).write_text(json.dumps(answer, ensure_ascii=False), encoding="utf-8")
+        _console.write_text(out_path, json.dumps(answer, ensure_ascii=False))
     print(json.dumps(answer, ensure_ascii=False))
 
 

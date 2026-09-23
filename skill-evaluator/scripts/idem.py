@@ -51,7 +51,7 @@ def main():
     }
     text = json.dumps(out, ensure_ascii=False)
     if out_path:
-        out_path.write_text(text, encoding="utf-8")
+        _console.write_text(out_path, text)
     print(text)
 
 

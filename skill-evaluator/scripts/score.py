@@ -127,7 +127,7 @@ def main():
         out["cost_by_case"] = cost_by_case  # 缺 case 字段时不产出（旧产物/旧 harness 保持原样）
     text = json.dumps(out, ensure_ascii=False)
     if out_path:
-        out_path.write_text(text, encoding="utf-8")
+        _console.write_text(out_path, text)
     print(text)
 
 

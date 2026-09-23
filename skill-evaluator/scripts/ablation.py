@@ -70,7 +70,7 @@ def main():
         sys.exit(2)
     out_dir.mkdir(parents=True, exist_ok=True)
     new_text = "".join(body for t, body in sections if t not in delete)
-    (out_dir / "SKILL.md").write_text(new_text, encoding="utf-8")
+    _console.write_text(out_dir / "SKILL.md", new_text)
     for f in skill_dir.iterdir():
         if f.name == "SKILL.md":
             continue

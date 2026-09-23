@@ -145,3 +145,55 @@ def test_no_stale_score_placeholder_in_rubrics():
     # 历史笔误：evidence 模板写成“score=2 时可为空数组”，而 #5 契约里没有 2 分档（实际是 score=1）
     for f in sorted(JUDGES_DIR.glob("*.md")):
         assert "score=2" not in f.read_text(encoding="utf-8"), f"{f.name} 残留 score=2 笔误"
+
+
+# --- Slice 32: 多次单发评审合并（JUDGE_SAMPLES=3 的落地，ADR-0028）---
+
+def item(name, passed, quote="引用原文"):
+    return {"name": name, "pass": passed, "quote": quote}
+
+
+def sample(items, score=None):
+    return {"items": items, "score": score if score is not None else
+            round(sum(1 for i in items if i["pass"]) / len(items), 2),
+            "evidence": [] if all(i["pass"] for i in items) else ["有未通过项"],
+            "reason": "样本"}
+
+
+def test_merge_majority_vote(tmp_path):
+    a = tmp_path / "a.json"; b = tmp_path / "b.json"; c = tmp_path / "c.json"
+    for p, v in ((a, True), (b, True), (c, False)):
+        p.write_text(json.dumps(sample([item("x", v), item("y", True)]), ensure_ascii=False),
+                     encoding="utf-8")
+    out = tmp_path / "merged.json"
+    r = subprocess.run([sys.executable, str(SCRIPT), "--merge", str(a), str(b), str(c),
+                        "--out", str(out)], capture_output=True, text=True,
+                       encoding="utf-8", errors="replace")
+    assert r.returncode == 0, r.stderr
+    merged = json.loads(out.read_text(encoding="utf-8"))
+    assert merged["items"][0]["pass"] is True      # 2:1 多数票
+    assert merged["score"] == 1.0
+    assert merged["samples"] == 3
+    assert merged["disagreements"] == [{"name": "x", "pass": 2, "votes": 3}]
+    assert json.loads(r.stdout)["valid"] is True
+
+
+def test_merge_minority_item_needs_evidence(tmp_path):
+    a = tmp_path / "a.json"; b = tmp_path / "b.json"
+    a.write_text(json.dumps(sample([item("x", False, "原文 A")]), ensure_ascii=False), encoding="utf-8")
+    b.write_text(json.dumps(sample([item("x", True)]), ensure_ascii=False), encoding="utf-8")
+    r = subprocess.run([sys.executable, str(SCRIPT), "--merge", str(a), str(b)],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
+    merged = json.loads(r.stdout)["merged"]
+    assert merged["items"][0]["pass"] is False      # 平票保守算不通过
+    assert merged["score"] == 0.0
+    assert merged["evidence"] and "原文 A" in merged["evidence"][0]
+
+
+def test_merge_rejects_invalid_sample(tmp_path):
+    a = tmp_path / "a.json"
+    a.write_text(json.dumps({"items": [], "score": 0, "evidence": [], "reason": "x"}),
+                 encoding="utf-8")
+    r = subprocess.run([sys.executable, str(SCRIPT), "--merge", str(a)],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
+    assert json.loads(r.stdout)["valid"] is False

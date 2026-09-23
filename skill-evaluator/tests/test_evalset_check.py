@@ -143,3 +143,26 @@ def test_missing_skill_arg_exits_2(tmp_path):
     r = subprocess.run([sys.executable, str(SCRIPT), str(ev)], capture_output=True, text=True, encoding="utf-8", errors="replace")
     assert r.returncode == 2
     assert "usage" in r.stderr
+
+
+# --- 沙箱外路径检查（ADR-0027）：prompt 带绝对路径/.. 逃逸 → clean=false ---
+
+def test_out_of_sandbox_paths_flagged(tmp_path):
+    skill = make_skill(tmp_path)
+    es = make_evalset(tmp_path, should=["评估 C:/Users/12967/Desktop/code/x 这个包"] + CLEAN_PROMPTS)
+    cases = es / "cases"
+    cases.mkdir(parents=True, exist_ok=True)
+    (cases / "c1.json").write_text(json.dumps({"prompt": "评估 ../outside 目录", "expect": "x"},
+                                              ensure_ascii=False), encoding="utf-8")
+    out = run(es, skill)
+    assert out["clean"] is False
+    assert len(out["out_of_sandbox"]) == 2
+    assert out["cases_checked"] == 1
+    assert "沙箱外路径" in out["note"]
+
+
+def test_clean_prompts_have_no_out_of_sandbox(tmp_path):
+    skill = make_skill(tmp_path)
+    es = make_evalset(tmp_path, should=list(CLEAN_PROMPTS), should_not=["帮我看看 todos 里还剩几条"])
+    out = run(es, skill)
+    assert out["out_of_sandbox"] == []

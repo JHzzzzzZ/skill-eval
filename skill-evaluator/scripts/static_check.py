@@ -251,7 +251,7 @@ def emit(out: dict, out_path) -> None:
     """stdout 同步回显；--out 存在时另写 UTF-8 文件（禁止 shell 重定向的 GBK 风险）。"""
     text = json.dumps(out, ensure_ascii=False)
     if out_path:
-        out_path.write_text(text, encoding="utf-8")
+        _console.write_text(out_path, text)
     print(text)
 
 

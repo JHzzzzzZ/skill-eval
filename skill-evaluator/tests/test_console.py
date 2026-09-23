@@ -51,3 +51,15 @@ def test_trace_run_gbk_no_crash(tmp_path):
     assert b"UnicodeEncodeError" not in r.stderr
     trace = json.loads(r.stdout.decode("gbk", errors="replace"))
     assert trace["answer"].startswith("↔") or "↔" in trace["answer"] or True
+
+
+# --- --out 建父目录（ADR-0024 的 A3）---
+
+def test_write_text_creates_parent_dirs(tmp_path):
+    target = tmp_path / "results" / "auto-x" / "static.json"
+    code = ("import sys; sys.path.insert(0, r'%s'); import _console; "
+            "_console.write_text(r'%s', '{\"ok\": true}')" % (str(SCRIPTS).replace("\\\\", "\\"),
+                                                              str(target).replace("\\\\", "\\")))
+    r = run_py(code, encoding="utf-8")
+    assert r.returncode == 0, r.stderr[-300:]
+    assert json.loads(target.read_text(encoding="utf-8")) == {"ok": True}

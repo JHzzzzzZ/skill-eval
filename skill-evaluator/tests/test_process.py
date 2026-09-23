@@ -68,3 +68,26 @@ def test_answer_not_json_conservative_fail(tmp_path):
     out = json.loads(run_process(["--skill", str(s), "--trace", str(t),
                                   "--events", str(f)]).stdout)
     assert out["score"] == 0 and "reason" in out
+
+
+# --- #10 审计范围：用例范围必须进 prompt（ADR-0024）---
+
+def test_case_scope_included_in_prompt(tmp_path):
+    s = make_skill(tmp_path, "## 流程\n1. 前置自检\n2. 静态检查\n")
+    t = make_trace(tmp_path, [{"tool": "bash", "args_hash": "a1"}])
+    case = tmp_path / "c1.json"
+    case.write_text(json.dumps({"prompt": "只跑 T0 静态档", "expect": "给出报告路径与结论"},
+                               ensure_ascii=False), encoding="utf-8")
+    r = run_process(["--build-only", "--skill", str(s), "--trace", str(t), "--case", str(case)])
+    assert r.returncode == 0, r.stderr
+    prompt = json.loads(r.stdout)["prompt"]
+    assert "只跑 T0 静态档" in prompt and "给出报告路径与结论" in prompt
+    assert "用例范围" in prompt and "不算无意义" in prompt   # 判据被限定在用例范围内
+
+
+def test_without_case_prompt_still_works(tmp_path):
+    s = make_skill(tmp_path, "## 流程\n1. 前置自检\n")
+    t = make_trace(tmp_path, [{"tool": "bash", "args_hash": "a1"}])
+    r = run_process(["--build-only", "--skill", str(s), "--trace", str(t)])
+    assert r.returncode == 0, r.stderr
+    assert "本次运行的**用例范围**" not in json.loads(r.stdout)["prompt"]   # 未给 --case 时不注入用例段

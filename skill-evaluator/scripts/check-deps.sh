@@ -45,10 +45,22 @@ else
   warn "pytest 未装：pip install -r requirements.txt（仅跑 tests 需要）"
 fi
 
-# --- 包内文件齐备 ---
-for f in SKILL.md reference.md scripts/static_check.py judges/brevity.md; do
-  if [ -f "$ROOT/$f" ]; then ok "$f"; else bad "缺 $ROOT/$f（评估器自身损坏）"; fi
+# --- 包内文件齐备（#16「声明与实现一致」：正文说“包内文件齐备”，就得真查齐）---
+# 为什么用显式清单而不是 `for f in "$ROOT"/scripts/*.py`：glob 只会展开成**已存在**的文件，
+# 删掉任何一个都拓不到（实测：删 report.py + contract.md 仍退出 0）。清单 = 流程声明要用的东西。
+REQUIRED="SKILL.md reference.md requirements.txt LICENSE scripts/check-deps.sh
+scripts/static_check.py scripts/evalset_count.py scripts/evalset_check.py scripts/trace_run.py
+scripts/trigger_judge.py scripts/judge_runner.py scripts/score.py scripts/idem.py scripts/compare.py
+scripts/process.py scripts/report.py scripts/evolution.py scripts/model_robust.py scripts/ablation.py
+judges/brevity.md judges/redundancy.md judges/fallback.md judges/precheck.md judges/contract.md
+judges/side-effects.md judges/deps.md judges/trigger.md"
+MISSING=0
+for f in $REQUIRED; do
+  if [ -f "$ROOT/$f" ]; then :; else bad "缺 $ROOT/$f（评估器自身损坏）"; MISSING=1; fi
 done
+if [ "$MISSING" -eq 0 ]; then
+  ok "流程所需文件齐备（$(printf '%s\n' $REQUIRED | wc -l | tr -d ' ') 个）"
+fi
 
 # --- 可选：pi CLI 与模型（沙箱运行 + LLM 评审用；ADR-0007/0009）---
 if command -v pi >/dev/null 2>&1 || command -v pi.cmd >/dev/null 2>&1; then

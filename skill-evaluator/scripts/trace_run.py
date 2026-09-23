@@ -71,11 +71,16 @@ class EventAggregator:
         if t == "tool_execution_start":
             raw_args = ev.get("args")
             args_hash = hashlib.sha256(json.dumps(raw_args, sort_keys=True).encode()).hexdigest()[:8]
-            # 有界保留原始 args（ISS-3: 触发判定需要第一手证据）
-            if isinstance(raw_args, str) and len(raw_args) > 200:
-                raw_args = raw_args[:200]
-            self.steps.append({"tool": ev.get("toolName", "?"), "args": raw_args, "args_hash": args_hash})
-            if self.early_exit and self._hit_marker(raw_args):
+            hit = self.early_exit and self._hit_marker(raw_args)  # 用完整 args 判命中
+            step = {"tool": ev.get("toolName", "?"), "args": raw_args, "args_hash": args_hash}
+            # 有界保留原始 args（ISS-3：触发判定/过程审计要第一手证据）。旧版上限 200 字符：
+            # 实测 pi 的 bash/read 工具 args 是 **dict**（{"command": ...}），该分支对它们从未生效，
+            # 而字符串形态的工具参数会被切到 200。上限提到 2000 并在截断时留标记（ADR-0024）。
+            if isinstance(raw_args, str) and len(raw_args) > ARGS_MAX_CHARS:
+                step["args"] = raw_args[:ARGS_MAX_CHARS]
+                step["args_truncated"] = True
+            self.steps.append(step)
+            if hit:
                 self.stop = True  # 加载事件 = 触发决定点：后续 token 不再花
                 return
         elif t == "tool_execution_end" and ev.get("isError"):
@@ -190,6 +195,36 @@ def parse_events(lines, early_exit: bool = False, skill_marker: str | None = Non
 
 DEFAULT_MODEL_ENV = "SKILL_EVAL_MODEL"  # 环境变量作默认模型，--model 显式覆盖
 
+ARGS_MAX_CHARS = 2000  # 可配：step.args 是字符串时的保留上限（dict 形态原样保留，见 ADR-0024）
+
+
+def _porcelain(repo: str) -> set:
+    """仓库脏状态快照（越界写入检测的基准）。非 git 仓库/命令不可用 → 空集。"""
+    p = subprocess.run(["git", "-C", repo, "status", "--porcelain"], capture_output=True,
+                       text=True, errors="replace")
+    if p.returncode != 0:
+        return set()
+    return {line.rstrip() for line in p.stdout.splitlines() if line.strip()}
+
+
+def _revert_escape(repo: str, lines) -> list:
+    """把越界写入退回原状（--guard-revert）：未跟踪→删；已跟踪的改/删→checkout 还原。"""
+    done = []
+    for line in lines:
+        status, path = line[:2].strip(), line[3:].strip().strip('"')
+        if not path:
+            continue
+        full = Path(repo) / path
+        if status == "??":
+            if full.is_dir():
+                shutil.rmtree(full, ignore_errors=True)
+            elif full.exists():
+                full.unlink()
+        else:
+            subprocess.run(["git", "-C", repo, "checkout", "--", path], capture_output=True)
+        done.append(path)
+    return done
+
 
 def build_args(worktree: str, prompt: str, skill=None,
                model: str = None, thinking: str = None) -> list:
@@ -266,7 +301,7 @@ def main():
                              early_exit=bool(early_exit), skill_marker=marker, cwd=worktree)
         trace["model"] = model or os.environ.get(DEFAULT_MODEL_ENV)  # 宿主 pin：离线重算时至少记意图
         if out_path:
-            Path(out_path).write_text(json.dumps(trace, ensure_ascii=False, indent=2), encoding="utf-8")
+            _console.write_text(out_path, json.dumps(trace, ensure_ascii=False, indent=2))
         print(json.dumps(trace, ensure_ascii=False))
         return
 
@@ -365,9 +400,24 @@ def main():
         trace = parse_events([])
         trace["errors"] = ["运行超时（600s）"]
         trace["passed"] = False
+    if guard_before:
+        # 越界写入检测（ADR-0027）：worktree 只限定 cwd，不限定写权限——实测 agent 会走出沙箱
+        # 改真实仓库（README.md、judges/*.md、自己造 scratch/）。run 前后各拍一次 git 脏状态，
+        # 新增条目即越界；--guard-revert 才回退（默认只报告，避免覆盖并行编辑）。
+        guard = {"repos": [], "escaped_writes": [], "reverted": []}
+        for repo, before in guard_before.items():
+            after = _porcelain(repo)
+            new = sorted(after - before)
+            guard["repos"].append({"path": repo, "new_entries": len(new)})
+            if new:
+                guard["escaped_writes"].extend(f"{repo}: {line}" for line in new)
+                if guard_revert:
+                    guard["reverted"] = _revert_escape(repo, new)
+                print(f"[guard] 检测到 {len(new)} 处越界写入：{new[:5]}", file=sys.stderr)
+        trace["guard"] = guard
     if out_path:
         trace["host"] = host
-        Path(out_path).write_text(json.dumps(trace, ensure_ascii=False, indent=2), encoding="utf-8")
+        _console.write_text(out_path, json.dumps(trace, ensure_ascii=False, indent=2))
     trace["host"] = host
     print(json.dumps(trace, ensure_ascii=False))
 

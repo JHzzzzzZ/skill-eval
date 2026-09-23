@@ -123,7 +123,7 @@ def main():
            reports[versions[-1]].get("conclusion") if versions else None,
            "evaluator_versions": ev_versions, "comparable": comparable, "evaluator_note": ev_note}
     if out_path:
-        out_path.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
+        _console.write_text(out_path, json.dumps(out, ensure_ascii=False, indent=2))
     print(json.dumps(out, ensure_ascii=False))
 
 

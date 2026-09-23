@@ -12,6 +12,7 @@ stdout 契约（字段恒输出）：
   "echoes_name":        [{"file", "prompt", "name"}],
   "duplicates":         [{"a", "b", "coverage"}],      # 同一组内近似重复 → 覆盖度虚高
   "conflicts":          [{"should", "should_not", "coverage"}],  # 同句同时出现在两组 → 自相矛盾
+  "out_of_sandbox":    [{"file", "prompt", "token"}],  # prompt 引用了沙箱外路径（ADR-0027）
   "note": str
 }
 
@@ -32,6 +33,11 @@ from static_check import parse_frontmatter
 ECHO_COVERAGE_MAX = 0.6  # prompt 对 description 的 3-gram 覆盖率上限（可配）
 DUP_COVERAGE_MAX = 0.8   # 组内两条 prompt 的互相覆盖率上限（可配）
 NGRAM = 3
+
+# 沙箱外路径（ADR-0027）：worktree 只限定 cwd，不限定写权限——实测 prompt 里带真实仓库路径时
+# agent 会走出沙箱改真实仓库。绝对路径 / ~ / .. 逃逸都算。
+ABS_PATH_RE = re.compile(r"(?:[A-Za-z]:[\\/]|~/|/(?:home|Users|tmp|mnt|var|opt)/)")
+ESCAPE_RE = re.compile(r"(?:^|[\s\"'=])\.\.[\\/]")
 
 GROUPS = ("should", "should-not", "confusable")
 
@@ -99,6 +105,34 @@ def find_conflicts(should: list, should_not: list, max_cov: float):
     return out
 
 
+def load_cases(cases_dir: Path, errors: list) -> list:
+    """读 cases/*.json 的 prompt（T3 用例）。非法文件计入 errors，不崩。"""
+    out = []
+    for f in sorted(cases_dir.glob("*.json")) if cases_dir.is_dir() else []:
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as e:
+            errors.append(f"{f.name}: {e}")
+            continue
+        if isinstance(data, dict) and data.get("prompt"):
+            out.append({"file": f"cases/{f.name}", "prompt": str(data["prompt"]),
+                        "norm": normalize(data["prompt"])})
+    return out
+
+
+def find_out_of_sandbox(items: list) -> list:
+    """找 prompt 里的沙箱外路径引用（绝对路径或 .. 逃逸）。"""
+    out = []
+    for it in items:
+        text = str(it.get("prompt") or "")
+        m = ABS_PATH_RE.search(text)
+        if m:
+            out.append({"file": it["file"], "prompt": text[:80], "token": m.group(0)})
+        elif ESCAPE_RE.search(text):
+            out.append({"file": it["file"], "prompt": text[:80], "token": ".."})
+    return out
+
+
 def check(evalset_dir: Path, skill_dir: Path) -> dict:
     errors = []
     triggers = evalset_dir / "triggers"
@@ -127,6 +161,8 @@ def check(evalset_dir: Path, skill_dir: Path) -> dict:
     for g in GROUPS:
         duplicates += find_duplicates(groups[g], DUP_COVERAGE_MAX)
     conflicts = find_conflicts(groups["should"], groups["should-not"], DUP_COVERAGE_MAX)
+    cases = load_cases(evalset_dir / "cases", errors)
+    oos = find_out_of_sandbox([*[i for g in GROUPS for i in groups[g]], *cases])
 
     if checked == 0:
         clean, note = None, "无可检查的触发 prompt（triggers/ 缺失或为空），#1 触发集质量未判"
@@ -140,15 +176,17 @@ def check(evalset_dir: Path, skill_dir: Path) -> dict:
             problems.append(f"{len(duplicates)} 组组内近似重复 prompt")
         if conflicts:
             problems.append(f"{len(conflicts)} 组同句同时出现在 should 与 should-not")
+        if oos:
+            problems.append(f"{len(oos)} 条 prompt 引用沙箱外路径（agent 会走出 worktree 改真实仓库，ADR-0027）")
         clean = not problems
         note = (f"检查 {checked} 条 prompt：无照抄/重复/冲突" if clean
                 else f"检查 {checked} 条 prompt：" + "；".join(problems) + "——#1 指标可能虚高，建议改写触发集")
     if errors:
         note += f"（另有 {len(errors)} 条无法解析，见 errors）"
 
-    return {"checked": checked, "clean": clean,
+    return {"checked": checked, "cases_checked": len(cases), "clean": clean,
             "echoes_description": echoes_desc, "echoes_name": echoes_name,
-            "duplicates": duplicates, "conflicts": conflicts,
+            "duplicates": duplicates, "conflicts": conflicts, "out_of_sandbox": oos,
             "errors": errors, "note": note}
 
 
@@ -176,7 +214,7 @@ def main():
         sys.exit(2)
     out = check(evalset_dir, skill_dir)
     if out_path:
-        out_path.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
+        _console.write_text(out_path, json.dumps(out, ensure_ascii=False, indent=2))
     print(json.dumps(out, ensure_ascii=False))
 
 

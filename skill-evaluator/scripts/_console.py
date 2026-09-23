@@ -8,6 +8,7 @@ fix() 把 stdout/stderr 的不可编码字符降级为替换符（U+FFFD）：�
 但不崩、不污染退出码。全部脚本入口处调用。
 """
 import sys
+from pathlib import Path
 
 
 def fix() -> None:
@@ -17,3 +18,16 @@ def fix() -> None:
                 stream.reconfigure(errors="replace")
             except (ValueError, OSError):
                 pass  # 流已被包装/重定向（pytest capsys 等）时静默放过
+
+
+def write_text(path, text: str) -> None:
+    """落盘权威产物：先建父目录再写（统一入口）。
+
+    `--out` 指到还不存在的目录时，Path.write_text 直接 FileNotFoundError（v2 快照首跑踩到），
+    而流程文档并没要求先 mkdir。所有脚本的 --out 落盘都走这里。
+    """
+    p = Path(path)
+    parent = p.parent
+    if str(parent) not in ("", ".") and not parent.exists():
+        parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text, encoding="utf-8")

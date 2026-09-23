@@ -163,7 +163,7 @@ def write_meta(d: Path, meta: dict) -> None:
     """
     old = load(d, "meta.json")
     merged = {**old, **meta} if isinstance(old, dict) else meta
-    (d / "meta.json").write_text(json.dumps(merged, ensure_ascii=False, indent=2), encoding="utf-8")
+    _console.write_text(d / "meta.json", json.dumps(merged, ensure_ascii=False, indent=2))
 
 
 def verdict_of_ratio(ratio) -> str:
@@ -236,6 +236,41 @@ def cv_of(comp):
     return std / mean
 
 
+def dependency_errors(errors) -> tuple[list, list]:
+    """从 trace 报错里分出「依赖缺失信号」与「agent 自己的路径笔误」（ADR-0025）。
+
+    旧实现把任何含 not found / no such 的报错都算依赖问题——实测 agent 自己写错相对路径
+    （`cat: AGENTS.md: No such file or directory`）就会被当成缺依赖（#8 假 fail）。现分两档：
+    - 强信号（command not found / ModuleNotFoundError / not installed…）直接算；
+    - 弱信号（no such file / not found / 不存在）还要看**缺的是什么**：包内入口（scripts/、SKILL.md、
+      judges/、check-deps…）或解释器/工具（python/node/pi/git/bash…）缺失才算依赖问题；
+      数据文件的 No such file 不算（agent 自己猜错产物路径 `cat: evalsets/…/meta.json` 也长这样）。
+    不算的进 ignored_errors 保留可见（不静默丢）。
+    """
+    strong = ("command not found", "no module named", "modulenotfounderror", "importerror",
+              "cannot import", "is not installed", "not installed", "not recognized as an internal")
+    weak = ("no such file", "not found", "notfound", "不存在", "缺少")
+    # 弱信号还要看“缺的是什么”：包内入口（脚本/SKILL.md/judges）或解释器/工具缺失才算依赖问题；
+    # 数据文件的 No such file 不算——实测 agent 自己猜错产物路径（cat: evalsets/.../meta.json）会被误判。
+    entry_tokens = ("skill.md", "scripts/", "check-deps", "report.py", "static_check", "judges/",
+                    "python", "node", "pi ", "pi.cmd", "git", "pytest", "bash", "sh ", "npm", "pip")
+    dep, ignored = [], []
+    for e in errors:
+        s = str(e).lower()
+        if any(w in s for w in strong):
+            dep.append(str(e))
+        elif any(w in s for w in weak):
+            (dep if any(t in s for t in entry_tokens) else ignored).append(str(e))
+    return dep, ignored
+
+
+def _load_path(p: Path):
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+
+
 def build(d: Path, evalset_dir: Path | None = None) -> dict:
     m = {}
     static = load(d, "static.json")
@@ -266,10 +301,14 @@ def build(d: Path, evalset_dir: Path | None = None) -> dict:
             m["#4"] = {"verdict": "pass", "method": METHOD_RUN, "data": cost, "note": "单次运行成本统计"}
         n = score.get("necessity")
         if isinstance(n, dict):
-            tok = n.get("tokens") if isinstance(n.get("tokens"), dict) else None
-            m["#5"] = {"verdict": "pass" if (tok or {}).get("improvement", 0) > 0 else "fail",
-                       "method": METHOD_RUN, "data": n,
-                       "note": "三分量对比（#11）：token 为主判据，步数/耗时并列呈现"}
+            # #5 三分量多数票（ADR-0026）：旧口径只看 token，会把「省步不省 token」判成 fail
+            # （实测 golden 步数 −22%、token +1.5%）。现三分量各投一票，多数改善才 pass。
+            comps = {k: v for k, v in n.items() if isinstance(v, dict) and "improvement" in v}
+            up = sum(1 for v in comps.values() if v["improvement"] > 0)
+            verdict = "pass" if up * 2 > len(comps) else "warn" if up else "fail"
+            detail = "、".join(f"{k} {v['improvement']*100:+.1f}%" for k, v in comps.items())
+            m["#5"] = {"verdict": verdict, "method": METHOD_RUN, "data": n,
+                       "note": f"三分量多数票（{up}/{len(comps)} 改善）：{detail}（ADR-0026）"}
     # #1 人调用型（#7 resolved=human）不适用触发评测：pi 的 formatSkillsForPrompt 会把
     # disable-model-invocation=true 的 skill 从提示中滤除（实测：--skill 加载后模型答
     # “无 available_skills 段”）——“按 description 触发”在该载体上结构上不可能，照跑只是把
@@ -286,20 +325,28 @@ def build(d: Path, evalset_dir: Path | None = None) -> dict:
         m["#1"]["data"] = {**(m["#1"]["data"] or {}), "evalset_quality": ev}
         m["#1"]["note"] = (m["#1"].get("note") or "") + f"；触发集质量警告：{ev.get('note')}"
 
-    if isinstance(golden, dict):
-        errs = [e for e in golden.get("errors", []) if any(
-            w in str(e).lower() for w in ("not found", "notfound", "no such", "import", "command not found", "不存在"))]
-        # #8 双源（#29/#30）：trace 报错（实跑面）+ judges/deps.json（语义面）合成裁决
+    # #8 双源（#29/#30）：trace 报错（实跑面）+ judges/deps.json（语义面）合成裁决。
+    # 多 trace 并集（ADR-0025）：只读单条 golden.json 时，换成同 case 另一条重复运行就会翻结论
+    # （实测 r1 干净、r3 带 agent 路径笔误）——所以有 traces/golden-*.json 就全部纳入。
+    g_traces = [t for t in (_load_path(p) for p in sorted((d / "traces").glob("golden-*.json")))
+                if isinstance(t, dict)] if (d / "traces").is_dir() else []
+    g_sources = g_traces or ([golden] if isinstance(golden, dict) else [])
+    if g_sources:
+        all_errs = [e for t in g_sources for e in (t.get("errors") or [])]
+        dep_errs, ignored_errs = dependency_errors(all_errs)
         deps = load_judge(d, "deps")
-        if errs:
-            dep_verdict, dep_note = "fail", "golden trace 中有依赖类报错"
+        if dep_errs:
+            dep_verdict, dep_note = "fail", f"{len(g_sources)} 条 golden trace 中有依赖类报错"
         elif deps:
             dep_verdict = verdict_of_ratio(deps["score"])
             dep_note = "无依赖类报错，语义评审最小依赖（judges/deps.md，pass 项数/总项数）"
         else:
             dep_verdict, dep_note = "pass", "golden trace 中无依赖类报错即 pass"
+        if ignored_errs:
+            dep_note += f"；另有 {len(ignored_errs)} 条报错判为 agent 自身路径笔误（见 ignored_errors）"
         m["#8"] = {"verdict": dep_verdict, "method": METHOD_RUN,
-                   "data": {"dependency_errors": errs,
+                   "data": {"dependency_errors": dep_errs, "ignored_errors": ignored_errs,
+                            "sources": len(g_sources),
                             "deps_judge": {"score": deps["score"], "items": deps.get("items")} if deps else None},
                    "note": dep_note}
     if isinstance(score, dict) and isinstance(score.get("cost"), dict) \
@@ -413,11 +460,34 @@ def build(d: Path, evalset_dir: Path | None = None) -> dict:
         m["#10"] = {"verdict": verdict_of_score(proc["score"]), "method": METHOD_RUN,
                     "data": proc, "note": "trace 对照声明的过程审计"}
     ab = load(d, "ablation.json")
-    if isinstance(ab, dict) and ab.get("f1_full") is not None:
-        m["#6"] = {"verdict": "pass" if ab.get("f1_ablated", 0) < ab.get("f1_full", 1) else "warn",
-                   "method": METHOD_RUN, "data": ab,
-                   "note": "消融后掉分=原文必要(通过)；持平/上升=冗余实证(警告)"}
-    m["#14"] = {"verdict": "skipped", "method": METHOD_DIFF, "data": None, "note": "evolution.py 独立产出"}
+    if isinstance(ab, dict):
+        # #6 消融（ADR-0026）：对比量不再写死 f1——human 型 skill 不跑 T2，没有触发 F1，
+        # 改用 T3 的成本/质量分；方向由 higher_is_better 决定（质量分越高越好=默认，成本越低越好=false）。
+        full, ablated = ab.get("full"), ab.get("ablated")
+        metric = ab.get("metric", "f1")
+        if full is None or ablated is None:  # 兼容旧形状 f1_full/f1_ablated
+            full, ablated, metric = ab.get("f1_full"), ab.get("f1_ablated"), "f1"
+        if full is not None and ablated is not None:
+            hib = ab.get("higher_is_better", True)
+            redundant = (ablated > full) if hib else (ablated < full)
+            m["#6"] = {"verdict": "warn" if redundant else "pass", "method": METHOD_RUN, "data": ab,
+                       "note": (f"消融对比量 {metric}：完整 {full} → 消融 {ablated}；"
+                                + ("消融后更好 = 被删段落冗余（警告）" if redundant
+                                   else "消融后变差 = 被删段落必要（通过）"))}
+        elif ab.get("reason"):
+            m["#6"]["note"] = (m["#6"].get("note") or "") + f"；消融未跑：{ab['reason']}"
+            m["#6"]["data"] = {**(m["#6"].get("data") or {}), "ablation": ab}
+    # #14 版本演进（ADR-0025）：读 evolution.py --out 落的 evolution.json（results/<version>/ 下）
+    evo = load(d, "evolution.json")
+    if isinstance(evo, dict) and isinstance(evo.get("changes"), list):
+        comp = bool(evo.get("comparable"))
+        m["#14"] = {"verdict": "pass" if comp else "warn", "method": METHOD_DIFF, "data": evo,
+                    "note": (f"跨版本对比 {len(evo.get('versions') or [])} 个版本、{len(evo['changes'])} 条指标变化；"
+                             + ("评估器指纹一致，差异可比" if comp
+                                else "评估器指纹不同 → 差异不构成回归证据"))}
+    else:
+        m["#14"] = {"verdict": "skipped", "method": METHOD_DIFF, "data": None,
+                    "note": "无 evolution.json（evolution.py --out 产出）"}
 
     # 评测集 AI 审核（#49）：reviewed_by=ai 时给依赖评测集的指标加标注
     reviewed_by = _evalset_reviewed_by(d, evalset_dir)
@@ -911,12 +981,11 @@ def main():
     if tier:
         report["tier"] = tier
     meta = build_meta(report, skill_arg, evalset_dir)
-    (d / "report.json").write_text(
-        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    (d / "report.md").write_text(render_md(report), encoding="utf-8")
+    _console.write_text(d / "report.json", json.dumps(report, ensure_ascii=False, indent=2))
+    _console.write_text(d / "report.md", render_md(report))
     write_meta(d, meta)
     if html:
-        (d / "report.html").write_text(render_html(report, evalset_dir, skill_arg), encoding="utf-8")
+        _console.write_text(d / "report.html", render_html(report, evalset_dir, skill_arg))
     print(json.dumps({"conclusion": report["conclusion"], "written": True,
                       "meta_schema": META_SCHEMA,
                       "evaluator": report["evaluator"]["version"]}, ensure_ascii=False))

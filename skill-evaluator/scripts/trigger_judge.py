@@ -163,7 +163,7 @@ def main():
     else:
         out = {"triggered": payload["score"] >= threshold, "threshold": threshold, **payload}
     if out_path:
-        Path(out_path).write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
+        _console.write_text(out_path, json.dumps(out, ensure_ascii=False))
     print(json.dumps(out, ensure_ascii=False))
 
 

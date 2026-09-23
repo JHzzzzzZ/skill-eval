@@ -530,3 +530,72 @@ def test_brevity_over_limit_html_keeps_both_faces(tmp_path):
     assert r.returncode == 0, r.stderr
     html = (tmp_path / "report.html").read_text(encoding="utf-8")
     assert "200 行" in html and "语义两项全过" in html
+
+
+# --- #5 三分量多数票（ADR-0026）---
+
+def test_necessity_majority_vote_passes_when_two_components_improve(tmp_path):
+    write_inputs(tmp_path, {"score.json": {
+        "trigger": "skipped",
+        "cost": {"tool_calls": {"mean": 3, "std": 1, "n": 3}},
+        "necessity": {"tokens": {"golden": 101, "baseline": 100, "improvement": -0.01},
+                      "tool_calls": {"golden": 20, "baseline": 30, "improvement": 0.33},
+                      "seconds": {"golden": 95, "baseline": 100, "improvement": 0.05}},
+        "passed": True}})
+    m = run_report(tmp_path)["metrics"]["#5"]
+    assert m["verdict"] == "pass"          # 省步 + 省时，token 微涨 → 不再一票否决
+    assert "2/3" in m["note"] and "-1.0%" in m["note"]
+
+
+def test_necessity_all_components_regress_fails(tmp_path):
+    write_inputs(tmp_path, {"score.json": {
+        "trigger": "skipped", "cost": "skipped",
+        "necessity": {"tokens": {"improvement": -0.3}, "tool_calls": {"improvement": -0.1},
+                      "seconds": {"improvement": -0.2}}, "passed": True}})
+    assert run_report(tmp_path)["metrics"]["#5"]["verdict"] == "fail"
+
+
+# --- #8 依赖信号分类 + 多 trace 并集（ADR-0025）---
+
+def test_deps_ignores_agent_path_typo(tmp_path):
+    write_inputs(tmp_path, {"golden.json": {"steps": [], "errors": [
+        "工具错误 c1: cat: AGENTS.md: No such file or directory"]}})
+    m = run_report(tmp_path)["metrics"]["#8"]
+    assert m["verdict"] == "pass"
+    assert m["data"]["ignored_errors"] and not m["data"]["dependency_errors"]
+
+
+def test_deps_union_over_golden_traces(tmp_path):
+    write_inputs(tmp_path, {"traces/golden-c1-r1.json": {"steps": [], "errors": []},
+                            "traces/golden-c1-r2.json": {"steps": [], "errors": [
+                                "工具错误 c2: bash: scripts/check-deps.sh: No such file or directory"]}})
+    m = run_report(tmp_path)["metrics"]["#8"]
+    assert m["verdict"] == "fail"
+    assert m["data"]["sources"] == 2
+
+
+# --- #14 读 evolution.json（ADR-0025）---
+
+def test_evolution_json_consumed(tmp_path):
+    write_inputs(tmp_path, {"evolution.json": {"versions": ["auto-a", "auto-b"], "comparable": True,
+                                               "changes": [{"metric": "#5", "from": "fail", "to": "pass"}]}})
+    m = run_report(tmp_path)["metrics"]["#14"]
+    assert m["verdict"] == "pass"
+    assert "2 个版本" in m["note"]
+
+
+def test_evolution_incomparable_is_warn(tmp_path):
+    write_inputs(tmp_path, {"evolution.json": {"versions": ["auto-a", "auto-b"], "comparable": False,
+                                               "changes": []}})
+    m = run_report(tmp_path)["metrics"]["#14"]
+    assert m["verdict"] == "warn"
+    assert "不构成回归证据" in m["note"]
+
+
+def test_deps_ignores_agent_wrong_artifact_path(tmp_path):
+    # agent 自己猜错产物路径（带目录成分，但缺的不是包内入口）→ 不算依赖问题
+    write_inputs(tmp_path, {"golden.json": {"steps": [], "errors": [
+        "工具错误 c1: cat: evalsets/wrap-up/results/auto-b592/meta.json: No such file or directory"]}})
+    m = run_report(tmp_path)["metrics"]["#8"]
+    assert m["verdict"] == "pass"
+    assert m["data"]["ignored_errors"]

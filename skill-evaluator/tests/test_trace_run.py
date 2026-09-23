@@ -446,3 +446,80 @@ def test_early_exit_relative_without_cwd_is_conservative():
     agg2 = EventAggregator(early_exit=True, skill_marker="C:/wt/skill/SKILL.md")
     agg2.feed(bash_step("cat SKILL.md"))
     assert agg2.stop is False
+
+
+# --- args 保留上限 2000 + 截断标记（ADR-0024）：200 会把 report.py 长命令切断 ---
+
+def test_string_args_truncated_at_2000(tmp_path):
+    # 仅当 args 本身是字符串时才截断（dict 形态原样保留，见下一条测试）
+    long_cmd = "python scripts/report.py evalsets/x --tier core --skill y " + "z" * 3000
+    f = tmp_path / "e.jsonl"
+    f.write_text(json.dumps({"type": "tool_execution_start", "toolCallId": "t1", "toolName": "bash",
+                             "args": long_cmd}), encoding="utf-8")
+    t = json.loads(run_trace(["--events", str(f)]).stdout)
+    step = t["steps"][0]
+    assert len(step["args"]) == 2000
+    assert step["args_truncated"] is True
+    assert step["args_hash"]           # 哈希仍按完整 args 算
+
+
+def test_dict_args_preserved_whole(tmp_path):
+    # 实测：pi 的 bash/read 工具 args 是 dict（{"command": ...}），旧版 200 字符截断对它们**从未生效**
+    # ——所谓“#10 证据被截断”不成立，真正原因是缺用例范围（ADR-0024 已更正）。这里锁住“不许截 dict”。
+    cmd = "python scripts/report.py evalsets/x --tier core --skill y --out " + "a" * 3000
+    f = tmp_path / "e.jsonl"
+    f.write_text(json.dumps({"type": "tool_execution_start", "toolCallId": "t1", "toolName": "bash",
+                             "args": {"command": cmd}}), encoding="utf-8")
+    t = json.loads(run_trace(["--events", str(f)]).stdout)
+    assert t["steps"][0]["args"]["command"] == cmd
+    assert "args_truncated" not in t["steps"][0]
+
+
+def test_args_under_limit_not_flagged(tmp_path):
+    cmd = "python scripts/report.py evalsets/x --tier core --skill y --out " + "a" * 500
+    f = tmp_path / "e.jsonl"
+    f.write_text(json.dumps({"type": "tool_execution_start", "toolCallId": "t1", "toolName": "bash",
+                             "args": {"command": cmd}}), encoding="utf-8")
+    t = json.loads(run_trace(["--events", str(f)]).stdout)
+    assert t["steps"][0]["args"]["command"] == cmd
+    assert "args_truncated" not in t["steps"][0]
+
+
+# --- 越界写入检测（ADR-0027）：_porcelain / _revert_escape ---
+
+def _git(repo: Path, *args):
+    subprocess.run(["git", "-C", str(repo), *args], capture_output=True, check=True)
+
+
+def make_repo(tmp_path: Path) -> Path:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "t@t"); _git(repo, "config", "user.name", "t")
+    (repo / "tracked.txt").write_text("原样\n", encoding="utf-8")
+    _git(repo, "add", "-A"); _git(repo, "commit", "-qm", "init")
+    return repo
+
+
+def test_guard_detects_and_reverts_escape(tmp_path):
+    repo = make_repo(tmp_path)
+    sys.path.insert(0, str(SCRIPT.parent))
+    import trace_run as tr
+    before = tr._porcelain(str(repo))
+    assert before == set()
+    (repo / "tracked.txt").write_text("被改了\n", encoding="utf-8")
+    (repo / "newdir").mkdir(); (repo / "newdir" / "x.txt").write_text("新增\n", encoding="utf-8")
+    after = tr._porcelain(str(repo))
+    new = sorted(after - before)
+    assert len(new) == 2                                   # 一处改动 + 一处新增
+    tr._revert_escape(str(repo), new)
+    assert (repo / "tracked.txt").read_text(encoding="utf-8") == "原样\n"
+    assert not (repo / "newdir").exists()
+    assert tr._porcelain(str(repo)) == set()
+
+
+def test_guard_repo_flag_not_taken_as_positional(tmp_path):
+    # --guard-repo 的值不能被当成位置参数（否则 worktree/prompt 会被顶掉）
+    r = run_trace(["--build-only", "--worktree", "W", "--prompt", "P", "--guard-repo", "R"])
+    cmd = json.loads(r.stdout)["command"]
+    assert cmd[-1] == "P" and "R" not in cmd

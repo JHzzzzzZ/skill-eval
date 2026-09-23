@@ -169,7 +169,7 @@ def main():
         sys.exit(2)
     out = analyze(d)
     if out_path:
-        out_path.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
+        _console.write_text(out_path, json.dumps(out, ensure_ascii=False, indent=2))
     print(json.dumps(out, ensure_ascii=False))
 
 
