@@ -29,7 +29,7 @@ skill-evaluator/
 ├── judges/             # LLM-judge rubrics (structured JSON output, fixed single-shot prompt)
 ├── scripts/            # deterministic tooling; check-deps.sh = preflight (#16)
 └── tests/              # 250 tests, subprocess-seam based
-docs/adr/               # 22 architecture decisions
+docs/adr/               # 23 architecture decisions
 ```
 
 The evaluator is **self-contained**: all scripts and tests live inside the skill package (ADR-0006). Evaluation artifacts (eval sets, reports) live in `skill-evaluator/evalsets/<skill-name>/` and are frozen per version — never regenerated on re-runs.

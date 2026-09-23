@@ -29,7 +29,7 @@ skill-evaluator/
 ├── judges/             # LLM 评审 rubric（结构化 JSON 输出，固定单发 prompt）
 ├── scripts/            # 确定性工具；check-deps.sh = 前置自检（#16）
 └── tests/              # 250 个测试，全部走 subprocess seam
-docs/adr/               # 22 条架构决策记录
+docs/adr/               # 23 条架构决策记录
 ```
 
 评估器**自闭环**：脚本与测试全部在 skill 包内（ADR-0006）。评估产物（评测集、报告）放 `skill-evaluator/evalsets/<skill名>/`，按版本冻结——重跑不重新生成。
