@@ -14,7 +14,7 @@ stdout 契约（字段恒输出）：
   "hardcoded": [{"pattern": str, "line": int, "file": str, "text": str}],   # 可移植性闸门（ADR-0008）
   "excluded": [str],     # 实际未扫描的路径（相对 skill 目录；ADR-0012）
   "ignored": [{"pattern": str, "line": int, "file": str, "text": str}],   # 行内标记抑制掉的命中
-  "scan_excluded_dirs": [str],   # 默认豁免目录中实际存在者（ADR-0012 + ADR-0015：运行面之外）
+  "scan_excluded_dirs": [str],   # 默认豁免目录中实际存在者（ADR-0012：运行面之外）
   "stale_refs": [str],           # SKILL.md 声明但包内不存在的路径（依赖新鲜度，warning 级）
   "errors": [str], "warnings": [str], "issues": [str],   # issues = errors + warnings
   "passed": bool          # errors 为空即 True（危险命令/缺 name 都算 error）
@@ -24,7 +24,7 @@ stdout 契约（字段恒输出）：
 secrets 组带占位符过滤（your/xxx/example… 所在行不算硬编码凭据）。error 文案里不得出现
 name/description/invoke 字样，否则 report.py 会误判成 #2/#7 的 fail 依据。
 
-排除口径（ADR-0012 机制 + ADR-0015 作用域）：
+排除口径（ADR-0012：机制 + 作用域）：
 - 默认排除 tests/、evalsets/、uploads/、.sandbox/（测试夹具、历史 trace、只读存档都不随 skill 运行）
   与扫描器自身源码（正则表自命中）
 - --exclude 相对路径按 **skill 目录**解析（不是 CWD），绝对路径原样；--no-default-excludes 关闭默认排除
@@ -48,7 +48,7 @@ NAME_MAX_CHARS = 64
 
 INVOKE_VALUES = {"human", "both"}  # pi 真实三态归约：缺省/false=both（模型+用户）；disable-model-invocation:true=human
 
-# 默认排除的目录名（ADR-0012 的机制 + ADR-0015 的作用域）：闸门只扫运行面。
+# 默认排除的目录名（ADR-0012：机制 + 作用域）：闸门只扫运行面。
 # tests/ 是测试夹具（tmp_path 运行时路径、危险命令用例）；evalsets/uploads/.sandbox 是评估
 # 产物与只读存档（trace、报告，含评估时机器路径）——都不随 skill 运行，扫它们只是自噪声。
 DEFAULT_EXCLUDE_DIRS = ("tests", "evalsets", "uploads", ".sandbox")
@@ -133,8 +133,8 @@ OBFUSCATION_PATTERNS = [
 # 可移植性闸门（ADR-0008）：宿主环境硬编码 → 整体 fail。
 # 只查硬编码，不查"声明给某 agent 用"（#7 调用方式与通用性无关）。
 # 排除：相对路径与环境变量引用本就不匹配这些模式。具体路径示例不写入本文件注释，
-# 免得模式表自匹配（ADR-0015：表是数据不是行为）。
-# 作用域（ADR-0015）：闸门只扫运行面——tests/ 内的夹具（tmp_path 运行时路径、
+# 免得模式表自匹配（ADR-0012：表是数据不是行为）。
+# 作用域（ADR-0012）：闸门只扫运行面——tests/ 内的夹具（tmp_path 运行时路径、
 # 危险命令用例）是测试产物，不随 skill 运行，默认豁免。
 HOST_HARDCODE_PATTERNS = [
     r"[A-Za-z]:[\\/](?:Users|home)[\\/]",   # Windows 盘符开头的绝对用户路径
@@ -363,7 +363,7 @@ def main():
     if out["dangerous"]:
         out["errors"].append(f"发现 {len(out['dangerous'])} 处危险命令模式（#13）")
 
-    # 默认豁免目录里实际存在者（ADR-0015：运行面之外），供报告与审计看见
+    # 默认豁免目录里实际存在者（ADR-0012：运行面之外），供报告与审计看见
     out["scan_excluded_dirs"] = sorted(
         d for d in DEFAULT_EXCLUDE_DIRS if (skill_dir / d).is_dir())
 

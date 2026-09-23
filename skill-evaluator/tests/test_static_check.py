@@ -413,7 +413,7 @@ def test_gbk_console_no_crash(tmp_path):
     assert b"UnicodeEncodeError" not in r.stderr
 
 
-# --- ADR-0015：闸门作用域=运行面，tests/ 夹具豁免 ---
+# --- ADR-0012：闸门作用域=运行面，tests/ 夹具豁免 ---
 
 def test_tests_dir_exempt_from_gate(tmp_path):
     # 危险命令与宿主硬编码写在 tests/ 内 → 不命中；同样的内容在 scripts/ 内 → 命中

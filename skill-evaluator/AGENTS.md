@@ -19,7 +19,7 @@ Generated: 2026-09-22T13:43:08.578Z
 | 改版本号 / 指纹 | `docs/adr/0003`、`docs/adr/0010` + `scripts/report.py:67-160`（指纹+meta 层） |
 | 改档位定义 / 增量补跑 | `docs/adr/0014` + `SKILL.md` 档位表 + `scripts/report.py` 的 `tier` 字段 |
 | 改 #12 稳定性口径 | `docs/adr/0016` + `scripts/score.py`（`cost_by_case`）+ `scripts/report.py`（`cv_of`） |
-| 改扫描口径 / 五组规则表 | `docs/adr/0012`（口径）、`docs/adr/0013`（五组分级）、`docs/adr/0015`（作用域）+ `scripts/static_check.py:45-123` |
+| 改扫描口径 / 五组规则表 | `docs/adr/0012`（口径 + 作用域，唯一来源）、`docs/adr/0013`（五组分级）+ `scripts/static_check.py:45-123` |
 | 改 fallback 行为 | `reference.md § Fallback` 表 |
 
 ## PIPELINE
