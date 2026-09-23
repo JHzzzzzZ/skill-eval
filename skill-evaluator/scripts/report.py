@@ -378,6 +378,27 @@ def build(d: Path, evalset_dir: Path | None = None) -> dict:
                       f"{i['name']}={'✓' if i['pass'] else '✗'}" for i in j.get("items", [])) + "）")
                   if j else "无评审输出"}
 
+    # #3 双源（ADR-0017）：正文行数 = 可数事实 → 静态面主源（超线即 warn，机械证据优先）；
+    # 语义两项 → LLM 面辅证，结果原形状保留在同一份 data 里，不丢。
+    if isinstance(static, dict):
+        lines, limit = static.get("skill_md_body_lines"), static.get("skill_md_body_max_lines")
+        if isinstance(lines, int) and isinstance(limit, int):
+            cur = m["#3"]
+            merged = {"skill_md_body_lines": lines, "skill_md_body_max_lines": limit}
+            if isinstance(cur.get("data"), dict):
+                merged.update(cur["data"])
+            if lines > limit:
+                m["#3"] = {"verdict": "warn", "method": METHOD_STATIC, "data": merged,
+                           "note": f"正文 {lines} 行 > 阈值 {limit} 行（静态面主源，ADR-0017）；"
+                                   + (cur.get("note") or "无语义评审输出")}
+            elif isinstance(cur.get("data"), dict):
+                m["#3"] = {**cur, "data": merged,
+                           "note": (cur.get("note") or "")
+                                   + f"；正文 {lines} 行 ≤ 阈值 {limit}（静态面）"}
+            else:
+                m["#3"] = {"verdict": "skipped", "method": METHOD_STATIC, "data": merged,
+                           "note": f"正文 {lines} 行 ≤ 阈值 {limit}（静态面通过）；无语义评审输出"}
+
     m["#10"] = {"verdict": "skipped", "method": METHOD_RUN, "data": None, "note": "无 process.json"}
     proc = load(d, "process.json")
     if isinstance(proc, dict) and isinstance(proc.get("score"), int):

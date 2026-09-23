@@ -16,6 +16,8 @@ stdout 契约（字段恒输出）：
   "ignored": [{"pattern": str, "line": int, "file": str, "text": str}],   # 行内标记抑制掉的命中
   "scan_excluded_dirs": [str],   # 默认豁免目录中实际存在者（ADR-0012：运行面之外）
   "stale_refs": [str],           # SKILL.md 声明但包内不存在的路径（依赖新鲜度，warning 级）
+  "skill_md_body_lines": int|null,       # #3 正文行数（frontmatter 之后全文；无 SKILL.md 时为 null）
+  "skill_md_body_max_lines": int,        # 该次检查使用的阈值（自描述，report.py 据此判定，不复制常量）
   "errors": [str], "warnings": [str], "issues": [str],   # issues = errors + warnings
   "passed": bool          # errors 为空即 True（危险命令/缺 name 都算 error）
 }
@@ -45,6 +47,9 @@ from pathlib import Path
 # 可配置常量（reference.md § 可配参数）
 DESCRIPTION_TOKEN_LIMIT = 100
 NAME_MAX_CHARS = 64
+# #3 正文行数上限（ADR-0017）：口径 = parse_frontmatter 之后的全文行数，含空行、含代码块。
+# 这是自定阈值（原 rubric 的 ">150 行倾向臃肿" 的硬化），不是 19 条需求里的数字；超限仅 warning。
+SKILL_MD_BODY_MAX_LINES = 150
 
 INVOKE_VALUES = {"human", "both"}  # pi 真实三态归约：缺省/false=both（模型+用户）；disable-model-invocation:true=human
 
@@ -317,6 +322,7 @@ def main():
            "dangerous": [], "secrets": [], "injection": [], "exfil": [], "obfuscation": [],
            "hardcoded": [], "excluded": rel_paths(exclude_paths, skill_dir),
            "ignored": [], "scan_excluded_dirs": [], "stale_refs": [],
+           "skill_md_body_lines": None, "skill_md_body_max_lines": SKILL_MD_BODY_MAX_LINES,
            "errors": [], "warnings": [], "issues": [], "passed": True}
     skill_md = skill_dir / "SKILL.md"
     if not skill_md.is_file():
@@ -346,6 +352,13 @@ def main():
         if out["description_tokens"] > DESCRIPTION_TOKEN_LIMIT:
             out["warnings"].append(
                 f"description 约 {out['description_tokens']} token，超过阈值 {DESCRIPTION_TOKEN_LIMIT}（#2）")
+
+    # #3 正文精简（ADR-0017）：行数属可数事实 → 静态面出数，report.py 拿它当主源。
+    # 语义两项（无可下沉细节、有索引结构）仍由 judges/brevity.md 判，两边在报告里合成。
+    out["skill_md_body_lines"] = len(body.splitlines())
+    if out["skill_md_body_lines"] > SKILL_MD_BODY_MAX_LINES:
+        out["warnings"].append(
+            f"SKILL.md 正文 {out['skill_md_body_lines']} 行，超过 {SKILL_MD_BODY_MAX_LINES}（#3，仅警告）")
 
     # #7 调用方式：映射 pi 真实 frontmatter 字段 disable-model-invocation（ADR-0008）。
     # 不再检查虚构的 invoke 字段：pi/Agent Skills 规范无此字段，检查恒空转。

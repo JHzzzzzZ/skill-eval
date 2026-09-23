@@ -6,14 +6,16 @@ SKILL.md 的细则层。指标编号 #N 对应 prompt.txt 的 19 条需求。
 
 | 手段 | 指标 | 本期状态 |
 |---|---|---|
-| 静态检查 | #2 name/description 规范与 token 数、#7 调用方式、#13 五组规则扫描（危险命令/凭据/注入/外发/混淆） | ✅ 已实现（static_check.py，ADR-0013） |
+| 静态检查 | #2 name/description 规范与 token 数、#7 调用方式、#13 五组规则扫描（危险命令/凭据/注入/外发/混淆）、#3 正文行数（主源） | ✅ 已实现（static_check.py，ADR-0013/0017） |
 | 沙箱运行 | #1 触发精准度、#4 成本、#5 必要性、#8 最小依赖 | ✅ 已实现（trace_run.py + score.py + judges/deps.md 语义面双源） |
-| LLM 评审 | #3 正文精简、#6 低冗余、#11 fallback、#16 前置自检、#17/18 输入输出契约、#19 副作用可逆 | ✅ 已实现（judges/ + judge_runner.py） |
+| LLM 评审 | #3 正文精简（语义两项，辅证）、#6 低冗余、#11 fallback、#16 前置自检、#17/18 输入输出契约、#19 副作用可逆 | ✅ 已实现（judges/ + judge_runner.py） |
 | 沙箱运行（多次） | #12 稳定性（组内变异系数）、#15 幂等 | ✅ 已实现（重复运行 ×N + idem.py；#12 口径见 ADR-0016） |
 | 沙箱运行（多模型，可选） | #12 稳定性（跨模型一致率） | ✅ 已实现（model_robust.py，ADR-0011，默认不跑） |
 | 触发集自检 | #1 触发精准度的可信度 | ✅ 已实现（evalset_check.py，ADR-0011） |
 | Trace 对照 | #10 过程可验证 | ✅ 已实现（process.py） |
 | 历史报告 diff | #14 版本演进 | ✅ 已实现（evolution.py） |
+
+多源指标（ADR-0017）：一条指标可有**一个主源 + N 个辅证**，裁决主源优先，辅证以原始形状保留在 `data` 里不丢、不加权合成：#3（静态行数主源 + 语义评审辅证）、#8（trace 报错主源 + `judges/deps.json`）、#6（评审 + 消融实证，消融覆盖）、#17/#18（共用一份 contract 评审）。
 
 ## 沙箱
 
@@ -70,8 +72,8 @@ evalsets/<name>/v1/
 
 | 档 | 场景 | 做什么 | 服务指标 |
 |---|---|---|---|
-| T0 | 静态检查 | static_check.py | #2 #7 #13 |
-| T1 | LLM 评审 | 逐项按 judges/ rubric 评审（4 并发） | #3 #6(评审面) #11 #16 #17 #18 #19 |
+| T0 | 静态检查 | static_check.py | #2 #7 #13 #3（行数主源） |
+| T1 | LLM 评审 | 逐项按 judges/ rubric 评审（4 并发） | #3（语义两项，辅证） #6(评审面) #11 #16 #17 #18 #19 |
 | T2 | 触发评测 | 三组 prompt 各跑一次，带 `--early-exit`（ADR-0007 修订）：事件流出现**首次指向被测 SKILL.md 的工具调用**（渐进式披露下 = agent 决定加载 skill）即终止该次运行省 token；未出现该调用的 run 跑完整，其行为正是 precision 的证据；**triggered 由 `trigger_judge.py` 用 LLM 判定**，判定口径与 early-exit 同步：**加载即触发，不要求任务实际完成**，截断运行（回答为空）按已执行步骤裁决（trace_run.triggered 仅作粗筛），环境故障的 case 不计入 P/R 分母 | #1 |
 | T3 | 主运行 Golden Run | 干净 worktree + 加载 skill，跑 cases，采 trace | #4/#8/#9 |
 | T3 | 基线 A/B | 同 cases、同 worktree，但**不加载** skill | #5 |
@@ -90,7 +92,7 @@ evalsets/<name>/v1/
 
 可选 `--thinking <off|minimal|low|medium|high|xhigh|max>` 控制思考档位。LLM 评审（judges/）与触发判定（trigger_judge.py）用**同一个模型配置**，保证与被测运行同源。评测集 AI 审核是唯一例外，见 § 评测集 AI 审核。
 
-可配参数：重复运行 N=3；IDEMPOTENT_MAX_RATIO=0.5（idem.py）；DESCRIPTION_TOKEN_LIMIT=100、NAME_MAX_CHARS=64、`--exclude <路径>`（相对 skill 目录解析）、`--no-default-excludes`（static_check.py）；触发集每组最小条数 10（evalset_count.py，环境变量 SKILL_EVAL_TRIGGER_MIN / CLI --min*）；F1_PASS=0.7、COST_CV_MAX=0.5（report.py，#12 作用于逐 case 变异系数中位数，无逐 case 数据时回落 pooled，见 ADR-0016）；ECHO_COVERAGE_MAX=0.6、DUP_COVERAGE_MAX=0.8（evalset_check.py）；ANSWER_SIM_MIN=0.5、AGREEMENT_MIN=0.8（model_robust.py）；TRIGGER_PASS_SCORE=0.5（trigger_judge.py，--threshold 可覆盖）。
+可配参数：重复运行 N=3；IDEMPOTENT_MAX_RATIO=0.5（idem.py）；DESCRIPTION_TOKEN_LIMIT=100、NAME_MAX_CHARS=64、SKILL_MD_BODY_MAX_LINES=150（static_check.py；#3 行数主源，超限仅 warn，ADR-0017）、`--exclude <路径>`（相对 skill 目录解析）、`--no-default-excludes`（static_check.py）；触发集每组最小条数 10（evalset_count.py，环境变量 SKILL_EVAL_TRIGGER_MIN / CLI --min*）；F1_PASS=0.7、COST_CV_MAX=0.5（report.py，#12 作用于逐 case 变异系数中位数，无逐 case 数据时回落 pooled，见 ADR-0016）；ECHO_COVERAGE_MAX=0.6、DUP_COVERAGE_MAX=0.8（evalset_check.py）；ANSWER_SIM_MIN=0.5、AGREEMENT_MIN=0.8（model_robust.py）；TRIGGER_PASS_SCORE=0.5（trigger_judge.py，--threshold 可覆盖）。
 
 ## 执行载体与扩展点（ADR-0007）
 
@@ -111,7 +113,7 @@ evalsets/<name>/v1/
 - `runs.json`：`[{"case", "tool_calls", "tokens", "seconds"}, ...]`，golden（有 skill）各次运行；`case` 可选，**全条目都带**时 score.py 产出 `cost_by_case`（#12 组内口径的数据源，ADR-0016）；缺一条即不产出
 - `baseline.json`：同 runs.json 格式，基线（无 skill）运行，缺省则 necessity 输出 `skipped`
 - `trace-<序号>.json`：`{"steps": [{"tool", "args", "args_hash"}, ...], "answer", "tokens", "seconds", "triggered", "errors", "host": {"model", "pi", "platform"}}`（trace_run.py 落盘，--out；host 为宿主 pin，事后归因/复现用；离线 --events 重算时仅记 model 意图）
-- `static.json`：static_check.py --out（脚本自写 UTF-8；stdout 同步回显。禁 shell 重定向——GBK 控制台会产 GBK 文件）。全部脚本入口接 `scripts/_console.py::fix()`：GBK 控制台下回显不可编码字符降级为替换符，不崩、退出码 0；`--out` 文件不受影响。含 #13 的五组（`dangerous`/`secrets`/`injection`/`exfil`/`obfuscation`）、`hardcoded`、`excluded`/`ignored`（ADR-0012）、`scan_excluded_dirs`（ADR-0012：运行面之外）、`stale_refs`（依赖新鲜度，ADR-0009 延伸：SKILL.md 声明但包内不存在的路径引用，warning 级）
+- `static.json`：static_check.py --out（脚本自写 UTF-8；stdout 同步回显。禁 shell 重定向——GBK 控制台会产 GBK 文件）。全部脚本入口接 `scripts/_console.py::fix()`：GBK 控制台下回显不可编码字符降级为替换符，不崩、退出码 0；`--out` 文件不受影响。含 #13 的五组（`dangerous`/`secrets`/`injection`/`exfil`/`obfuscation`）、`hardcoded`、`excluded`/`ignored`（ADR-0012）、`scan_excluded_dirs`（ADR-0012：运行面之外）、`stale_refs`（依赖新鲜度，ADR-0009 延伸：SKILL.md 声明但包内不存在的路径引用，warning 级）、`skill_md_body_lines`/`skill_md_body_max_lines`（#3 行数主源与自描述阈值，ADR-0017：口径 = frontmatter 之后全文行数，含空行与代码块）
 - `score.json`：score.py --out（同上）；含 `cost`（多次运行汇总）+ `cost_by_case`（逐 case，仅全条目带 case 时出现）
 - `idem.json`：多次 idem.py --out 结果的聚合 `{"ratio", "idempotent"}`
 - `golden.json`：主运行的 golden trace（#8 唯一数据源）
@@ -132,7 +134,7 @@ temperature=0、单次、结构化 JSON 输出（`{items: [{name, pass, quote}],
 
 流程门禁：主 agent 按 rubric 产出 JSON → 运行 `python scripts/judge_runner.py --validate <文件>` → `valid=true` 才能进报告；校验失败把 errors 原文回给 LLM 重产一次，再失败则该指标标 `skipped` 并注明。
 
-检查点极性：每个 rubric 的检查点分两向——**能力清单**（做到才 pass，如 brevity 的行数克制）与**问题清单**（无此类问题才 pass，如 deps 的无未打包外部依赖）。极性逐条定义，同一 rubric 内可混向（实际也混）；items 契约与 score 公式不感知极性，新写 rubric 时只需保证每条检查点的 pass 条件在文案里可判定，不需要把措辞统一成一向。
+检查点极性：每个 rubric 的检查点分两向——**能力清单**（做到才 pass，如 precheck 的环境校验置前）与**问题清单**（无此类问题才 pass，如 deps 的无未打包外部依赖）。极性逐条定义，同一 rubric 内可混向（实际也混）；items 契约与 score 公式不感知极性，新写 rubric 时只需保证每条检查点的 pass 条件在文案里可判定，不需要把措辞统一成一向。
 
 后续可切换为 3 次取中位数或多模型交叉——切换时只改本节，rubric 不动。
 

@@ -453,3 +453,53 @@ def test_evalset_review_submit_button(tmp_path):
     # 脚本花括号仍配对（回归护栏）
     script = html.split("<script>")[1].split("</script>")[0]
     assert script.count("{") == script.count("}")
+
+
+# --- #3 双源（ADR-0017）：静态面行数为主源 + judges/brevity.json 为语义辅证 ---
+
+def _brevity(items=2):
+    return {"items": [{"name": f"检查点{i}", "pass": True, "quote": f"引文{i}"} for i in range(1, items + 1)],
+            "score": 1.0, "evidence": [], "reason": "语义两项全过"}
+
+
+def test_brevity_body_lines_over_limit_is_warn(tmp_path):
+    write_inputs(tmp_path, {"static.json": _static(skill_md_body_lines=200, skill_md_body_max_lines=150),
+                            "judges/brevity.json": _brevity()})
+    m = run_report(tmp_path)["metrics"]["#3"]
+    assert m["verdict"] == "warn" and m["method"] == "静态检查"
+    assert m["data"]["skill_md_body_lines"] == 200
+    assert len(m["data"]["items"]) == 2             # LLM 面结果保留，不被覆盖丢掉
+    assert "200 行" in m["note"]
+
+
+def test_brevity_under_limit_keeps_judge_verdict(tmp_path):
+    write_inputs(tmp_path, {"static.json": _static(skill_md_body_lines=70, skill_md_body_max_lines=150),
+                            "judges/brevity.json": _brevity()})
+    m = run_report(tmp_path)["metrics"]["#3"]
+    assert m["verdict"] == "pass" and m["method"] == "LLM评审"
+    assert m["data"]["skill_md_body_lines"] == 70   # 行数仍作证据回显
+    assert "70 行" in m["note"]
+
+
+def test_brevity_without_judge_still_reports_static_pass(tmp_path):
+    write_inputs(tmp_path, {"static.json": _static(skill_md_body_lines=70, skill_md_body_max_lines=150)})
+    m = run_report(tmp_path)["metrics"]["#3"]
+    assert m["verdict"] == "skipped"                # 语义面未测，不冒充 pass
+    assert m["data"] == {"skill_md_body_lines": 70, "skill_md_body_max_lines": 150}
+
+
+def test_brevity_old_static_json_without_lines_ignores_gate(tmp_path):
+    write_inputs(tmp_path, {"static.json": _static(), "judges/brevity.json": _brevity()})
+    m = run_report(tmp_path)["metrics"]["#3"]
+    assert m["verdict"] == "pass" and m["data"].get("skill_md_body_lines") is None
+
+
+def test_brevity_over_limit_html_keeps_both_faces(tmp_path):
+    # 网页不得比 Markdown 少信息：静态行数与语义评审结果都要看得见
+    write_inputs(tmp_path, {"static.json": _static(skill_md_body_lines=200, skill_md_body_max_lines=150),
+                            "judges/brevity.json": _brevity()})
+    r = subprocess.run([sys.executable, str(SCRIPT), str(tmp_path), "--html"],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
+    assert r.returncode == 0, r.stderr
+    html = (tmp_path / "report.html").read_text(encoding="utf-8")
+    assert "200 行" in html and "语义两项全过" in html

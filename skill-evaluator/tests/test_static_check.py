@@ -453,3 +453,27 @@ def test_stale_ref_detected(tmp_path):
     out = run_check(d)
     assert sorted(out["stale_refs"]) == ["docs/reference.md", "tools/todo.mjs"]
     assert out["passed"] is True  # warning 级，不 fail 闸门
+
+
+# --- #3 正文精简：行数由静态面确定性测量（ADR-0017）---
+
+def test_body_lines_excludes_frontmatter_counts_blanks(tmp_path):
+    d = make_skill(tmp_path, "---\nname: s\ndescription: d\n---\n" + "a\nb\n\nc\n")
+    out = run_check(d)
+    assert out["skill_md_body_lines"] == 4          # a/b/空行/c —— 空行计入
+    assert out["skill_md_body_max_lines"] == 150
+
+
+def test_body_lines_over_limit_warns_not_fails(tmp_path):
+    d = make_skill(tmp_path, "---\nname: s\ndescription: d\n---\n" + "x\n" * 151)
+    out = run_check(d)
+    assert out["skill_md_body_lines"] == 151
+    assert out["passed"] is True                    # 仅 warning；不 fail 可移植性/结构闸门
+    assert any("#3" in w and "151" in w for w in out["warnings"])
+
+
+def test_body_lines_null_without_skill_md(tmp_path):
+    d = tmp_path / "empty-skill"
+    d.mkdir()
+    out = run_check(d)
+    assert out["skill_md_body_lines"] is None       # 无 SKILL.md ≠ 0 行：不给出假证据
