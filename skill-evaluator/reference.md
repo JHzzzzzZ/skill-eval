@@ -147,7 +147,6 @@ evalsets/<name>/v1/
 - `traces/`：逐 run 的原始 trace；`--guard-repo` 时另带 `guard.escaped_writes`（越界写入，ADR-0027）
 - `compare.json`：compare.py 裁决（#9）
 - `process.json`：process.py 裁决（#10）
-- `ablation.json`：`{"f1_full", "f1_ablated", "deleted": [...]}`（#6 实证）
 - `evalset.json`：evalset_check.py stdout（触发集质量，#1 降级依据）
 - `model_robust.json`：model_robust.py stdout（#12 跨模型一致率）
 - `models/<模型名>/trace-<序号>.json`：跨模型运行的逐 case trace（序号 = 评测集顺序，各模型必须一致）
