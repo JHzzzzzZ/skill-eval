@@ -12,7 +12,7 @@
 |---|---|---|
 | 静态检查 | #2 name/description 规范与 token 预算、#7 调用方式、#13 危险命令扫描、#3 正文行数（主源） | `scripts/static_check.py` |
 | 沙箱运行 | #1 触发 P/R/F1、#4 成本统计、#5 必要性 A/B、#8 最小依赖、#9 结果可验证、#10 过程审计、#12 稳定性、#15 幂等 | `scripts/trace_run.py`、`score.py`、`trigger_judge.py`、`idem.py`、`compare.py`、`process.py` |
-| LLM 评审 | #3 正文精简（语义两项，辅证）、#6 低冗余、#11 fallback、#16 前置自检、#17/18 输入输出契约、#19 副作用可逆 | `judges/*.md` rubric + `judge_runner.py` |
+| LLM 评审 | #3 正文精简（语义两项，辅证）、#6 低冗余、#11 fallback、#16 前置自检、#17/18 输入输出契约、#19 副作用可逆、#13 个人信息语义面（工号/客户名/内部系统）、#8 依赖全面性 | `judges/*.md` rubric + `judge_runner.py` |
 | 历史对比 | #14 版本演进 | `scripts/evolution.py` |
 | 可信度 | #1 触发集质量（照抄 description / 重复 / 跨组冲突）、#12 跨模型一致率 | `scripts/evalset_check.py`、`model_robust.py` |
 
@@ -28,8 +28,8 @@ skill-evaluator/
 ├── requirements.txt    # 运行时零第三方依赖（标准库）；pytest 仅测试用
 ├── judges/             # LLM 评审 rubric（结构化 JSON 输出，固定单发 prompt）
 ├── scripts/            # 确定性工具；check-deps.sh = 前置自检（#16）
-└── tests/              # 270 个测试，全部走 subprocess seam
-docs/adr/               # 28 条架构决策记录
+└── tests/              # 298 个测试，全部走 subprocess seam
+docs/adr/               # 31 条架构决策记录
 ```
 
 评估器**自闭环**：脚本与测试全部在 skill 包内（ADR-0006）。评估产物（评测集、报告）放 `skill-evaluator/evalsets/<skill名>/`，按版本冻结——重跑不重新生成。
@@ -60,7 +60,7 @@ docs/adr/               # 28 条架构决策记录
 
 ```bash
 cd skill-evaluator
-python -m pytest tests        # 270 个测试全绿
+python -m pytest tests        # 298 个测试全绿
 ```
 
 设计决策及理由见 `docs/adr/`。英文版见 `README.md`。

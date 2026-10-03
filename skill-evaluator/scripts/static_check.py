@@ -10,8 +10,13 @@ stdout 契约（字段恒输出）：
   "dangerous": [{"pattern": str, "line": int, "file": str, "text": str}],
   "secrets": [...], "injection": [...], "exfil": [...],   # 同为 #13，命中即 error（ADR-0013）
   "obfuscation": [...],                                # 同为 #13，命中仅 warning
+  "pii": [{"pattern": str, "label": str, "line": int, "file": str, "text": str}],
+                                                        # 同为 #13 的第六组（ADR-0029），命中仅 warning
   # 每行最多计一条（多规则同时命中取第一条）；ignored/errors 里的“处数”= 命中行数
   "hardcoded": [{"pattern": str, "line": int, "file": str, "text": str}],   # 可移植性闸门（ADR-0008）
+  "deps_used": [str],     # 脚本实际用到的外部工具/包（shebang / import / subprocess argv[0]）
+  "deps_declared": [str], # 其中已在 SKILL.md/reference.md/requirements.txt/check-deps.sh 出现过的
+  "deps_missing": [str],  # 差集 → report.py 把 #8 至少降到 warn（ADR-0031）；宿主基座不计
   "excluded": [str],     # 实际未扫描的路径（相对 skill 目录；ADR-0012）
   "ignored": [{"pattern": str, "line": int, "file": str, "text": str}],   # 行内标记抑制掉的命中
   "scan_excluded_dirs": [str],   # 默认豁免目录中实际存在者（ADR-0012：运行面之外）
@@ -22,9 +27,9 @@ stdout 契约（字段恒输出）：
   "passed": bool          # errors 为空即 True（危险命令/缺 name 都算 error）
 }
 
-#13 = 五组规则（ADR-0013）：dangerous/secrets/injection/exfil 命中 → error；obfuscation 命中 → warning。
-secrets 组带占位符过滤（your/xxx/example… 所在行不算硬编码凭据）。error 文案里不得出现
-name/description/invoke 字样，否则 report.py 会误判成 #2/#7 的 fail 依据。
+#13 = 六组规则（ADR-0013/0029）：dangerous/secrets/injection/exfil 命中 → error；
+obfuscation/pii 命中 → warning。secrets 组带占位符过滤（your/xxx/example… 所在行不算硬编码凭据）。
+error 文案里不得出现 name/description/invoke 字样，否则 report.py 会误判成 #2/#7 的 fail 依据。
 
 排除口径（ADR-0012：机制 + 作用域）：
 - 默认排除 tests/、evalsets/、uploads/、.sandbox/（测试夹具、历史 trace、只读存档都不随 skill 运行）
@@ -38,6 +43,7 @@ import _console
 
 _console.fix()
 
+import datetime
 import json
 import os
 import re
@@ -138,6 +144,76 @@ OBFUSCATION_PATTERNS = [
     r"['\"][A-Za-z0-9+/]{120,}={0,2}['\"]",               # 120+ 字符疑似 base64 blob（sha256 hex=64 不触发）
 ]
 
+# 个人信息（#13，第六组，ADR-0029）：命中仅 warning——文档里写示例联系方式是合法的，
+# 是不是真数据需人工判断。只认**可格式化**的个人标识；工号/客户名/内部系统地址这类
+# 公司特化信息没有可枚举格式，交给 judges/pii.md 语义面。
+PII_EMAIL = r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"
+PII_MOBILE = r"(?<!\d)1[3-9]\d{9}(?!\d)"
+PII_ID_CARD = (r"(?<!\d)[1-9]\d{5}(?:19|20)\d{2}(?:0[1-9]|1[0-2])"
+               r"(?:0[1-9]|[12]\d|3[01])\d{3}[\dXx](?!\d)")
+PII_BANK_CARD = r"(?<!\d)\d{16,19}(?!\d)"
+PII_IPV4 = r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])"
+PII_PATTERNS = [("邮箱", PII_EMAIL), ("手机号", PII_MOBILE), ("身份证", PII_ID_CARD),
+                ("银行卡", PII_BANK_CARD), ("IP", PII_IPV4)]
+
+# 示例值白名单（只看命中到的 token）：标准示例域名/保留号段/GB 11643 标准示例证件号/常见测试卡号
+PII_WHITELIST_RE = re.compile(
+    r"(?i)example\.(?:com|org|net)|localhost|test\.com|13800138000|11010519491231002X|4111111111111111")
+
+_ID_WEIGHTS = (7, 9, 10, 5, 8, 4, 2, 1, 6, 3, 7, 9, 10, 5, 8, 4, 2)
+_ID_CHECK = "10X98765432"
+_PRIVATE_IP_RE = re.compile(
+    r"^(?:0|10|127|169\.254|172\.(?:1[6-9]|2\d|3[01])|192\.168|192\.0\.2|198\.51\.100"
+    r"|203\.0\.113|22[4-9]|23\d|24\d|25[0-5])\.")
+
+
+def _luhn_ok(s: str) -> bool:
+    """银行卡 Luhn 校验：挡掉任意 16–19 位数字串（如时间戳拼接、哈希片段）。"""
+    digits = [int(c) for c in s]
+    if not 16 <= len(digits) <= 19:
+        return False
+    total = 0
+    for i, d in enumerate(reversed(digits)):
+        if i % 2:
+            d *= 2
+            if d > 9:
+                d -= 9
+        total += d
+    return total % 10 == 0
+
+
+def _cn_id_ok(s: str) -> bool:
+    """18 位身份证：出生日期合法 + ISO 7064 MOD 11-2 校验位（挡掉纯随机 18 位数字）。"""
+    s = s.upper()
+    if not s[:17].isdigit() or not (s[17].isdigit() or s[17] == "X"):
+        return False
+    try:
+        datetime.date(int(s[6:10]), int(s[10:12]), int(s[12:14]))
+    except ValueError:
+        return False
+    return _ID_CHECK[sum(int(c) * w for c, w in zip(s[:17], _ID_WEIGHTS)) % 11] == s[17]
+
+
+def _public_ip_ok(s: str) -> bool:
+    """公网 IPv4：排除私网/回环/链路本地/文档段/组播段（内部地址是部署事实，不是个人信息）。"""
+    parts = s.split(".")
+    if len(parts) != 4 or any(not p.isdigit() or int(p) > 255 for p in parts):
+        return False
+    return not _PRIVATE_IP_RE.match(s)
+
+
+PII_VALIDATORS = {PII_BANK_CARD: _luhn_ok, PII_ID_CARD: _cn_id_ok, PII_IPV4: _public_ip_ok}
+
+
+def _pii_accept(m, pattern) -> bool:
+    """占位符/示例值先过滤，再过格式校验（Luhn / 证件校验位 / 公网判断）。"""
+    token = m.group(0)
+    if PLACEHOLDER_RE.search(token) or PII_WHITELIST_RE.search(token):
+        return False
+    check = PII_VALIDATORS.get(pattern)
+    return check(token) if check else True
+
+
 # 可移植性闸门（ADR-0008）：宿主环境硬编码 → 整体 fail。
 # 只查硬编码，不查"声明给某 agent 用"（#7 调用方式与通用性无关）。
 # 排除：相对路径与环境变量引用本就不匹配这些模式。具体路径示例不写入本文件注释，
@@ -150,6 +226,102 @@ HOST_HARDCODE_PATTERNS = [
     r"(?<![\w.])\.(?:claude|cursor|codex)\b",  # 他方 agent 生态目录（点号开头）
     r"(?<![\w.])~[\\/]\.(?:claude|cursor|codex)\b",  # 波号下的他方生态目录
 ]
+
+
+# 依赖全面性（ADR-0031）：脚本实际用了什么 vs 文档声明了什么。
+# 只扫运行面（ADR-0012 同源），声明面取四者并集：SKILL.md 正文、reference.md、
+# requirements.txt、check-deps.sh——单一来源都会漏（requirements 只覆盖 python 包，
+# check-deps.sh 只覆盖硬依赖，只有正文会写“需要 pi CLI”）。
+DECLARATION_FILES = ("SKILL.md", "reference.md", "requirements.txt", "check-deps.sh")
+# 宿主基座：由操作系统与 pi 运行时提供，未声明也不报（否则每个 skill 都缺 python/bash）
+BASELINE_DEPS = frozenset({"python", "sh", "bash", "zsh", "env", "cmd", "powershell", "pwsh"})
+def _shebang_tool(text: str):
+    """从 shebang 取解释器名：`#!/usr/bin/env python3` → python3；`#!/bin/bash` → bash。
+
+    不用单个正则：懒匹配路径会抓到 `bin`（实测 deps_used 里出现过 "bin"）。
+    """
+    if not text.startswith("#!"):
+        return None
+    toks = text.splitlines()[0][2:].strip().split() if text.splitlines() else []
+    if not toks:
+        return None
+    if toks[0].rsplit("/", 1)[-1] == "env":
+        toks = [t for t in toks[1:] if not t.startswith("-")]   # 跳过 `env -S python3 -u` 里的选项
+    return (toks[0].rsplit("/", 1)[-1] or None) if toks else None
+
+
+IMPORT_RE = re.compile(r"^\s*(?:import|from)\s+([A-Za-z_][\w.]*)", re.M)
+SUBPROCESS_RE = re.compile(r"subprocess\.(?:run|Popen|check_call|check_output)\s*\(\s*\[([^\]]*)\]")
+ARGV0_RE = re.compile(r"['\"]([^'\"]+)['\"]")
+_TOOL_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_+-]*$")   # 拒绝 ./run.sh、x.py 这类路径
+_STDLIB_FALLBACK = frozenset(
+    ("argparse base64 collections concurrent contextlib csv datetime functools glob hashlib http "
+     "inspect io itertools json logging math os pathlib random re shutil socket statistics "
+     "subprocess sys tempfile textwrap threading time traceback typing unicodedata urllib "
+     "uuid warnings zipfile").split())
+
+
+def _norm_tool(name: str) -> str:
+    """工具名归一：去引号/后缀/版本号（python3.11 → python）。"""
+    n = name.strip().strip("\"'").lower()
+    for suf in (".exe", ".cmd", ".bat", ".ps1", ".sh"):
+        if n.endswith(suf):
+            n = n[: -len(suf)]
+    m = re.fullmatch(r"(python|node|ruby|perl|php)\d+(?:\.\d+)*", n)
+    return m.group(1) if m else n
+
+
+def _stdlib_names():
+    names = getattr(sys, "stdlib_module_names", None)   # 3.10+；3.9 走兜底表
+    return frozenset(names) if names else _STDLIB_FALLBACK
+
+
+def collect_deps(skill_dir: Path, exclude_paths):
+    """返回 (used, declared, missing)：used − declared − 宿主基座 = missing（ADR-0031）。
+
+    已知局限：subprocess 的 argv 由变量拼时取不到 argv[0]（如 [sys.executable, ...]），
+    声明面靠子串匹配（“Python3” 与 “python” 这类同义词会漏判）——宁可漏报，不造假 fail。
+    """
+    std = _stdlib_names()
+    used = set()
+    for d, files in walk_tree(skill_dir, list(exclude_paths)):
+        for name in sorted(files):
+            f = d / name
+            if f.suffix not in SCAN_SUFFIXES:
+                continue
+            try:
+                text = f.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            tool = _shebang_tool(text)
+            if tool:
+                used.add(_norm_tool(tool))
+            for mod in IMPORT_RE.findall(text):
+                top = mod.split(".")[0]
+                if top in std or (f.parent / f"{top}.py").is_file() \
+                        or (skill_dir / f"{top}.py").is_file():
+                    continue          # 标准库与包内本地模块不算外部依赖
+                used.add(_norm_tool(top))
+            for argv in SUBPROCESS_RE.findall(text):
+                first = ARGV0_RE.search(argv)
+                if first and _TOOL_NAME_RE.match(first.group(1).strip()):
+                    used.add(_norm_tool(first.group(1)))
+    declared_names = set()
+    for name in DECLARATION_FILES:
+        p = skill_dir / name
+        if not p.is_file():
+            continue
+        try:
+            text = p.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        if name == "requirements.txt":
+            declared_names |= {_norm_tool(re.split(r"[<>=!~;\[\s]", ln, 1)[0])
+                               for ln in text.splitlines() if ln.strip()}
+        declared_names |= set(re.findall(r"[A-Za-z_][\w.+-]*", text))
+    declared = sorted(t for t in used if t in declared_names)
+    missing = sorted(used - set(declared) - BASELINE_DEPS)
+    return sorted(used), declared, missing
 
 
 def parse_frontmatter(text: str):
@@ -217,7 +389,12 @@ def walk_tree(root: Path, excluded=()):
         yield d, filenames
 
 
-def scan_patterns(skill_dir: Path, patterns, exclude_paths=None, ignored=None, skip_placeholders=False):
+def scan_patterns(skill_dir: Path, patterns, exclude_paths=None, ignored=None, skip_placeholders=False,
+                  accept=None):
+    """逐行匹配模式表。patterns 项可以是 str，也可以是 (标签, 正则)——带标签的命中多一个 label 字段。
+
+    accept(match, 正则) 可做逐命中二次校验（Luhn / 证件校验位 / 公网判断）；返回 False 即丢弃该命中。
+    """
     excluded = list(exclude_paths or [])
     hits = []
     for d, files in walk_tree(skill_dir, excluded):
@@ -236,14 +413,21 @@ def scan_patterns(skill_dir: Path, patterns, exclude_paths=None, ignored=None, s
                     continue
                 silenced = IGNORE_MARKER in line
                 for p in patterns:
-                    if re.search(p, line, re.IGNORECASE):
-                        entry = {"pattern": p, "line": i, "file": f.name, "text": line.strip()}
-                        if silenced:
-                            if ignored is not None:
-                                ignored.append(entry)
-                        else:
-                            hits.append(entry)
-                        break   # 一行只记一条：多规则同时命中时取第一条，避免"处数"虚高
+                    label, regex = p if isinstance(p, tuple) else (None, p)
+                    m = re.search(regex, line, re.IGNORECASE)
+                    if not m:
+                        continue
+                    if accept is not None and not accept(m, regex):
+                        continue
+                    entry = {"pattern": regex, "line": i, "file": f.name, "text": line.strip()}
+                    if label:
+                        entry["label"] = label
+                    if silenced:
+                        if ignored is not None:
+                            ignored.append(entry)
+                    else:
+                        hits.append(entry)
+                    break   # 一行只记一条：多规则同时命中时取第一条，避免"处数"虚高
     return hits
 
 
@@ -322,9 +506,10 @@ def main():
     exclude_paths = ([] if no_defaults else default_excludes(skill_dir)) + resolve_excludes(skill_dir, excludes)
     out = {"name": None, "description": None, "description_tokens": 0,
            "invoke": {"allowed": sorted(INVOKE_VALUES), "resolved": "both", "note": ""},
-           "dangerous": [], "secrets": [], "injection": [], "exfil": [], "obfuscation": [],
+           "dangerous": [], "secrets": [], "injection": [], "exfil": [], "obfuscation": [], "pii": [],
            "hardcoded": [], "excluded": rel_paths(exclude_paths, skill_dir),
            "ignored": [], "scan_excluded_dirs": [], "stale_refs": [],
+           "deps_used": [], "deps_declared": [], "deps_missing": [],
            "skill_md_body_lines": None, "skill_md_body_max_lines": SKILL_MD_BODY_MAX_LINES,
            "errors": [], "warnings": [], "issues": [], "passed": True}
     skill_md = skill_dir / "SKILL.md"
@@ -401,6 +586,20 @@ def main():
     out["obfuscation"] = scan_patterns(skill_dir, OBFUSCATION_PATTERNS, exclude_paths, out["ignored"])
     if out["obfuscation"]:
         out["warnings"].append(f"发现 {len(out['obfuscation'])} 处混淆痕迹，需人工复核（#13，仅警告）")
+
+    # #13 第六组：个人信息（ADR-0029）。只判 warning；公司特化标识（工号/客户名/内部系统）
+    # 不在静态面能力范围内，走 judges/pii.md 语义面。
+    out["pii"] = scan_patterns(skill_dir, PII_PATTERNS, exclude_paths, out["ignored"],
+                               accept=_pii_accept)
+    if out["pii"]:
+        out["warnings"].append(
+            f"发现 {len(out['pii'])} 处疑似个人信息，需人工复核是否已脱敏（#13，仅警告）")
+
+    # 依赖全面性（ADR-0031）：用了什么 vs 声明了什么 → report.py 把 #8 至少降到 warn
+    out["deps_used"], out["deps_declared"], out["deps_missing"] = collect_deps(skill_dir, exclude_paths)
+    if out["deps_missing"]:
+        out["warnings"].append(
+            f"依赖未声明：{'、'.join(out['deps_missing'])}（#8 依赖全面性，ADR-0031，仅警告）")
 
     # 依赖新鲜度（ADR-0009 延伸）：声明路径漂移 → warning（不 fail 闸门）
     out["stale_refs"] = find_stale_refs(skill_dir, body)

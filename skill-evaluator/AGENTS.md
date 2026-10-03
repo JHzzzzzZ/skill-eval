@@ -10,17 +10,19 @@ Generated: 2026-09-22T13:43:08.578Z
 
 | 任务 | 位置 |
 |---|---|
-| 加/改一条指标 | `reference.md § 指标 → 测量手段映射` 先定位测量手段，再改对应脚本 + `scripts/report.py:20 DIM_NAMES` |
-| 改报告契约（19 key / skipped / 三档结论） | `scripts/report.py:207 build()` + `:336 conclusion()`；契约锁在 `tests/test_report.py` |
+| 加/改一条指标 | `reference.md § 指标 → 测量手段映射` 先定位测量手段，再改对应脚本 + `scripts/report.py:26 DIM_NAMES` |
+| 改报告契约（19 key / skipped / 三档结论） | `scripts/report.py:298 build()` + `:583 conclusion()`；契约锁在 `tests/test_report.py` |
+| 改报告呈现（表格化/折叠/结果符号/建议页） | `docs/adr/0030` + `scripts/report.py:1033 _tables()` / `:970 _advice()` / `:720 _HTML_TMPL` |
 | 改 LLM 评审 rubric | `judges/<metric>.md`（输出节必须保持统一 JSON 契约） |
 | 改评测集结构或冻结流程 | `reference.md § 评测集冻结` + `docs/adr/0002` |
 | 改沙箱 / 执行载体 | `reference.md § 沙箱` + `§ 执行载体`（`docs/adr/0001`/`0007`） |
 | 改中间产物文件名 | `reference.md § 中间产物契约`（下游脚本按名读，改名即断链） |
 | 改版本号 / 指纹 | `docs/adr/0003`、`docs/adr/0010` + `scripts/report.py:67-160`（指纹+meta 层） |
 | 改档位定义 / 增量补跑 | `docs/adr/0014` + `SKILL.md` 档位表 + `scripts/report.py` 的 `tier` 字段 |
-| 改指标多源规则（主源/辅证） | `docs/adr/0017` + `scripts/report.py`（#3/#8 合成处） |
+| 改指标多源规则（主源/辅证） | `docs/adr/0017` + `docs/adr/0031` + `scripts/report.py`（#3/#8/#13 合成处） |
 | 改 #12 稳定性口径 | `docs/adr/0016` + `scripts/score.py`（`cost_by_case`）+ `scripts/report.py`（`cv_of`） |
-| 改扫描口径 / 五组规则表 | `docs/adr/0012`（口径 + 作用域，唯一来源）、`docs/adr/0013`（五组分级）+ `scripts/static_check.py:45-123` |
+| 改扫描口径 / 六组规则表 | `docs/adr/0012`（口径 + 作用域，唯一来源）、`docs/adr/0029`（六组分级与 PII）+ `scripts/static_check.py:78-232` |
+| 改依赖全面性（用了什么 vs 声明了什么） | `docs/adr/0031` + `scripts/static_check.py:279 collect_deps` |
 | 改 fallback 行为 | `reference.md § Fallback` 表 |
 
 ## PIPELINE
@@ -29,12 +31,12 @@ SKILL.md 的 9 步，按五档（T0–T4，默认 T2）增量执行（ADR-0014�
 
 1. 前置自检（`bash scripts/check-deps.sh` → python≥3.9/git/pytest/pi + 包内文件齐备；再确认被测有 `SKILL.md`）
 2. 存档定版（原始上传只读存档 `uploads/`；副本 `git init` → 版本号）
-3. `static_check.py` → `static.json`（#2/#7 + #13 五组规则 + #3 正文行数主源 + 可移植性闸门）
+3. `static_check.py` → `static.json`（#2/#7 + #13 六组规则 + #3 正文行数主源 + 可移植性闸门 + `deps_used/declared/missing`）
 4. 评测集冻结；冻结前先 `evalset_count.py` 卡条数（三组各 ≥10），再 `evalset_check.py` → `evalset.json`（#1 可信度），通过后 LLM 自动审核（`reviewed_by: "ai"`）即冻结
 5. 沙箱运行 `trace_run.py`（触发 / golden / baseline / 重复 ×3 / 可选跨模型）→ `triggers.json`、`runs.json`、`golden.json`、`baseline.json`
 6. LLM 评审：按 `judges/*.md` 产出 → `judge_runner.py --validate` 通过 → `judges/<metric>.json`
 7. `score.py` → `score.json`；`idem.py` → `idem.json`
-8. `compare.py` → `compare.json`（#9）、`process.py` → `process.json`（#10），再 `report.py` → `report.json` + `report.md` + `meta.json`
+8. `compare.py` → `compare.json`（#9）、`process.py` → `process.json`（#10），再 `report.py` → `report.json`（含 `advice`）+ `report.md` + `meta.json`
 
 ## JUDGES
 
@@ -46,11 +48,12 @@ SKILL.md 的 9 步，按五档（T0–T4，默认 T2）增量执行（ADR-0014�
 | `precheck.md` | #16 | 环境校验置前且覆盖完整 |
 | `contract.md` | #17/#18 | 输入声明、输出路径、输出格式稳定（一份 rubric 服务两个指标） |
 | `side-effects.md` | #19 | 无未防护不可逆操作、有 dry-run / 确认 |
-| `deps.md` | #8 语义面 | 依赖已声明、无未打包外部环境依赖、凭据走 fallback |
+| `deps.md` | #8 语义面 | 依赖已声明、无未打包外部环境依赖、凭据走 fallback、**声明清单完整**（与脚本实际用到的一致） |
+| `pii.md` | #13 语义面 | 无真实个人标识、无公司内部标识（工号/内部系统/客户名）、示例数据全为占位、无未脱敏日志样本 |
 
-`deps.md` **不在** `report.py` 的 judges 映射表里——#8 是双源合成：trace 报错（实跑面）优先，无报错才用 `judges/deps.json`（语义面），见 `scripts/report.py:232-243`。同类的多源指标（ADR-0017）：#3 = 静态行数主源 + `judges/brevity.json` 辅证；#6 = 评审 + 消融（消融覆盖）。主源优先，辅证不丢。
+`deps.md` 不在 `report.py` 的 judges 映射表里——#8 是三源合成：trace 报错（实跑面）优先，无报错才用 `judges/deps.json`（语义面），另叠加静态声明面 `deps_missing`（非空至少 warn，ADR-0031）。`pii.md` 同理不在映射表里：#13 = 静态六组 + 可移植性闸门与 `judges/pii.json` **取较差者**（ADR-0029）。同类的多源指标（ADR-0017）：#3 = 静态行数主源 + `judges/brevity.json` 辅证；#6 = 评审 + 消融（消融覆盖）。主源优先，辅证不丢。
 
-统一输出契约（`judge_runner.py` 强制；7 份 rubric 都写着同一句"不要自行发挥"）：
+统一输出契约（`judge_runner.py` 强制；9 份 rubric 都写着同一句"不要自行发挥"）：
 
 ```json
 {"items":[{"name":str,"pass":bool,"quote":str}], "score":0~1, "evidence":[str], "reason":str}

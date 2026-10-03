@@ -31,9 +31,19 @@ DIM_NAMES = {
     "#16": "前置自检", "#17": "输入契约", "#18": "输出契约", "#19": "副作用可逆",
 }
 
-# #13 的五个静态规则组（ADR-0013）：用于 note 里的命中摘要
+# #13 的六个静态规则组（ADR-0013/0029）：用于 note 与表格里的命中摘要
 DIM_13_GROUPS = {"dangerous": "危险命令", "secrets": "硬编码凭据",
-                 "injection": "注入指令", "exfil": "数据外发", "obfuscation": "混淆"}
+                 "injection": "注入指令", "exfil": "数据外发", "obfuscation": "混淆",
+                 "pii": "个人信息"}
+# 命中即 fail 的四组；其余两组（混淆/个人信息）仅 warn，待人工复核（ADR-0013/0029）
+DIM_13_HARD = ("dangerous", "secrets", "injection", "exfil")
+DIM_13_SOFT = ("obfuscation", "pii")
+VERDICT_RANK = {"skipped": 0, "pass": 1, "warn": 2, "fail": 3}
+
+
+def worse(a: str, b: str) -> str:
+    """取两条裁决里较差的一条（多源合并用；未知值当 skipped）。"""
+    return a if VERDICT_RANK.get(a, 0) >= VERDICT_RANK.get(b, 0) else b
 
 ALL_KEYS = [f"#{i}" for i in range(1, 20)]
 THREE_TIER = {"pass", "warn", "fail", "skipped"}
@@ -191,25 +201,39 @@ def from_static(static, m: dict):
                else "skipped",
                "method": METHOD_STATIC, "data": static.get("invoke"),
                "note": "调用方式 frontmatter 校验（disable-model-invocation：true=human，缺省=both）"}
-    # #13 权限最小化（ADR-0013）：五组静态规则。四组命中即 fail，混淆仅 warn（待人工复核）。
-    # 旧的 static.json（无四组新字段）走同一分支：get→None→[]，verdict 与旧版一致。
-    hard_groups = ("dangerous", "secrets", "injection", "exfil")
-    groups = {k: (static.get(k) or []) for k in (*hard_groups, "obfuscation")}
-    hit = [k for k in hard_groups if groups[k]]
-    note = "五组静态规则（危险命令/凭据/注入/外发/混淆）"
+    # #13 权限最小化（ADR-0013/0029）：六组静态规则 + 可移植性闸门。
+    # 四组命中即 fail；混淆/个人信息仅 warn（待人工复核）。闸门（宿主硬编码，ADR-0008）
+    # 命中同样 fail——旧实现只把 errors 填非空、passed=false，而 conclusion() 只看指标裁决，
+    # 导致"整体 fail"在报告里完全不可见（ADR-0030）。
+    # 旧的 static.json（无新字段）走同一分支：get→None→[]，verdict 与旧版一致。
+    groups = {k: (static.get(k) or []) for k in (*DIM_13_HARD, *DIM_13_SOFT)}
+    gate = static.get("hardcoded") or []
+    hit = [k for k in DIM_13_HARD if groups[k]]
+    soft_hit = [k for k in DIM_13_SOFT if groups[k]]
+    note = "六组静态规则（危险命令/凭据/注入/外发/混淆/个人信息）"
     if hit:
-        note += "；命中：" + "、".join(f"{DIM_13_GROUPS.get(k, k)}×{len(groups[k])}" for k in hit)
-    elif groups["obfuscation"]:
-        note += f"；仅混淆×{len(groups['obfuscation'])}（警告）"
-    # 排除/抑制必须可见（ADR-0012）：不静默丢指标
+        note += "；命中：" + "、".join(f"{DIM_13_GROUPS[k]}×{len(groups[k])}" for k in hit)
+    if soft_hit:
+        note += "；仅" + "、".join(f"{DIM_13_GROUPS[k]}×{len(groups[k])}（警告）" for k in soft_hit)
+    if gate:
+        note += f"；可移植性闸门命中×{len(gate)}（宿主环境硬编码，ADR-0008，命中即 fail）"
+    # 排除/抑制/闸门旁证必须可见（ADR-0012/0030）：不静默丢指标
     excluded, ignored = static.get("excluded") or [], static.get("ignored") or []
     if excluded:
         shown = "、".join(excluded[:3]) + ("…" if len(excluded) > 3 else "")
         note += f"；未扫描 {len(excluded)} 处（{shown}）"
     if ignored:
         note += f"；行内抑制 {len(ignored)} 行"
-    m["#13"] = {"verdict": "fail" if hit else "warn" if groups["obfuscation"] else "pass",
-                "method": METHOD_STATIC, "data": groups, "note": note}
+    stale = static.get("stale_refs") or []
+    if stale:
+        note += f"；SKILL.md 声明但包内不存在的引用 {len(stale)} 处（信息行，不改裁决）"
+    m["#13"] = {
+        "verdict": "fail" if (hit or gate) else "warn" if soft_hit else "pass",
+        "method": METHOD_STATIC,
+        "data": {**groups, "hardcoded": gate, "stale_refs": stale,
+                 "excluded": excluded, "ignored": ignored,
+                 "scan_excluded_dirs": static.get("scan_excluded_dirs") or []},
+        "note": note}
 
 
 def cv_of(comp):
@@ -349,6 +373,21 @@ def build(d: Path, evalset_dir: Path | None = None) -> dict:
                             "sources": len(g_sources),
                             "deps_judge": {"score": deps["score"], "items": deps.get("items")} if deps else None},
                    "note": dep_note}
+    # #8 第三源：依赖全面性（ADR-0031）。缺声明是文档缺陷 → 最多降到 warn，不 fail
+    # （与 trace 面"跑得通"的证据冲突时，恒不能两者同时成立）。
+    miss = (static or {}).get("deps_missing") if isinstance(static, dict) else None
+    if miss:
+        cur = m["#8"]
+        m["#8"] = {
+            "verdict": worse(cur.get("verdict", "skipped"), "warn"),
+            "method": METHOD_STATIC if cur.get("verdict") == "skipped" else cur.get("method"),
+            "data": {**(cur.get("data") if isinstance(cur.get("data"), dict) else {}),
+                     "deps_used": static.get("deps_used") or [],
+                     "deps_declared": static.get("deps_declared") or [],
+                     "deps_missing": miss},
+            "note": ((cur.get("note") or "") + "；" if cur.get("note") else "")
+                    + f"静态面：{len(miss)} 项依赖未在文档/requirements.txt/check-deps.sh 声明"
+                      f"（{'、'.join(miss[:5])}）（ADR-0031）"}
     if isinstance(score, dict) and isinstance(score.get("cost"), dict) \
             and isinstance(score["cost"].get("tool_calls"), dict):
         # #12（ADR-0016）：裁决用**组内（逐 case）** 变异系数中位数——
@@ -433,6 +472,21 @@ def build(d: Path, evalset_dir: Path | None = None) -> dict:
                       f"{i['name']}={'✓' if i['pass'] else '✗'}" for i in j.get("items", [])) + "）")
                   if j else "无评审输出"}
 
+    # #13 语义面（ADR-0029）：工号/客户名/内部系统地址这类公司特化信息没有可枚举格式，
+    # 只能靠评审。与静态面（六组 + 闸门）取**较差者**（ADR-0017 多源口径：主源 + 辅证）。
+    pii_j = load_judge(d, "pii")
+    if pii_j:
+        cur = m["#13"]
+        items = "/".join(f"{i['name']}={'✓' if i['pass'] else '✗'}" for i in pii_j.get("items", []))
+        m["#13"] = {
+            "verdict": worse(cur.get("verdict", "skipped"), verdict_of_ratio(pii_j["score"])),
+            "method": METHOD_JUDGE if cur.get("verdict") == "skipped" else cur.get("method"),
+            "data": {**(cur.get("data") if isinstance(cur.get("data"), dict) else {}),
+                     "pii_judge": {"score": pii_j["score"], "items": pii_j.get("items"),
+                                   "evidence": pii_j.get("evidence"), "reason": pii_j.get("reason")}},
+            "note": ((cur.get("note") or "") + "；" if cur.get("note") else "")
+                    + f"语义面 pii 评审（逐项：{items}）：{pii_j.get('reason') or ''}"}
+
     # #3 双源（ADR-0017）：正文行数 = 可数事实 → 静态面主源（超线即 warn，机械证据优先）；
     # 语义两项 → LLM 面辅证，结果原形状保留在同一份 data 里，不丢。
     if isinstance(static, dict):
@@ -499,6 +553,7 @@ def build(d: Path, evalset_dir: Path | None = None) -> dict:
 
     from datetime import datetime
     report = {"metrics": m, "conclusion": conclusion(m),
+              "advice": _advice(m),
               "reviewed_by": reviewed_by,
               "evaluator": evaluator_fingerprint(),
               "generated_at": datetime.now().isoformat(timespec="seconds")}
@@ -669,6 +724,11 @@ body{font-family:system-ui,sans-serif;margin:0;background:#f6f7f9;color:#1c2733}
 header{padding:16px 24px;background:#1f2937;color:#fff}
 .badge{padding:2px 10px;border-radius:10px;font-size:13px}
 .pass{background:#0b7a3d}.warn{background:#b7791f}.fail{background:#b23b3b}.skipped{background:#6b7280}
+.badge.vf-pass{background:#0b7a3d}.badge.vf-warn{background:#b7791f}.badge.vf-fail{background:#b23b3b}.badge.vf-skipped{background:#6b7280}
+.vf-pass{color:#0b7a3d}.vf-warn{color:#b7791f}.vf-fail{color:#b23b3b}.vf-skipped{color:#6b7280}
+.vf.badge{color:#fff}
+.adv{background:#fff8e6;border-left:3px solid #b7791f;border-radius:4px;padding:6px 10px;margin-top:6px;font-size:13px}
+.adv-item{font-size:13px}#overview td:first-child{font-weight:600;white-space:nowrap}
 nav{display:flex;gap:4px;padding:8px 24px;background:#fff;border-bottom:1px solid #ddd}
 nav button{border:0;background:none;padding:8px 16px;cursor:pointer;font-size:14px}
 nav button.on{border-bottom:2px solid #1f2937;font-weight:600}
@@ -694,10 +754,12 @@ details pre{max-height:420px}
 <header><h1 style="margin:0;font-size:20px">Skill 评估报告</h1>
 <p style="margin:4px 0 0">结论：<span class="badge __CLS__">__CONCLUSION__</span>__META__</p></header>
 <nav><button data-t="report" class="on" onclick="tab('report')">报告</button>
+<button data-t="advice" onclick="tab('advice')">优化建议</button>
 <button data-t="evalset" onclick="tab('evalset')">评测集审核</button>
 <button data-t="flow" onclick="tab('flow')">评估流程</button></nav>
 <main>
 <section class="tab on" id="t-report">__CARDS__</section>
+<section class="tab" id="t-advice">__ADVICE__</section>
 <section class="tab" id="t-evalset">__EVALSET__</section>
 <section class="tab" id="t-flow">__FLOW__</section>
 </main>
@@ -855,13 +917,242 @@ def _md_table(summary, cols, rows) -> list:
     return out
 
 
-def _raw_html(data) -> str:
-    """原始 data：短的内联，长的一律折叠——不再静默截断（旧实现 [:2000] 会切断 JSON）。"""
+def _raw_html(data, folded=False) -> str:
+    """原始 JSON：有表就折叠（不管多短），无表且短才内联——不再静默截断（旧实现 [:2000] 会切断 JSON）。
+
+    折叠不是省略：表格是视图，折叠里是原文（ADR-0030，HTML 不得比 md/json 少信息）。
+    """
     raw = json.dumps(data, ensure_ascii=False, indent=2)
-    if len(raw) <= DATA_INLINE_MAX:
-        return f"<pre>{_esc(raw)}</pre>"
-    return (f"<details><summary>原始 data（{len(raw)} 字符，与 report.json 同源）</summary>"
-            f"<pre>{_esc(raw)}</pre></details>")
+    if folded or len(raw) > DATA_INLINE_MAX:
+        return (f"<details><summary>原始 JSON（{len(raw)} 字符，与 report.json 同源）</summary>"
+                f"<pre>{_esc(raw)}</pre></details>")
+    return f"<pre>{_esc(raw)}</pre>"
+
+
+VF_GLYPH = {"pass": "✓", "fail": "✗", "warn": "⚠", "skipped": "–"}  # 结果栏符号（ADR-0030）
+ADV_SEV_CLS = {"fail": "fail", "warn": "warn", "info": "skipped"}
+ADV_SEV_RANK = {"fail": 0, "warn": 1, "info": 2}
+
+# 每条指标的建议动作（确定性文本，问题与建议同源 → 结构上无法服钩，ADR-0030）
+ADVICE_ACTIONS = {
+    "#1": "修 description 或触发集：应触发项未触发看召回率，不应触发被触发看精确率",
+    "#2": "把 description 压到 token 阈值内，并确认 name/description 齐全可读",
+    "#3": "把细节下沉到 reference.md，SKILL.md 只留立即要做的步骤",
+    "#4": "合并重复调用、减少不必要的读取，把单次运行成本降到最低",
+    "#5": "删掉不改变产出的步骤（与无 skill 基线对比；省步不省 token 也算必要性不足）",
+    "#6": "删掉消融后反而更好的段落，或补一份 A/B 实证",
+    "#7": "确认调用方式：human 型加 disable-model-invocation: true，模型触发型留空",
+    "#8": "补齐依赖声明（SKILL.md 依赖小节 + requirements.txt/check-deps.sh），并复跑 golden trace",
+    "#9": "把期望输出写成可判定的产物（文件/字段），不要只写自然语言描述",
+    "#10": "删掉 trace 里与声明流程和用例都无关的步骤",
+    "#11": "给需要凭据/网络/外部服务的步骤补降级路径",
+    "#12": "定位波动最大的 case：先对齐多次运行的输入，再消除随机步骤",
+    "#13": "按命中项处置：凭据轮换、个人信息脱敏、危险命令改可逆操作、宿主硬编码改相对路径",
+    "#14": "评估器指纹不一致时重跑旧版本；无可比数据时先冻结评测集",
+    "#15": "让重复步骤幂等：重跑前清理产物，或加已完成短路判断",
+    "#16": "补齐前置自检脚本，并在 SKILL.md 里声明自检不通过就不继续",
+    "#17": "明确输入契约：必填/可选、缺失与非法时的处理",
+    "#18": "明确输出契约：路径、格式，以及失败时留下什么",
+    "#19": "让副作用可逆：写操作前备份，或限制在沙箱内",
+}
+
+
+def _badge(verdict: str) -> str:
+    v = verdict if verdict in VF_GLYPH else "skipped"
+    return f"<span class='badge vf-{v}'>{VF_GLYPH[v]} {_esc(v)}</span>"
+
+
+def _glyph(verdict: str) -> str:
+    v = verdict if verdict in VF_GLYPH else "skipped"
+    return f"<span class='vf vf-{v}'>{VF_GLYPH[v]}</span>"
+
+
+def _advice(m: dict) -> list:
+    """从裁决确定性派生优化建议（ADR-0030）：每条带 #N 反链，问题与建议同源。
+
+    三档粒度：指标级（非 pass 即一条）、检查点级（judge 里 pass=false 的项）、
+    #13 命中级（每个命中的规则组/闸门一条）。排序 fail → warn → info，同级按指标号。
+    """
+    out = []
+    for k in ALL_KEYS:
+        v = m.get(k) or {}
+        verdict = v.get("verdict")
+        if verdict == "pass":
+            continue
+        sev = {"fail": "fail", "warn": "warn"}.get(verdict, "info")
+        action = ADVICE_ACTIONS.get(k, "复跑该指标的测量面")
+        data = v.get("data") if isinstance(v.get("data"), dict) else {}
+        phrase = {"fail": "未通过", "warn": "有警告"}.get(verdict, "未测")
+        out.append({"metric": k, "severity": sev,
+                    "problem": f"{DIM_NAMES.get(k, k)}（{k}）{phrase}",
+                    "evidence": (v.get("note") or "").strip() or "—", "action": action})
+        for it in data.get("items") or []:
+            if isinstance(it, dict) and it.get("pass") is False:
+                out.append({"metric": k, "severity": sev,
+                            "problem": f"检查点未通过：{it.get('name')}",
+                            "evidence": str(it.get("quote") or "").strip() or "—", "action": action})
+        if k != "#13":
+            continue
+        for g, label in DIM_13_GROUPS.items():
+            hits = [h for h in (data.get(g) or []) if isinstance(h, dict)]
+            if hits:
+                out.append({"metric": k,
+                            "severity": "fail" if g in DIM_13_HARD else sev,
+                            "problem": f"静态规则命中：{label}（{g}）×{len(hits)}",
+                            "evidence": "；".join(f"{h.get('file')}:{h.get('line')}" for h in hits[:3]),
+                            "action": ADVICE_ACTIONS["#13"]})
+        gate = [h for h in (data.get("hardcoded") or []) if isinstance(h, dict)]
+        if gate:
+            out.append({"metric": k, "severity": "fail",
+                        "problem": f"可移植性闸门命中：宿主环境硬编码 ×{len(gate)}",
+                        "evidence": "；".join(f"{h.get('file')}:{h.get('line')} {h.get('text')}"
+                                               for h in gate[:3]),
+                        "action": "把绝对路径/宿主目录改成相对路径或环境变量（ADR-0008）"})
+    out.sort(key=lambda a: (ADV_SEV_RANK.get(a["severity"], 3), a["metric"]))
+    return out
+
+
+def _flatten_table(data):
+    """通用兜底：任何 dict/list 递归压平成 key-value 表——渲染层不留裸 JSON（ADR-0030）。"""
+    rows = []
+
+    def walk(v, path):
+        if isinstance(v, dict):
+            for key in v:
+                walk(v[key], f"{path}.{key}" if path else str(key))
+        elif isinstance(v, list) and v and all(isinstance(x, dict) for x in v):
+            for i, x in enumerate(v):
+                walk(x, f"{path}[{i}]")
+        else:
+            rows.append([path or "值", _cell(v)])
+
+    walk(data, "")
+    return [(None, ["字段", "值"], rows)] if rows else []
+
+
+def _tables(metric: str, data, allow_generic=True) -> list:
+    """指标 data → 表格列表（0..n）。先试旧形状，再试本指标定制表，最后通用兜底。
+
+    只读不改：形状与 report.json 同源，渲染层不得反过来改 report.json 的形状。
+    allow_generic=False：调用方已用 items 渲染出表时，不再把同一份 dict 再压一遍。
+    """
+    out = []
+    known = _data_table(metric, data)
+    if known:
+        out.append(known)
+    if isinstance(data, dict):
+        if metric == "#1" and "f1" in data:
+            out.append(("触发精准度（应触发/不应触发/易混淆三组）", ["分量", "值"],
+                        [["精确率", _fmt(data.get("precision"))],
+                         ["召回率", _fmt(data.get("recall"))], ["F1", _fmt(data.get("f1"))]]))
+        elif metric == "#5":
+            labels = {"tokens": "tokens", "tool_calls": "工具步数", "seconds": "秒"}
+            rows = [[labels.get(key, key), _fmt(comp.get("golden")), _fmt(comp.get("baseline")),
+                     f"{comp['improvement'] * 100:+.1f}%"]
+                    for key, comp in data.items()
+                    if isinstance(comp, dict) and "improvement" in comp]
+            if rows:
+                out.append(("有 skill（golden）对比无 skill（baseline）",
+                            ["分量", "有 skill 均值", "无 skill 基线", "提升率"], rows))
+        elif metric == "#6" and ("full" in data or "f1_full" in data):
+            out.append((f"消融对比量 {data.get('metric', 'f1')}（越大越好 ="
+                        f" {_fmt(data.get('higher_is_better', True))}）",
+                        ["状态", "值"],
+                        [["完整", _fmt(data.get("full", data.get("f1_full")))],
+                         ["消融后", _fmt(data.get("ablated", data.get("f1_ablated")))]]))
+        elif metric == "#8":
+            rows = [["依赖类报错", _cell(e)] for e in data.get("dependency_errors") or []]
+            rows += [["忽略的报错（agent 自身路径笔误）", _cell(e)]
+                     for e in data.get("ignored_errors") or []]
+            if rows:
+                out.append((f"golden trace 来源 {_fmt(data.get('sources'))} 条", ["类型", "内容"], rows))
+            dj = data.get("deps_judge")
+            if isinstance(dj, dict) and isinstance(dj.get("items"), list):
+                out.append((f"语义面 deps 评审 score {_fmt(dj.get('score'))}",
+                            ["检查点", "结果", "原文引用"],
+                            [[i.get("name"), "✓" if i.get("pass") else "✗", _cell(i.get("quote"))]
+                             for i in dj["items"]]))
+            miss = data.get("deps_missing") or []
+            if miss:
+                out.append((f"依赖全面性（ADR-0031）：已用 {len(data.get('deps_used') or [])} 项、"
+                            f"已声明 {len(data.get('deps_declared') or [])} 项",
+                            ["未声明的依赖", "说明"],
+                            [[m, "未在文档/requirements.txt/check-deps.sh 声明"] for m in miss]))
+        elif metric == "#10":
+            rows = [["score", _fmt(data.get("score"))], ["理由", _cell(data.get("reason"))]]
+            rows += [["无意义步骤", _cell(s)] for s in data.get("meaningless") or []]
+            out.append((None, ["项目", "内容"], rows))
+        elif metric == "#13":
+            level = {**{g: "error → fail" for g in DIM_13_HARD},
+                     **{g: "warning（人工复核）" for g in DIM_13_SOFT}}
+            rows = [[f"{DIM_13_GROUPS.get(g, g)}（{g}）", len(data.get(g) or []), level.get(g, "")]
+                    for g in (*DIM_13_HARD, *DIM_13_SOFT) if g in data]
+            rows.append(["可移植性闸门（hardcoded）", len(data.get("hardcoded") or []),
+                         "error → fail（ADR-0008）"])
+            out.append(("六组静态规则 + 可移植性闸门（ADR-0013/0029）",
+                        ["规则组", "命中数", "级别"], rows))
+            hits = [(g, h) for g in (*DIM_13_HARD, *DIM_13_SOFT, "hardcoded")
+                    for h in (data.get(g) or []) if isinstance(h, dict)]
+            if hits:
+                out.append((None, ["规则组", "文件", "行", "命中文本"],
+                            [[g, h.get("file"), h.get("line"), _cell(h.get("text"))] for g, h in hits]))
+            out.append(("扫描范围与旁证（信息行，不改裁决，ADR-0012/0030）", ["项目", "值"],
+                        [["声明但包内不存在的引用", "、".join(data.get("stale_refs") or []) or "无"],
+                         ["未扫描", "、".join(data.get("excluded") or []) or "无"],
+                         ["行内抑制", f"{len(data.get('ignored') or [])} 行"],
+                         ["默认豁免目录存在者",
+                          "、".join(data.get("scan_excluded_dirs") or []) or "无"]]))
+            pj = data.get("pii_judge")
+            if isinstance(pj, dict) and isinstance(pj.get("items"), list):
+                out.append((f"语义面 pii 评审 score {_fmt(pj.get('score'))}",
+                            ["检查点", "结果", "原文引用"],
+                            [[i.get("name"), "✓" if i.get("pass") else "✗", _cell(i.get("quote"))]
+                             for i in pj["items"]]))
+        elif metric == "#14" and (data.get("changes") or data.get("versions")):
+            out.append(((f"{len(data.get('versions') or [])} 个版本" + (
+                "，评估器指纹一致（可比）" if data.get("comparable") else "，指纹不同（不可比）")),
+                        ["指标", "起始值", "最新值"],
+                        [[c.get("metric"), _cell(c.get("from")), _cell(c.get("to"))]
+                         for c in data.get("changes") or []]))
+    if not out and allow_generic:
+        out = _flatten_table(data)
+    return out
+
+
+def _overview_html(report: dict) -> str:
+    """顶部 19 行总览（结果栏：✓/✗/⚠/–）——一眼扫完，不用十几个卡片里翻（ADR-0030）。"""
+    rows = []
+    for k in ALL_KEYS:
+        v = report["metrics"][k]
+        rows.append(f"<tr><td>{k}</td><td>{_esc(DIM_NAMES.get(k, ''))}</td><td>{_glyph(v['verdict'])}</td>"
+                    f"<td>{_esc(v['method'])}</td><td>{_esc(_cell(v.get('note') or ''))}</td></tr>")
+    return ("<div class='card'><h3 style='margin:0'>19 项指标总览</h3>"
+            "<table id='overview'><tr><th>指标</th><th>名称</th><th>结果</th><th>手段</th><th>摘要</th></tr>"
+            + "".join(rows) + "</table></div>")
+
+
+def _advice_html(advice: list) -> str:
+    """「优化建议」tab：按严重度排序的汇总表，每项带 #N 锚点跳回指标卡。"""
+    if not advice:
+        return "<p class='hint'>19 项指标全部通过，无待办建议。</p>"
+    rank = {}
+    for a in advice:
+        rank.setdefault(a["severity"], 0)
+        rank[a["severity"]] += 1
+    head = "<p class='hint'>" + "、".join(
+        f"{name} {rank.get(sev, 0)} 条" for sev, name in
+        (("fail", "未通过"), ("warn", "警告"), ("info", "未测")) if rank.get(sev)) + "</p>"
+    items = []
+    for a in advice:
+        cls = ADV_SEV_CLS.get(a["severity"], "skipped")
+        items.append(
+            f"<div class='card adv-item' data-metric='{_esc(a['metric'])}'>"
+            f"<div><a href='#m-{a['metric'].lstrip('#')}'>{_esc(a['metric'])}</a> "
+            f"<span class='vf vf-{cls}'>{VF_GLYPH.get(cls, '–')}</span> "
+            f"<strong>{_esc(a['problem'])}</strong></div>"
+            f"<div class='hint'>证据：{_esc(a['evidence'])}</div>"
+            f"<div>建议：{_esc(a['action'])}</div></div>")
+    return head + "".join(items)
 
 
 def _judge_summary(data) -> str:
@@ -875,9 +1166,17 @@ def _judge_summary(data) -> str:
     return " · ".join(bits)
 
 
+#19 条指标的结论符号（ADR-0030）：网页用 ✓/✗，结论类名仍走原三档样式
+CONCLUSION_CLS = {"all-pass": "pass", "with-warnings": "warn", "has-failures": "fail"}
+
+
 def render_html(report: dict, evalset_dir=None, skill_arg=None) -> str:
-    # #19/#20：按 ID 顺序 + 中文指标名；#38：评测集审核同页；#43：SVG 流程图
-    cards = []
+    # #19/#20：按 ID 顺序 + 中文指标名；#43：SVG 流程图；ADR-0030：表格优先 + 建议内联 + ✓/✗ 结果栏
+    advice = report.get("advice") or []
+    by_metric = {}
+    for a in advice:
+        by_metric.setdefault(a["metric"], []).append(a)
+    cards = [_overview_html(report)]
     for k in ALL_KEYS:
         v = report["metrics"][k]
         data = v.get("data")
@@ -885,35 +1184,42 @@ def render_html(report: dict, evalset_dir=None, skill_arg=None) -> str:
         if isinstance(data, dict) and isinstance(data.get("items"), list):
             summary = _judge_summary(data)
             trs = "".join(
-                f"<tr><td>{_esc(i['name'])}</td><td>{'✓' if i['pass'] else '✗'}</td>"
+                f"<tr><td>{_esc(i['name'])}</td><td>{_glyph('pass' if i['pass'] else 'fail')}</td>"
                 f"<td><code>{_esc(i['quote'][:80])}</code></td></tr>"
                 for i in data["items"])
             items_html = ((f"<p style='margin:6px 0 2px;font-size:13px;color:#475569'>{_esc(summary)}</p>"
                            if summary else "")
                           + f"<table><tr><th>检查点</th><th>结果</th><th>原文引用</th></tr>{trs}</table>")
-        table_html = ""
-        if data is not None and not items_html:
-            tbl = _data_table(k, data)
-            if tbl:
-                table_html = _html_table(*tbl)
-        # 原始 data 一律可见（表格是视图，折叠里是原文）：report.html 不得比 report.md 少信息
-        raw_html = _raw_html(data) if data is not None else ""
+        # 表格优先（ADR-0030）：定制表 → 通用兜底；已用 items 渲染出表时不再把同一份 dict 重复压平
+        tables = _tables(k, data, allow_generic=not items_html) if data is not None else []
+        table_html = "".join(_html_table(*t) for t in tables)
+        # 原始 JSON 一律可见：有表就折叠（表格是视图，折叠里是原文），不静默截断
+        raw_html = _raw_html(data, folded=bool(items_html or tables)) if data is not None else ""
+        adv_html = ""
+        for a in by_metric.get(k, []):
+            cls = ADV_SEV_CLS.get(a["severity"], "skipped")
+            adv_html += (f"<div class='adv'><span class='vf vf-{cls}'>{VF_GLYPH.get(cls, '–')}</span> "
+                         f"<strong>{_esc(a['problem'])}</strong> → {_esc(a['action'])}"
+                         f"<div class='hint'>证据：{_esc(a['evidence'])}</div></div>")
+        if adv_html:
+            adv_html = "<h4 style='margin:12px 0 4px'>优化建议</h4>" + adv_html
         cards.append(
-            f"<div class='card'><h3 style='margin:0'>{k} · {_esc(DIM_NAMES.get(k, ''))} "
-            f"<span class='badge {v['verdict']}'>{v['verdict']}</span>"
+            f"<div class='card' id='m-{k.lstrip('#')}'><h3 style='margin:0'>{k} · "
+            f"{_esc(DIM_NAMES.get(k, ''))} {_badge(v['verdict'])}"
             f"<small style='color:#64748b'>（{_esc(v['method'])}）</small></h3>"
             f"<p style='font-size:13px;color:#475569'>{_esc(v.get('note') or '')}</p>"
-            f"{items_html}{table_html}{raw_html}</div>")
+            f"{table_html}{items_html}{adv_html}{raw_html}</div>")
     cls = report["conclusion"]
     meta_bits = []
     if report.get("tier"):
         meta_bits.append(f"<span class='badge skipped' style='margin-left:8px'>{_esc(report['tier'])}</span>")
     if report.get("reviewed_by") == "ai":
         meta_bits.append("<small style='margin-left:8px;color:#fbbf24'>评测集 AI 审核，未经人工复核</small>")
-    return (_HTML_TMPL.replace("__CLS__", cls)
+    return (_HTML_TMPL.replace("__CLS__", CONCLUSION_CLS.get(cls, "skipped"))
             .replace("__CONCLUSION__", _esc(report["conclusion"]))
             .replace("__META__", "" .join(meta_bits))
             .replace("__CARDS__", "".join(cards))
+            .replace("__ADVICE__", _advice_html(report.get("advice") or []))
             .replace("__EVALSET__", _evalset_html(evalset_dir, _skill_meta(skill_arg, evalset_dir)))
             .replace("__FLOW__", _flow_svg()))
 
@@ -934,22 +1240,28 @@ def render_md(report: dict) -> str:
         method = {METHOD_STATIC: "静态检查", METHOD_RUN: "沙箱运行",
                   METHOD_JUDGE: "LLM评审", METHOD_COMPARE: "对比",
                   METHOD_DIFF: "历史对比"}.get(v["method"], v["method"])
-        # #20：中文指标名 + 中文测量手段；data 渲染：表格优先，长 data 只留指针（report.json 是权威）
+        # #20：中文指标名 + 中文测量手段；data 渲染：一律表格化（ADR-0030），report.json 仍是权威
         lines.append(f"### {k} · {name} [{v['verdict']}]（{method}）{note}")
         data = v.get("data")
         if data is not None:
-            if isinstance(data, dict) and isinstance(data.get("items"), list):
+            has_items = isinstance(data, dict) and isinstance(data.get("items"), list)
+            if has_items:
                 lines += _md_table(_judge_summary(data), ["检查点", "结果", "原文引用"],
-                                   [[i["name"], "✓" if i["pass"] else "✗", i["quote"]] for i in data["items"]])
-            else:
-                tbl = _data_table(k, data)
-                if tbl:
-                    lines += _md_table(*tbl)
-                else:
-                    raw = json.dumps(data, ensure_ascii=False, indent=2)
-                    lines.append(f"```json\n{raw}\n```" if len(raw) <= DATA_INLINE_MAX
-                                 else f"完整 data 见 `report.json`（{len(raw)} 字符）")
+                                   [[i["name"], "✓" if i["pass"] else "✗", i["quote"]]
+                                    for i in data["items"]])
+            for tbl in _tables(k, data, allow_generic=not has_items):
+                lines += _md_table(*tbl)
         lines.append("")
+    # 优化建议（ADR-0030）：与指标裁决同源，每条带 #N 反链
+    lines += ["## 优化建议", ""]
+    advice = report.get("advice") or []
+    if not advice:
+        lines.append("- 19 项指标全部通过，无待办建议。")
+    for a in advice:
+        lines.append(f"- **{a['metric']}**（{a['severity']}）{a['problem']} → {a['action']}")
+        if a.get("evidence"):
+            lines.append(f"  - 证据：{a['evidence']}")
+    lines.append("")
     return "\n".join(lines)
 
 

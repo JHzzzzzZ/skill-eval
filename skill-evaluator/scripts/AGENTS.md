@@ -4,14 +4,14 @@ Generated: 2026-09-22T13:43:08.578Z
 
 ## OVERVIEW
 
-13 个确定性 Python CLI + `check-deps.sh` 前置自检，扁平单层，共约 2400 行。每个脚本 = 一个有文档的 CLI seam：输出 stdout JSON 或落盘中间产物。脚本之间无 subprocess 调用。
+16 个确定性 Python CLI + `check-deps.sh` 前置自检，扁平单层，共约 4000 行（`scripts/*.py` 实测 3992 行 + 83 行 shell）。每个脚本 = 一个有文档的 CLI seam：输出 stdout JSON 或落盘中间产物。脚本之间无 subprocess 调用。
 
 ## WHERE TO LOOK
 
 | 脚本 | 行数 | CLI seam | 服务指标 |
 |---|---|---|---|
-| `report.py` | 583 | `<results目录> [--html] [--evalset <vN>] [--skill <dir>]` | 汇总 19 条 |
-| `static_check.py` | 297 | `<skill目录> [--exclude <p>]... [--no-default-excludes]` | #2/#7/#13 五组 + 可移植性闸门 |
+| `report.py` | 1307 | `<results目录> [--html] [--evalset <vN>] [--skill <dir>] [--tier <t>]` | 汇总 19 条 + 优化建议 + 报告页 |
+| `static_check.py` | 621 | `<skill目录> [--exclude <p>]... [--no-default-excludes]` | #2/#7/#13 六组 + 可移植性闸门 + #8 依赖全面性 |
 | `trace_run.py` | 245 | `<worktree> <prompt> [--skill\|--no-skill] [--early-exit] [--model] [--events] [--out] [--build-only]` | #1/#4/#5/#8/#12/#15 数据源 |
 | `evalset_check.py` | 180 | `<evalset目录> --skill <skill目录> [--out]` | #1 可信度（触发集质量） |
 | `evalset_count.py` | 111 | `<evalsets/<name>/vN> [--min*] [--out]` | #1 冻结前条数闸门 |
@@ -30,9 +30,9 @@ Generated: 2026-09-22T13:43:08.578Z
 
 顶层函数 + 行号。
 
-- `report.py` — `load`(40) `load_judge`(59) `_sha256_files`(67) `evaluator_fingerprint`(77) `skill_fingerprint`(98) `evalset_meta`(116) `build_meta`(133) `write_meta`(151) `verdict_of_ratio`(162) `verdict_of_score`(167) `from_static`(171) `build`(207) `conclusion`(336) `_esc`(357) `_flow_svg`(362) `_evalset_html`(378) `render_html`(499) `render_md`(528) `main`(547)；常量 `DIM_13_GROUPS`(29)
+- `report.py` — `worse`(44) `load`(57) `load_judge`(76) `_sha256_files`(84) `evaluator_fingerprint`(94) `skill_fingerprint`(115) `evalset_meta`(133) `build_meta`(150) `write_meta`(168) `verdict_of_ratio`(179) `verdict_of_score`(184) `from_static`(188) `cv_of`(239) `dependency_errors`(263) `build`(298) `_evalset_reviewed_by`(563) `conclusion`(583) `_esc`(604) `_flow_svg`(609) `_skill_meta`(625) `_evalset_html`(654) `_data_table`(849) `_html_table`(904) `_md_table`(912) `_raw_html`(920) `_badge`(960) `_glyph`(965) `_advice`(970) `_flatten_table`(1015) `_tables`(1033) `_overview_html`(1122) `_advice_html`(1134) `_judge_summary`(1158) `render_html`(1173) `render_md`(1227) `main`(1268)；常量 `DIM_13_GROUPS`(29) `DIM_13_HARD`/`DIM_13_SOFT`(34) `ADVICE_ACTIONS`(937) `VF_GLYPH`(932) `CONCLUSION_CLS`(1170) `_HTML_TMPL`(720)
 - `trace_run.py` — `EventAggregator`(19, class；`.feed`(30) `.result`(66)) `parse_events`(88) `build_args`(101) `main`(124)
-- `static_check.py` — `parse_frontmatter`(125) `token_estimate`(137) `scan_patterns`(144) `resolve_excludes`(172) `default_excludes`(181) `rel_paths`(190) `main`(201)；常量 `DANGEROUS_PATTERNS`(45) `SECRETS_PATTERNS`(61) `PLACEHOLDER_RE`(72) `INJECTION_PATTERNS`(78) `EXFIL_PATTERNS`(93) `OBFUSCATION_PATTERNS`(107) `HOST_HARDCODE_PATTERNS`(117)
+- `static_check.py` — `_luhn_ok`(170) `_cn_id_ok`(185) `_public_ip_ok`(197) `_pii_accept`(208) `_shebang_tool`(238) `_norm_tool`(264) `_stdlib_names`(274) `collect_deps`(279) `parse_frontmatter`(327) `token_estimate`(339) `find_stale_refs`(350) `walk_tree`(375) `scan_patterns`(392) `emit`(434) `resolve_excludes`(442) `default_excludes`(451) `rel_paths`(474) `main`(485)；常量 `DANGEROUS_PATTERNS`(78) `SECRETS_PATTERNS`(94) `PLACEHOLDER_RE`(105) `INJECTION_PATTERNS`(111) `EXFIL_PATTERNS`(126) `OBFUSCATION_PATTERNS`(140) `PII_PATTERNS`(156) `PII_VALIDATORS`(205) `HOST_HARDCODE_PATTERNS`(223) `BASELINE_DEPS`(237)
 - `evalset_check.py` — `normalize`(35) `grams`(40) `coverage`(47) `load_group`(55) `find_duplicates`(75) `find_conflicts`(87) `check`(98) `main`(151)
 - `model_robust.py` — `normalize`(34) `grams`(38) `jaccard`(45) `load_model_dir`(52) `mean`(71) `analyze`(75) `main`(150)
 - `compare.py` — `build_prompt`(15) `extract_answer`(22) `main`(52)
@@ -60,15 +60,17 @@ Generated: 2026-09-22T13:43:08.578Z
 - 不改 stdout JSON 的字段名、不新增必填字段——`report.py` 按名读中间产物，改名即断链。
 - 不在 `main()` 之外做 IO：模块顶层不读写文件，保证 import 无副作用（`tests/test_trace_run.py:179` 会直接 import 模块）。
 - 不硬编码解释器或机器路径，一律 `sys.executable`（ADR-0009）。
-- `DANGEROUS_PATTERNS` 里的 `su`+`do` 拼接（`static_check.py:65`）是合并前另一条线的写法，与 ADR-0012 的自排除**并存**；两条都保留，别只删其一（删自排除会让自检失败）。
-- 不把 `SECRETS_PATTERNS` 的占位符过滤（`PLACEHOLDER_RE`，`static_check.py:72`）删掉：文档里合法写 `api_key="your-key-here"` 会被误报为硬编码凭据（ADR-0013）。
-- 不把 `OBFUSCATION_PATTERNS` 的裁决提到 fail：它只能 warn，命中多为打包/压缩产物（ADR-0013，`report.py:186-203`）。
+- `DANGEROUS_PATTERNS` 里的 `su`+`do` 拼接（`static_check.py:85`）是合并前另一条线的写法，与 ADR-0012 的自排除**并存**；两条都保留，别只删其一（删自排除会让自检失败）。
+- 不把 `SECRETS_PATTERNS` 的占位符过滤（`PLACEHOLDER_RE`，`static_check.py:105`）删掉：文档里合法写 `api_key="your-key-here"` 会被误报为硬编码凭据（ADR-0013）。PII 组（`static_check.py:156`）同样在 `_pii_accept` 里先过占位符与示例白名单再进 Luhn/证件校验位/公网判断。
+- 不把 `OBFUSCATION_PATTERNS` / `PII_PATTERNS` 的裁决提到 fail：两组只能 warn，命中多为打包产物或合法示例（ADR-0013/0029，`report.py:188` 的 `from_static`）。
+- 不让 `deps_missing` 把 #8 判成 fail：缺声明是文档缺陷，与 trace 面“跑得通”的证据冲突（ADR-0031，`report.py` 的 #8 第三源）。
+- 优化建议必须**确定性派生**（`report.py:970 _advice`）：不得引入 LLM 生成建议——建议与裁决同源才谈得上强对应（ADR-0030）。
 
 ## NOTES
 
-- 重复实现（抽公共模块前先读根 `AGENTS.md` 关于指纹的警告）：`normalize()` `evalset_check.py:35` vs `model_robust.py:34`（字节级相同）；`grams()` `:40` vs `:38`；`coverage()`(`:47`) 与 `jaccard()`(`model_robust.py:45`) 同源但分母不同（非对称覆盖 vs 并集）。
-- 代码级 import 扇入只有三条：`compare.extract_answer` ← `process.py:15`、`trigger_judge.py:14`；`static_check.parse_frontmatter` ← `evalset_check.py:26`；`trace_run.EventAggregator` ← `tests/test_trace_run.py:179`。其余 9 个脚本零代码级依赖。
-- `report.py:207 build()` 是约 130 行 if 链，19 指标无子函数。读它反推所有上游契约是最快路径。
-- `report.py:430 _HTML_TMPL` 是约 70 行内联 HTML + 前端 JS（含评测集审核交互）。改 HTML 时注意 JS 字符串里的换行会被截断（历史 bug：commit `0ef26f5`）。
-- 评估器指纹只收 `scripts/*.py`（`report.py:77`）——`check-deps.sh` 改了**不会**让历史报告变 `comparable=false`，改 `.py` 会。
+- 重复实现（抽公共模块前先读根 `AGENTS.md` 关于指纹的警告）：`normalize()` `evalset_check.py:45` vs `model_robust.py:38`（字节级相同）；`grams()` `:50` vs `:42`；`coverage()`(`:57`) 与 `jaccard()`(`model_robust.py:49`) 同源但分母不同（非对称覆盖 vs 并集）。
+- 代码级 import 扇入只有三条：`compare.extract_answer` ← `process.py:17`、`trigger_judge.py:24`；`static_check.parse_frontmatter` ← `evalset_check.py:31`；`trace_run.EventAggregator` ← `tests/test_trace_run.py:190`。其余 13 个脚本零代码级依赖。
+- `report.py:298 build()` 是约 260 行 if 链，19 指标无子函数。读它反推所有上游契约是最快路径。
+- `report.py:720 _HTML_TMPL` 是约 100 行内联 HTML + 前端 JS（含评测集审核与建议 tab 的交互）。改 HTML 时注意 JS 字符串里的换行会被截断（历史 bug：commit `0ef26f5`），且指标卡必须带 `id='m-N'`——建议页的锚点靠它跳转（ADR-0030）。
+- 评估器指纹只收 `scripts/*.py` + `judges/*.md` + `SKILL.md` + `reference.md`（`report.py:94`）——`check-deps.sh` 改了**不会**让历史报告变 `comparable=false`，改 `.py` 会。
 - 新增 `check-deps.sh` 的坑：Windows 上 `python3` 可能是应用商店占位符，`command -v` 能找到但跑不起来，必须实跑验证再采纳（`check-deps.sh` 已这么写，别简化成 `command -v python3`）。
