@@ -491,3 +491,130 @@ def test_body_lines_null_without_skill_md(tmp_path):
     d.mkdir()
     out = run_check(d)
     assert out["skill_md_body_lines"] is None       # 无 SKILL.md ≠ 0 行：不给出假证据
+
+
+# --- ADR-0029：第六组 PII（静态面只判 warning，语义面见 judges/pii.md）---
+
+def pii_skill(tmp_path, body: str) -> Path:
+    return make_skill(tmp_path,
+                      '---\nname: s\ndescription: "x" * 120\n---\n\n# t\n\n' + body + "\n")
+
+
+def test_pii_email_and_mobile_warn_not_fail(tmp_path):
+    d = pii_skill(tmp_path, "联系 zhangsan@corp-internal.cn 或 13812345678 获取数据。")
+    out = run_check(d)
+    assert out["pii"], "邮箱/手机号必须被 PII 组查中"
+    assert out["passed"] is True                     # 仅 warning：文档里出现联系方式不等于错
+    assert not any("个人信息" in e for e in out["errors"])
+    assert any("个人信息" in w for w in out["warnings"])
+
+
+def test_pii_placeholder_and_examples_whitelisted(tmp_path):
+    # 占位符行（your/example 关键字）与示例值白名单都不算命中
+    d = pii_skill(tmp_path, "设置 api_key=your@email.com；示例号 13800138000；"
+                           "示例证件 11010519491231002X；域名 example.com；测试卡 4111111111111111。")
+    out = run_check(d)
+    assert out["pii"] == []
+
+
+def test_pii_id_card_checksum(tmp_path):
+    (tmp_path / "good").mkdir()
+    (tmp_path / "bad").mkdir()
+    good = pii_skill(tmp_path / "good", "客户身份证 110105194912310038 已脱敏。")
+    assert [h for h in run_check(good)["pii"] if h.get("label") == "身份证"], \
+        "校验位正确的 18 位身份证必须命中"
+    bad = pii_skill(tmp_path / "bad", "编号 110105194912310039 不是身份证。")
+    assert [h for h in run_check(bad)["pii"] if h.get("label") == "身份证"] == []
+
+
+def test_pii_bank_card_luhn(tmp_path):
+    (tmp_path / "good").mkdir()
+    (tmp_path / "bad").mkdir()
+    good = pii_skill(tmp_path / "good", "卡号 4222222222222220 已脱敏。")
+    assert [h for h in run_check(good)["pii"] if h.get("label") == "银行卡"]
+    bad = pii_skill(tmp_path / "bad", "随机串 4222222222222221 不是卡号。")
+    assert [h for h in run_check(bad)["pii"] if h.get("label") == "银行卡"] == []
+
+
+def test_pii_ip_excludes_private_and_doc_ranges(tmp_path):
+    d = pii_skill(tmp_path, "内网 192.168.1.1 / 10.0.0.5 / 127.0.0.1 / 203.0.113.9 不报。")
+    assert [h for h in run_check(d)["pii"] if h.get("label") == "IP"] == []
+    (tmp_path / "pub").mkdir()
+    pub = pii_skill(tmp_path / "pub", "外网 8.8.8.8 上报。")
+    assert [h for h in run_check(pub)["pii"] if h.get("label") == "IP"]
+
+
+def test_pii_line_level_placeholder_filtered(tmp_path):
+    """行级占位符（与 secrets 组同口径，评审 P2）："示例：zhangsan@corp.com" 不算命中。"""
+    d = pii_skill(tmp_path, "示例：zhangsan@corp.com 是占位联系邮箱。")
+    assert run_check(d)["pii"] == []
+
+
+def test_pii_respects_ignore_marker(tmp_path):
+    d = pii_skill(tmp_path, "客户 13812345678  # static-check:ignore")
+    out = run_check(d)
+    assert out["pii"] == []
+    assert any("13812345678" in h["text"] for h in out["ignored"])
+
+
+# --- ADR-0031：依赖全面性（用了什么 vs 声明了什么）---
+
+STDLIB_AND_EXTERNAL = (
+    "#!/usr/bin/env python3\n"
+    "import json\n"                     # 标准库
+    "import requests\n"                 # 外部包
+    "import _helper\n"                  # 本地同目录模块
+    "import subprocess\n"
+    "subprocess.run(['git', 'status'])\n"
+    "subprocess.run([sys.executable, 'x.py'])\n"   # 无字面量 argv[0]：不产出
+)
+
+
+def deps_skill(tmp_path, declare: str = "依赖：git\n") -> Path:
+    d = make_skill(tmp_path, '---\nname: s\ndescription: "x" * 120\n---\n\n' + declare)
+    (d / "scripts").mkdir()
+    (d / "scripts" / "run.py").write_text(STDLIB_AND_EXTERNAL, encoding="utf-8")
+    (d / "scripts" / "_helper.py").write_text("", encoding="utf-8")
+    return d
+
+
+def test_deps_used_excludes_stdlib_and_local(tmp_path):
+    out = run_check(deps_skill(tmp_path))
+    assert "requests" in out["deps_used"] and "git" in out["deps_used"]
+    assert "json" not in out["deps_used"]        # 标准库不算依赖
+    assert "_helper" not in out["deps_used"]     # 包内本地模块不算外部依赖
+    assert "subprocess" not in out["deps_used"]
+
+
+def test_deps_missing_is_used_minus_declared(tmp_path):
+    out = run_check(deps_skill(tmp_path))
+    assert out["deps_declared"] == ["git"]
+    assert out["deps_missing"] == ["requests"]
+
+
+def test_deps_declared_from_requirements_and_check_deps(tmp_path):
+    d = make_skill(tmp_path, '---\nname: s\ndescription: "x" * 120\n---\n\n无依赖声明。\n')
+    (d / "scripts").mkdir()
+    (d / "scripts" / "a.py").write_text(
+        "import yaml\nimport subprocess\nsubprocess.run(['pi', '--mode', 'json'])\n", encoding="utf-8")
+    (d / "requirements.txt").write_text("yaml>=6\n", encoding="utf-8")
+    (d / "check-deps.sh").write_text("command -v pi\n", encoding="utf-8")
+    out = run_check(d)
+    assert set(out["deps_declared"]) == {"yaml", "pi"}
+    assert out["deps_missing"] == []
+
+
+def test_deps_missing_is_warning_not_gate(tmp_path):
+    out = run_check(deps_skill(tmp_path))
+    assert out["passed"] is True                  # 缺声明是文档缺陷，不 fail
+    assert any("未声明" in w for w in out["warnings"])
+    assert not any("未声明" in e for e in out["errors"])
+
+
+def test_baseline_interpreters_not_reported_missing(tmp_path):
+    """python/bash 由宿主与 pi 运行时提供，不算「未声明的依赖」（否则每条 skill 都报）。"""
+    d = deps_skill(tmp_path, declare="无依赖声明。\n")
+    (d / "scripts" / "run.sh").write_text("#!/usr/bin/env bash\necho hi\n", encoding="utf-8")
+    out = run_check(d)
+    assert "python" in out["deps_used"] or "bash" in out["deps_used"]
+    assert "python" not in out["deps_missing"] and "bash" not in out["deps_missing"]

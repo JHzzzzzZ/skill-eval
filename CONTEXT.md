@@ -13,7 +13,7 @@
 - **LLM 评审**：带 rubric 的模型打分，输出 JSON（分数 + 原文引用 + 理由）
 - **沙箱运行**：实际跑 skill，采集 trace 后计算
 
-主源优先，辅证原形状保留在报告 `data` 里，不做加权合成（ADR-0004/0017）。多源指标：#3（静态行数主源 + 语义评审）、#8（trace 主源 + 语义评审）、#6（评审 + 消融实证）、#17/#18（共用一份 contract 评审）。
+主源优先，辅证原形状保留在报告 `data` 里，不做加权合成（ADR-0004/0017）。多源指标：#3（静态行数主源 + 语义评审）、#8（trace 主源 + 语义评审 + 静态声明面）、#13（静态六组主源 + PII 语义评审）、#6（评审 + 消融实证）、#17/#18（共用一份 contract 评审）。
 _Avoid_: 一条指标只能有一个数据来源
 
 ### 稳定性（#12）
@@ -38,13 +38,20 @@ _Avoid_: 审核模型（那是执行审核的模型配置，不是把关方身�
 触发集本身是否可信：should prompt 是否照抄 description、组内是否近似重复、同句是否跨组冲突。照抄会让触发评测测的是字面匹配而非语义触发，precision/recall 虚高。命中 → #1 降级为 warn（不是整体闸门）。
 
 ### 可移植性闸门
-static_check 的编号检查项：被测 skill 出现宿主环境硬编码（绝对路径、特定用户目录、.claude/.cursor 等他方生态路径）→ 整体 fail。只查硬编码，不查"声明给某 agent 用"（那是 #7 调用方式的事）。
+static_check 的编号检查项：被测 skill 出现宿主环境硬编码（绝对路径、特定用户目录、.claude/.cursor 等他方生态路径）→ 整体 fail。只查硬编码，不查"声明给某 agent 用"（那是 #7 调用方式的事）。命中在报告里落到 **#13 裁决 = fail**（ADR-0015/0030）——闸门不属于任何一条独立指标，但必须有一个能承载 fail 的指标，否则 `conclusion()` 看不见它。
 
 ### Trace
 一次沙箱运行的完整记录：工具调用序列、每步 token、耗时、产物路径、报错。
 
 ### Report
 评估产出。`report.json`（机器可读，key 为指标名，附档位与评估器指纹字段）+ `report.md`（人可读）+ `report.html`（--html：report.md 的渲染媒介 + 评测集审核界面）+ `meta.json`（本次运行的元数据：评估器指纹、被测 skill 指纹、评测集来源）。report.json/md/html 同一份 data，**网页不得比 Markdown 少信息**。未测的指标标 `skipped`，不打 0 分。
+
+### 优化建议（Advice）
+报告里可执行的待办项，每项带 `#N` 反链（`{metric, severity, problem, evidence, action}`）。由 `report.py` 从裁决**确定性派生**，不经 LLM——建议与问题同源，结构上不可能脱钩。落地三处：每个指标卡下方内联、report.html 的「优化建议」tab 汇总、report.md 的 `## 优化建议` 段（同一份数据，ADR-0030）。
+_Avoid_: 让 LLM 生成建议（会与指标脱钩）
+
+### 依赖全面性（Dependency Completeness）
+"脚本实际用到的工具"是否都在文档里声明过（`deps_used` − `deps_declared` = `deps_missing`）。与**依赖新鲜度**区分：后者查反方向（声明了但包内不存在，`stale_refs`）。缺失声明只降 #8 为 warn，不 fail（ADR-0031）。
 
 ### 评估器指纹（Evaluator Fingerprint）
 评估器自身内容（scripts + judges + SKILL.md + reference.md）的 sha256，形如 `auto-3f9c1a7b`。用来回答"这份报告是哪个评估器产生的"：指纹不同的版本之间，指标差异不构成被测 skill 的回归证据。与「版本」区分：版本指被测 skill 的迭代，指纹指评估器的迭代。

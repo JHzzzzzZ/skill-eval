@@ -356,7 +356,9 @@ def test_long_data_not_truncated_in_html(tmp_path):
     assert len(raw) > 2000                             # 前提：这条 data 确实超过旧阈值
 
 
-def test_md_tabulated_and_long_untabulated_gets_pointer(tmp_path):
+def test_md_every_data_rendered_as_table(tmp_path):
+    # ADR-0030 改写了本用例：**旧契约**是"无表可渲染的长 data 只留 report.json 指针"，
+    # 新契约要求所有指标 data 一律表格化（需求 1）——指针分支因此不再可达。
     write_inputs(tmp_path, base_inputs(idem=long_idem(),
                                        process={"meaningless": ["越界步骤" * 200], "score": 0,
                                                 "reason": "过程与声明不符"}))
@@ -364,14 +366,14 @@ def test_md_tabulated_and_long_untabulated_gets_pointer(tmp_path):
     # #15：Markdown 表格 + 摘要行，不再重复整块 JSON
     idem_sec = md.split("### #15")[1].split("### ")[0]
     assert "| case | pair | ratio |" in idem_sec and "ratio 0.148" in idem_sec  # _fmt 保留 3 位
-    assert "```json" not in idem_sec
-    # #10：无表可渲染且 >400 字符 → 只留指针，不给一坨 JSON
+    # #10：无定制表也走通用兜底（@项目/内容），不再是一坨 JSON 或指针
     proc_sec = md.split("### #10")[1].split("### ")[0]
-    assert "完整 data 见 `report.json`" in proc_sec and "```json" not in proc_sec
-    # 短 data（#2 只有 description_tokens）仍内联
-    assert "```json" in md.split("### #2")[1].split("### ")[0]
-    # HTML 侧同样保留（折叠）
-    assert "<details" in html
+    assert "| 项目 | 内容 |" in proc_sec and "越界步骤" in proc_sec
+    # 短 data（#2 只有 description_tokens）同样是表
+    assert "| 字段 | 值 |" in md.split("### #2")[1].split("### ")[0]
+    assert "```json" not in md                      # 全文本已无裸 JSON
+    # HTML 侧：有表就折叠原始 JSON
+    assert "<details" in html and "<table" in html
 
 
 def test_judge_metrics_show_summary_and_raw(tmp_path):
