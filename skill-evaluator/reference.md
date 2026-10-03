@@ -32,7 +32,7 @@ Windows 上杀 pi 子进程树用 `taskkill /T`（`_subprocess.py` 的硬依赖�
 
 权限边界（#13）：worktree 方案下只能做到静态扫描 + trace 审计（看 trace 里是否出现了不该有的命令），做不到强制拦截。扫描规则见 `scripts/static_check.py` 内的六组正则（ADR-0013/0029）：危险命令 / 硬编码凭据 / 注入指令 / 数据外发 / 混淆 / 个人信息。前四组命中即 fail，后两组仅 warn。
 
-依赖全面性（#8 静态面，ADR-0031）：`static_check.py` 报「用了什么 vs 声明了什么」——`deps_used`（shebang 解释器 / python import / `subprocess` 字面量 argv[0]）、`deps_declared`（SKILL.md 正文 + reference.md + `requirements.txt` + `check-deps.sh` 里出现过的名字）、`deps_missing`（差集）。缺声明只把 #8 降到 warn。已知漏检：argv 由变量拼时取不到 argv[0]；声明面是子串匹配（“Python3” 与 “python” 会漏判）。宿主基座（python/bash/sh/cmd/powershell…）不算未声明。
+依赖全面性（#8 静态面，ADR-0031）：`static_check.py` 报「用了什么 vs 声明了什么」——`deps_used`（shebang 解释器 / python import / `subprocess` 字面量 argv[0]）、`deps_declared`（SKILL.md 正文 + reference.md + `requirements.txt` + `check-deps.sh` 里出现过的名字，**任意出现即算声明，含随口提到——偏宽，漏报方向**）、`deps_missing`（差集）。缺声明只把 #8 降到 warn。已知漏检：argv 由变量拼时取不到 argv[0]；声明面是同义词不敏感的子串匹配（“Python3” 与 “python” 会漏判）。宿主基座（python/bash/sh/cmd/powershell…）不算未声明。
 
 已知漏检（如实告知，不要当成"扫过就是安全"）：自造格式的高熵 token、改写的语义注入、跨段拼接的注入、无读取动词的 `.env` 引用。混淆与个人信息类命中仅警告，需人工复核。PII 静态面的边界：只能认格式化的个人标识（邮箱/手机号/身份证/银行卡/公网 IP，带 Luhn 与证件校验位），自造示例（如真实号段格式的假号码）会误报、工号与客户名会漏报——后者靠 `judges/pii.md` 四项检查点补。
 

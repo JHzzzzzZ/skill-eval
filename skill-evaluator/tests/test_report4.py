@@ -19,6 +19,9 @@ SCRIPT = Path(__file__).parent.parent / "scripts" / "report.py"
 ALL_KEYS = [f"#{i}" for i in range(1, 20)]
 JUDGES = ("brevity", "redundancy", "fallback", "precheck", "contract",
           "side-effects", "deps", "pii")
+# #8 在"有数据"时的修复动作（与 skipped 时的补测动作必须不同，见 test_advice_skipped_gives_measurement_action）
+ADVICE_FIX_ACTION_8 = ("补齐依赖声明（SKILL.md 依赖小节 + requirements.txt/check-deps.sh），"
+                       "并复跑 golden trace")
 
 
 def write_inputs(d: Path, files: dict):
@@ -301,6 +304,39 @@ def test_advice_inline_under_card_and_in_tab(tmp_path):
     # 每条建议都出现在汇总里
     for a in rep["advice"]:
         assert a["problem"] in tab, a["problem"]
+
+
+def test_advice_skipped_gives_measurement_action(tmp_path):
+    """未测不是问题（评审 P1）：skipped 指标的 action 必须是"补测"，不能是"修问题"的方子。"""
+    d = base(tmp_path)
+    write_inputs(d, partial_inputs())
+    rep, html, _md = run_all(d)
+    assert rep["metrics"]["#8"]["verdict"] == "skipped"
+    top = [a for a in rep["advice"] if a["metric"] == "#8" and a["problem"].startswith("最小依赖")]
+    assert top, "未测仍应有条目（未测是缺口，不是丢信息）"
+    assert "补测" in top[0]["action"], top[0]
+    assert top[0]["action"] != ADVICE_FIX_ACTION_8, "未测指标不得给修问题的动作"
+    assert "补测" in card(html, "#8")          # 内联建议同步
+
+
+def test_advice_includes_nested_judge_checkpoints(tmp_path):
+    """#8/#13 的评审 items 嵌在 deps_judge/pii_judge 子键下，未通过的检查点也要出建议条目。"""
+    d = base(tmp_path)
+    files = all_pass_inputs()
+    files["static.json"]["deps_missing"] = ["requests"]
+    files["judges/deps.json"] = judge(0.5, [
+        {"name": "依赖已声明", "pass": False, "quote": "文档里没有列出 requests"},
+        {"name": "凭据走 fallback", "pass": True, "quote": "—"}])
+    files["judges/pii.json"] = judge(0.75, [
+        {"name": "无公司内部标识", "pass": False, "quote": "工号 88123"},
+        {"name": "无真实个人标识", "pass": True, "quote": "—"}])
+    write_inputs(d, files)
+    rep, _html, _md = run_all(d)
+    p8 = [a["problem"] for a in rep["advice"] if a["metric"] == "#8"]
+    p13 = [a["problem"] for a in rep["advice"] if a["metric"] == "#13"]
+    assert any("检查点未通过：依赖已声明" in p for p in p8), p8
+    assert any("检查点未通过：无公司内部标识" in p for p in p13), p13
+    assert any("工号 88123" == a["evidence"] for a in rep["advice"]), "证据要带上原文引用"
 
 
 def test_advice_section_in_md(tmp_path):

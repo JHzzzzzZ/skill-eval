@@ -214,7 +214,9 @@ def from_static(static, m: dict):
     if hit:
         note += "；命中：" + "、".join(f"{DIM_13_GROUPS[k]}×{len(groups[k])}" for k in hit)
     if soft_hit:
-        note += "；仅" + "、".join(f"{DIM_13_GROUPS[k]}×{len(groups[k])}（警告）" for k in soft_hit)
+        # 硬组或闸门也命中时不能写"仅"（否则读起来像“只有警告”）
+        note += ("；另有" if (hit or gate) else "；仅") + "、".join(
+            f"{DIM_13_GROUPS[k]}×{len(groups[k])}（警告）" for k in soft_hit)
     if gate:
         note += f"；可移植性闸门命中×{len(gate)}（宿主环境硬编码，ADR-0008，命中即 fail）"
     # 排除/抑制/闸门旁证必须可见（ADR-0012/0030）：不静默丢指标
@@ -967,6 +969,33 @@ def _glyph(verdict: str) -> str:
     return f"<span class='vf vf-{v}'>{VF_GLYPH[v]}</span>"
 
 
+def _advice_items(data: dict) -> list:
+    """取该指标下所有 judge 检查点组。
+
+    检查点不一定在顶层：顶层 items 是普通评审（#3/#6/#11/#16–19），
+    而 #8 的 deps 评审嵌在 `deps_judge`、#13 的 pii 评审嵌在 `pii_judge`——
+    只看顶层会永远取不到这两类（docstring 声称的"检查点级"就成了空头支票）。
+    """
+    out = []
+    if isinstance(data.get("items"), list):
+        out.append(data["items"])
+    for sub in ("deps_judge", "pii_judge"):
+        node = data.get(sub)
+        if isinstance(node, dict) and isinstance(node.get("items"), list):
+            out.append(node["items"])
+    return out
+
+
+def _judge_rows(items) -> list:
+    """judge items → 表格行（检查点 / 结果 / 原文引用）。
+
+    只给 md 与 _tables 用：HTML 侧另有一套带颜色符号的渲染（`_glyph`，
+    颜色不能过 `_html_table` 的转义），两者输出格式不同，不强行合并。
+    """
+    return [[i.get("name"), "✓" if i.get("pass") else "✗", _cell(i.get("quote"))]
+            for i in items if isinstance(i, dict)]
+
+
 def _advice(m: dict) -> list:
     """从裁决确定性派生优化建议（ADR-0030）：每条带 #N 反链，问题与建议同源。
 
@@ -980,17 +1009,22 @@ def _advice(m: dict) -> list:
         if verdict == "pass":
             continue
         sev = {"fail": "fail", "warn": "warn"}.get(verdict, "info")
-        action = ADVICE_ACTIONS.get(k, "复跑该指标的测量面")
         data = v.get("data") if isinstance(v.get("data"), dict) else {}
         phrase = {"fail": "未通过", "warn": "有警告"}.get(verdict, "未测")
+        # 未测不是问题：给“补测”动作，不给“修问题”的方子——
+        # 否则 info 档上问题与建议仍然脱钩（评审 P1）。
+        action = (f"补测：按「{v.get('method') or '未指定'}」面拿到数据后重出报告（未测是缺口，不是问题）"
+                  if verdict == "skipped" else ADVICE_ACTIONS.get(k, "复跑该指标的测量面"))
         out.append({"metric": k, "severity": sev,
                     "problem": f"{DIM_NAMES.get(k, k)}（{k}）{phrase}",
                     "evidence": (v.get("note") or "").strip() or "—", "action": action})
-        for it in data.get("items") or []:
-            if isinstance(it, dict) and it.get("pass") is False:
-                out.append({"metric": k, "severity": sev,
-                            "problem": f"检查点未通过：{it.get('name')}",
-                            "evidence": str(it.get("quote") or "").strip() or "—", "action": action})
+        for items in _advice_items(data):
+            for it in items:
+                if isinstance(it, dict) and it.get("pass") is False:
+                    out.append({"metric": k, "severity": sev,
+                                "problem": f"检查点未通过：{it.get('name')}",
+                                "evidence": str(it.get("quote") or "").strip() or "—",
+                                "action": action})
         if k != "#13":
             continue
         for g, label in DIM_13_GROUPS.items():
@@ -1069,9 +1103,7 @@ def _tables(metric: str, data, allow_generic=True) -> list:
             dj = data.get("deps_judge")
             if isinstance(dj, dict) and isinstance(dj.get("items"), list):
                 out.append((f"语义面 deps 评审 score {_fmt(dj.get('score'))}",
-                            ["检查点", "结果", "原文引用"],
-                            [[i.get("name"), "✓" if i.get("pass") else "✗", _cell(i.get("quote"))]
-                             for i in dj["items"]]))
+                            ["检查点", "结果", "原文引用"], _judge_rows(dj["items"])))
             miss = data.get("deps_missing") or []
             if miss:
                 out.append((f"依赖全面性（ADR-0031）：已用 {len(data.get('deps_used') or [])} 项、"
@@ -1105,9 +1137,7 @@ def _tables(metric: str, data, allow_generic=True) -> list:
             pj = data.get("pii_judge")
             if isinstance(pj, dict) and isinstance(pj.get("items"), list):
                 out.append((f"语义面 pii 评审 score {_fmt(pj.get('score'))}",
-                            ["检查点", "结果", "原文引用"],
-                            [[i.get("name"), "✓" if i.get("pass") else "✗", _cell(i.get("quote"))]
-                             for i in pj["items"]]))
+                            ["检查点", "结果", "原文引用"], _judge_rows(pj["items"])))
         elif metric == "#14" and (data.get("changes") or data.get("versions")):
             out.append(((f"{len(data.get('versions') or [])} 个版本" + (
                 "，评估器指纹一致（可比）" if data.get("comparable") else "，指纹不同（不可比）")),

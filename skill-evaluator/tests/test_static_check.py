@@ -544,6 +544,12 @@ def test_pii_ip_excludes_private_and_doc_ranges(tmp_path):
     assert [h for h in run_check(pub)["pii"] if h.get("label") == "IP"]
 
 
+def test_pii_line_level_placeholder_filtered(tmp_path):
+    """行级占位符（与 secrets 组同口径，评审 P2）："示例：zhangsan@corp.com" 不算命中。"""
+    d = pii_skill(tmp_path, "示例：zhangsan@corp.com 是占位联系邮箱。")
+    assert run_check(d)["pii"] == []
+
+
 def test_pii_respects_ignore_marker(tmp_path):
     d = pii_skill(tmp_path, "客户 13812345678  # static-check:ignore")
     out = run_check(d)

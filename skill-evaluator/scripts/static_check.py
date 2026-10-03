@@ -159,6 +159,10 @@ PII_PATTERNS = [("邮箱", PII_EMAIL), ("手机号", PII_MOBILE), ("身份证", 
 # 示例值白名单（只看命中到的 token）：标准示例域名/保留号段/GB 11643 标准示例证件号/常见测试卡号
 PII_WHITELIST_RE = re.compile(
     r"(?i)example\.(?:com|org|net)|localhost|test\.com|13800138000|11010519491231002X|4111111111111111")
+# 行级占位符过滤（与 secrets 组同口径）：中文文档写“示例/占位”很常见，
+# 英文占位词与 secrets 组共用同一套（PLACEHOLDER_RE 的 pattern 直接内联，便于单处改）。
+PII_PLACEHOLDER_RE = re.compile(
+    PLACEHOLDER_RE.pattern + r"|示例|样例|占位|虚构|测试用|举例|例如|假的")
 
 _ID_WEIGHTS = (7, 9, 10, 5, 8, 4, 2, 1, 6, 3, 7, 9, 10, 5, 8, 4, 2)
 _ID_CHECK = "10X98765432"
@@ -206,12 +210,15 @@ PII_VALIDATORS = {PII_BANK_CARD: _luhn_ok, PII_ID_CARD: _cn_id_ok, PII_IPV4: _pu
 
 
 def _pii_accept(m, pattern) -> bool:
-    """占位符/示例值先过滤，再过格式校验（Luhn / 证件校验位 / 公网判断）。"""
-    token = m.group(0)
-    if PLACEHOLDER_RE.search(token) or PII_WHITELIST_RE.search(token):
+    """先过**行级**占位符/示例过滤（与 secrets 组同口径），再过格式校验。
+
+    行级而非 token 级：`示例：zhangsan@corp.com` 这类说明句里 token 本身不带占位词，
+    只看 token 会误报（评审 P2）。
+    """
+    if PII_PLACEHOLDER_RE.search(m.string) or PII_WHITELIST_RE.search(m.group(0)):
         return False
     check = PII_VALIDATORS.get(pattern)
-    return check(token) if check else True
+    return check(m.group(0)) if check else True
 
 
 # 可移植性闸门（ADR-0008）：宿主环境硬编码 → 整体 fail。
