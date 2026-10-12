@@ -728,7 +728,9 @@ header{padding:16px 24px;background:#1f2937;color:#fff}
 .pass{background:#0b7a3d}.warn{background:#b7791f}.fail{background:#b23b3b}.skipped{background:#6b7280}
 .badge.vf-pass{background:#0b7a3d}.badge.vf-warn{background:#b7791f}.badge.vf-fail{background:#b23b3b}.badge.vf-skipped{background:#6b7280}
 .vf-pass{color:#0b7a3d}.vf-warn{color:#b7791f}.vf-fail{color:#b23b3b}.vf-skipped{color:#6b7280}
-.vf.badge{color:#fff}
+/* 徽章 = 同色底 + 白字：`.vf.badge` 永不命中（_badge() 只发 badge+vf-x，没有裸 .vf），
+   会让 .vf-x 的彩色字压在 .badge.vf-x 的同色底上 → 完全看不见。按四档显式配对。 */
+.badge.vf-pass,.badge.vf-warn,.badge.vf-fail,.badge.vf-skipped{color:#fff}
 .adv{background:#fff8e6;border-left:3px solid #b7791f;border-radius:4px;padding:6px 10px;margin-top:6px;font-size:13px}
 .adv-item{font-size:13px}#overview td:first-child{font-weight:600;white-space:nowrap}
 nav{display:flex;gap:4px;padding:8px 24px;background:#fff;border-bottom:1px solid #ddd}
