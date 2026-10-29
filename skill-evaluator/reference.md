@@ -226,7 +226,9 @@ evalsets/<name>/results/<version>/
 | 被测路径无 SKILL.md | 终止，报告"不是合法 skill 包" |
 | scripts/judges 缺失 | 报告评估器自身损坏，列出缺失项，终止 |
 | 硬依赖缺失（`bash scripts/check-deps.sh` 报 FAIL） | 终止：缺 python≥3.9/git 时会静默降级，先装齐再跑 |
-| 缺 pi CLI 或模型（自检仅 warn） | 只能跑静态检查；沙箱类与 LLM 评审指标标 `skipped`，报告注明原因 |
+| 缺 pi CLI 或模型（自检仅 warn） | 只能跑静态检查；沙箱类指标标 `skipped`，报告注明原因 |
+| 未配置 `llm.base_url`/模型 | T1 `--backend auto` 回落 pi；显式 `--backend llm` 报错，该指标 skipped |
+| T2B 未提供真实输入 | #11/#12 标 `skipped`，不自动生成“真实”输入 |
 | worktree 创建失败 | 换临时目录 + 提示隔离降级，继续跑 |
 | 沙箱运行崩溃 | 降级（fallback）到最近一个已完成的低档：报告标注缺失指标与原因，不静默丢指标 |
 | 审核模型不可用 | 评测集保持未冻结状态，提示人工审核路径，不阻塞已完成的低档位报告 |

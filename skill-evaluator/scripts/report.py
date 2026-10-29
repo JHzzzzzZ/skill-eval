@@ -1064,7 +1064,8 @@ def _advice(m: dict) -> list:
                         "evidence": "；".join(f"{h.get('file')}:{h.get('line')} {h.get('text')}"
                                                for h in gate[:3]),
                         "action": "把绝对路径/宿主目录改成相对路径或环境变量（ADR-0008）"})
-    out.sort(key=lambda a: (ADV_SEV_RANK.get(a["severity"], 3), a["metric"]))
+    out.sort(key=lambda a: (ADV_SEV_RANK.get(a["severity"], 3),
+                             int(a["metric"][1:]) if a["metric"][1:].isdigit() else 999))
     return out
 
 

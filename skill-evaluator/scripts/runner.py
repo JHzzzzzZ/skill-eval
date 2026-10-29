@@ -27,6 +27,7 @@ TIERS = ("t0", "t1", "t2a", "t2b", "t3")
 TIER_RANK = {name: i for i, name in enumerate(TIERS)}
 EXCLUDE = {"tests", "evalsets", "uploads", "attic", ".git", "node_modules",
            "__pycache__", ".sandbox", ".skillrepos", ".pytest_cache"}
+GUARD = [ROOT.parent] if (ROOT.parent / ".git").exists() else []
 
 
 class RunnerError(RuntimeError):
@@ -271,9 +272,9 @@ def run(args) -> int:
             gt = t2b / "golden.json"
             bt = t2b / "baseline-trace.json"
             run_case(gold, sandbox, skill_dir=sandbox, model=model, out=gt, adapter=args.harness,
-                     guard_repo=[ROOT.parent])
+                     guard_repo=GUARD)
             run_case(prompt, sandbox, no_skill=True, model=model, out=bt, adapter=args.harness,
-                     guard_repo=[ROOT.parent])
+                     guard_repo=GUARD)
             g = _read_json(gt, {}) or {}
             b = _read_json(bt, {}) or {}
             _write_json(results / "golden.json", g)
@@ -306,7 +307,7 @@ def run(args) -> int:
                     prompt = case["prompt"] if not human else f"/skill:{name} {case['prompt']}"
                     try:
                         trace = run_case(prompt, sandbox, skill_dir=sandbox, model=model, adapter=args.harness,
-                                         out=out, guard_repo=[ROOT.parent])
+                                         out=out, guard_repo=GUARD)
                     except Exception as exc:
                         progress.emit("warn", stage="T3", label=case["name"], error=str(exc))
                         continue
