@@ -549,11 +549,10 @@ def main():
     out["description"] = meta.get("description")
 
     # #7 调用方式：映射 pi 真实 frontmatter 字段 disable-model-invocation（ADR-0008）。
-    # human 的第二条信号：name/description 同时缺失——人工读的 skill 不靠 description 触发（ADR-0037）。
+    # human 只认这个显式字段（ADR-0037）：name/description 缺失可能是坏包，不能反推调用方式。
     raw = (meta.get("disable-model-invocation") or "").strip().strip('"').lower()
     invoke_human = raw in ("true", "yes", "1")
-    missing_frontmatter = not out["name"] and not out["description"]
-    human = invoke_human or missing_frontmatter
+    human = invoke_human
     out["human"] = human
 
     if not out["name"]:
@@ -594,10 +593,8 @@ def main():
 
     if invoke_human:
         out["invoke"]["resolved"] = "human"
-        out["invoke"]["note"] = "disable-model-invocation=true：对模型隐藏，仅 /skill:name 手动调用"
-    elif missing_frontmatter:
-        out["invoke"]["resolved"] = "human"
-        out["invoke"]["note"] = "human 型：未声明 name/description，按人工调用处理（#2 记 skipped）"
+        out["invoke"]["note"] = ("disable-model-invocation=true：对模型隐藏，仅 /skill:name 手动调用"
+                                 "；name/description 可省略")
     elif raw in ("", "false", "0", "no"):
         out["invoke"]["note"] = "缺省/false：模型按 description 触发，用户也可手动调用"
     else:

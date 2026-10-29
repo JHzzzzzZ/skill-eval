@@ -4,13 +4,13 @@ Generated: 2026-09-22T13:43:08.578Z
 
 ## OVERVIEW
 
-21 个测试文件 / 320 个 test，全部走 subprocess seam：把脚本当 CLI 跑，不 import 被测脚本（`test_trace_run.py` 例外，它 import `EventAggregator` 做增量消费断言；`test_config.py` 直接 import 纯解析模块 `_config.py`）。
+21 个测试文件 / 321 个 test，全部走 subprocess seam：把脚本当 CLI 跑，不 import 被测脚本（`test_trace_run.py` 例外，它 import `EventAggregator` 做增量消费断言；`test_config.py` 直接 import 纯解析模块 `_config.py`）。
 
 ## WHERE TO LOOK
 
 | 测试文件 | 覆盖 | test 数 |
 |---|---|---|
-| `test_static_check.py` | `scripts/static_check.py`（六组规则 + PII + 依赖全面性 + 字符/行阈值） | 59 |
+| `test_static_check.py` | `scripts/static_check.py`（六组规则 + PII + 依赖全面性 + 字符/行阈值） | 60 |
 | `test_config.py` | `scripts/_config.py`（YAML 子集解析/优先级/类型） | 7 |
 | `test_report.py` | `report.py` 19-key 契约基线 | 47 |
 | `test_trace_run.py` | `scripts/trace_run.py` | 39 |

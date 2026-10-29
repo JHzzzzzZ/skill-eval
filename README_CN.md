@@ -29,7 +29,7 @@ skill-evaluator/
 ├── requirements.txt    # 运行时零第三方依赖（标准库）；pytest 仅测试用
 ├── judges/             # LLM 评审 rubric（结构化 JSON 输出，固定单发 prompt）
 ├── scripts/            # 确定性工具；check-deps.sh = 前置自检（#16）
-└── tests/              # 320 个测试，全部走 subprocess seam
+└── tests/              # 321 个测试，全部走 subprocess seam
 docs/adr/               # 37 条架构决策记录
 ```
 
@@ -61,7 +61,7 @@ docs/adr/               # 37 条架构决策记录
 
 ```bash
 cd skill-evaluator
-python -m pytest tests        # 320 个测试全绿
+python -m pytest tests        # 321 个测试全绿
 ```
 
 设计决策及理由见 `docs/adr/`。英文版见 `README.md`。

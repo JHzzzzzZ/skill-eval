@@ -107,7 +107,7 @@ def test_description_within_limit_no_warning(tmp_path):
     assert not any("字符" in issue for issue in out["issues"])
 
 
-def test_human_skill_without_frontmatter_is_skipped(tmp_path):
+def test_human_with_disable_flag_can_omit_frontmatter(tmp_path):
     # human 型：disable-model-invocation=true，name/description 可省略（ADR-0037）
     d = make_skill(tmp_path, "---\ndisable-model-invocation: true\n---\nbody\n")
     out = run_check(d)
@@ -115,6 +115,18 @@ def test_human_skill_without_frontmatter_is_skipped(tmp_path):
     assert out["invoke"]["resolved"] == "human"
     assert out["description_level"] == "skipped"
     assert out["passed"] is True
+
+
+def test_missing_frontmatter_without_human_flag_is_not_human(tmp_path):
+    # 缺失 name/description 不能反推 human：没有 disable 字段仍是模型触发型，缺字段是 error
+    d = make_skill(tmp_path, "---\n---\nbody\n")
+    out = run_check(d)
+    assert out["human"] is False
+    assert out["invoke"]["resolved"] == "both"
+    assert out["description_level"] == "fail"
+    assert out["passed"] is False
+    assert any("name" in issue for issue in out["errors"])
+    assert any("description" in issue for issue in out["errors"])
 
 
 def test_body_over_warn_and_fail_lines(tmp_path):

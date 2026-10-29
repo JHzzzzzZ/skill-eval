@@ -224,8 +224,8 @@ def from_static(static, m: dict):
                else "pass" if static.get("invoke", {}).get("resolved") in ("human", "both")
                else "skipped",
                "method": METHOD_STATIC, "data": static.get("invoke"),
-               "note": "调用方式 frontmatter 校验（disable-model-invocation：true=human；"
-                       "name/description 同时缺失也按 human）"}
+               "note": "调用方式 frontmatter 校验（disable-model-invocation：true=human；缺省=both；"
+                       "name/description 缺失不推断 human）"}
     # #13 权限最小化（ADR-0013/0029）：六组静态规则 + 可移植性闸门。
     # 四组命中即 fail；混淆/个人信息仅 warn（待人工复核）。闸门（宿主硬编码，ADR-0008）
     # 命中同样 fail——旧实现只把 errors 填非空、passed=false，而 conclusion() 只看指标裁决，
