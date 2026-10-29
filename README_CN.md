@@ -27,8 +27,9 @@ skill-evaluator/
 ├── LICENSE             # MIT
 ├── requirements.txt    # 运行时零第三方依赖（标准库）；pytest 仅测试用
 ├── judges/             # LLM 评审 rubric（结构化 JSON 输出，固定单发 prompt）
-├── scripts/            # 确定性工具；check-deps.sh = 前置自检（#7）
-└── tests/              # 293 个测试，全部走 subprocess seam
+├── scripts/            # CLI + runner + llm/harness 适配层；check-deps.sh = 前置自检（#7）
+├── web/                # 本地前端（stdlib HTTP + SSE + 原生 JS）
+└── tests/              # 306 个测试，全部走 subprocess seam
 docs/adr/               # 37 条架构决策记录
 ```
 
@@ -39,11 +40,17 @@ docs/adr/               # 37 条架构决策记录
 1. 安装：把 `skill-evaluator/` 复制到 `~/.pi/agent/skills/`
 2. 前置自检：`bash scripts/check-deps.sh`（python ≥ 3.9 / git / pytest / pi CLI / config.yaml 可解析）
 3. 会话里说：*"评估这个 skill：`<路径>`"*
-4. 拿到 `skill-evaluator/evalsets/<name>/results/<version>/` 下的 `report.json` + `report.md` + `meta.json`（`report.py --skill <被测skill目录>` 顺手记下被测 skill 的内容指纹，ADR-0010；`--html` 另出单文件静态页：报告 + 评测集审核 + SVG 流程图）
+4. 或直接用确定性流水线 / 本地前端：
+   ```bash
+   python scripts/runner.py --skill <路径> --tier t2a
+   python web/app.py    # http://127.0.0.1:8765
+   ```
+5. 拿到结果目录下的 `report.json` + `report.md` + `report.html` + `meta.json`
 
 可选：
 
-- `SKILL_EVAL_MODEL=<provider/id>`：固定沙箱运行和 LLM 评审用的模型（默认用 pi 当前模型）
+- `SKILL_EVAL_MODEL=<provider/id>`：固定 T2+ 沙箱运行用的模型（默认用 pi 当前模型）
+- T1 直连 LLM：在 `config.yaml` 填 `llm.base_url` / `llm.model` / `llm.api_key_env`（不新增环境变量，变量名从配置读）；`--backend pi` 回退旧路径
 - `SKILL_EVAL_REVIEW_MODEL=<provider/id>`：评测集 AI 审核用的模型（必须与生成阶段不同源；不设则首次运行交互选择）
 
 档位入口：`--tier <t0|t1|t2a|t2b|t3>`（默认 T2A），高档复用低档产物（按被测 skill 的 content_sha256 判定）。
@@ -53,14 +60,14 @@ docs/adr/               # 37 条架构决策记录
 - **报告**：16 个 key 恒定出现；没测的标 `skipped`（绝不打 0 分）；不合成加权总分，只给三档结论（`all-pass` / `with-warnings` / `has-failures`）；`tier` 字段记录跑到的最高档
 - **评测集**：人工上传优先；自动生成的经 LLM 自动审核（换模型）即冻结，`reviewed_by: "ai"`，人工复核后可升级；冻结后跨版本复用（这正是跨版本对比可比的前提）
 - **版本号**：git commit 短 hash；裸文件夹由评估器副本快照后标 `auto-<hash>`
-- **LLM 评审输出**：必须过 `judge_runner.py --validate` 才能进报告
-- **评估器指纹**：`report.json` 与 `results/meta.json` 记录评估器自身的内容 sha256；两个版本的指纹不同时，`evolution.py` 标 `comparable=false`，不把差异读成回归（ADR-0010）
+- **LLM 评审输出**：必须过 `judge_runner.py --validate` 才能进报告；T1 直连 `llm` 层（无 tools），T2+ 走 `harness` 适配层
+- **评估器指纹**：`report.json`（schema 2）与 `results/meta.json` 记录评估器自身的内容 sha256；指纹或 schema 不同的版本，横向差异不构成回归证据（ADR-0010/0032）
 
 ## 开发
 
 ```bash
 cd skill-evaluator
-python -m pytest tests        # 293 个测试全绿
+python -m pytest tests        # 306 个测试全绿
 ```
 
 设计决策及理由见 `docs/adr/`。英文版见 `README.md`。

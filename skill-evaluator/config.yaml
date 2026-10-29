@@ -61,7 +61,7 @@ trigger_judge:
   # 触发判定通过分；低于此值算未触发。范围 0~1。默认 0.5。
   pass_score: 0.5
 
-# 以下两节在 PR4 生效（ADR-0034）；当前脚本只登记，不读取。
+# 以下两节由 T1/T2+ 使用（ADR-0034）。
 llm:
   # T1 评审直连协议：openai（/v1/chat/completions）或 anthropic（后续）。默认 openai。
   protocol: openai
@@ -71,6 +71,8 @@ llm:
   api_key_env: ""
   # T1 默认模型 provider/id；留空表示由 CLI/ENV 指定。单位：provider/id。
   model: ""
+  # 单次评审 prompt 的被测文件总字符上限；超过截断并标注。单位：字符。默认 60000。
+  max_input_chars: 60000
 
 harness:
   # T2+ 执行载体；当前唯一实现是 pi。单位：适配器名。

@@ -3,7 +3,7 @@
 Generated: 2026-09-22T13:43:08.578Z
 Snapshot: 2026-09-24 · 基准 commit `7d6b6e5` · Branch: main
 最近一次在分支 `feat/report-advice-and-pii` 上做的更新（ADR-0029/0030/0031）：
-计数与结构已重算（293 tests / 37 ADR / 11 个 Python CLI + 3 个共享模块 + 8 份 rubric）。v2 设计（ADR-0032–0037）已落文档，代码按 PR1–PR5 分批。
+计数与结构已重算（306 tests / 37 ADR / 13 个 Python CLI + 5 个共享模块 + 8 份 rubric）。v2 设计（ADR-0032–0037）已落文档，代码按 PR1–PR5 分批。
 
 ## OVERVIEW
 
@@ -20,9 +20,10 @@ skill-evaluator/        # 产品本体（自闭环，ADR-0006）
 ├── requirements.txt    # 只声明 pytest>=7；运行时零第三方依赖（stdlib）
 ├── LICENSE             # MIT
 ├── config.yaml         # 可调阈值/常量（ADR-0035），参与评估器指纹
-├── scripts/            # 11 个 Python CLI + 3 个共享模块（_config/_console/_subprocess）+ check-deps.sh，扁平单层
+├── scripts/            # 13 个 Python CLI + 5 个共享模块（_config/_console/_subprocess/llm/harness）+ check-deps.sh
 ├── judges/             # 8 份 LLM 评审 rubric（md）；side-effects 已移入 attic
-└── tests/              # 293 个测试，扁平单层；conftest.py 只设 PYTHONIOENCODING
+├── web/                # 本地前端（stdlib HTTP + SSE + 原生 JS，ADR-0036）
+└── tests/              # 306 个测试，扁平单层；conftest.py 只设 PYTHONIOENCODING
 docs/adr/               # 37 条架构决策（0001–0037）
 evalsets/               # ⚠ 被 gitignore：评测集 + 运行产物，本地态```
 
@@ -53,7 +54,7 @@ evalsets/               # ⚠ 被 gitignore：评测集 + 运行产物，本地�
 
 ## CODE MAP
 
-实测引用度（grep 命中）。**只有三条跨模块代码级依赖**：
+实测引用度（grep 命中）。主要跨模块依赖：
 
 | 符号 | 位置 | 引用 | 职责 |
 |---|---|---|---|
@@ -66,8 +67,11 @@ evalsets/               # ⚠ 被 gitignore：评测集 + 运行产物，本地�
 | `static_check.collect_deps` | `static_check.py:279` | 文件内 | 依赖全面性：用了什么 vs 声明了什么（ADR-0031） |
 | `trace_run.EventAggregator` | `trace_run.py:19` | 7 | pi 事件流聚合 + early-exit |
 | `report.evaluator_fingerprint` | `report.py:94` | 7 | ADR-0010 指纹，测试直调 |
+| `llm.chat` | `llm.py` | 3 | T1 直连模型（无 tools）；judge_run/trigger_judge/compare 复用 |
+| `harness.run_case` | `harness.py` | 1 | 执行载体适配；runner 复用，当前 pi |
+| `runner.run` | `runner.py` | 入口 | 按档位编排 T0→T3→report（ADR-0036） |
 
-其余 13 个脚本**不被任何脚本 import**，只作为 CLI 子进程被调用——改它们的内部实现不破坏调用方，改 stdout JSON 契约会。
+其余脚本大多作为 CLI 子进程被调用——改内部实现不破坏调用方，改 stdout JSON 契约会。
 
 ## CONVENTIONS
 
@@ -109,11 +113,14 @@ cd skill-evaluator                    # 所有相对路径以此目录为基准
 bash scripts/check-deps.sh            # 前置自检，退出码 0 = 可跑（缺硬依赖不要继续）
 pip install -r requirements.txt       # 仅跑测试时需要（pytest>=7）
 
-python -m pytest tests                # 全量：293 个测试
+python -m pytest tests                # 全量：306 个测试
 python -m pytest tests/test_idem.py   # 单文件
 python -m pytest tests -k "idem or report"
 
 python scripts/static_check.py skill-evaluator   # 评估器自检，必须输出 passed: true
+
+python scripts/runner.py --skill <被测skill目录> --tier t2a   # 一键跑 T0→T2A
+python web/app.py                                               # http://127.0.0.1:8765
 ```
 
 完整评估流水线（9 步 / T0–T3，`<VER>` = 版本号；T4 休眠）：
@@ -125,6 +132,7 @@ python scripts/evalset_count.py evalsets/<NAME>/v1              # 4a 条数闸�
 python scripts/evalset_check.py evalsets/<NAME>/v1 --skill <被测skill目录>  # 4b 触发集质量自检
 python scripts/trace_run.py <worktree> "<prompt>" --skill <被测skill目录> --early-exit --out results/<VER>/trace-1.json
 python scripts/trigger_judge.py --skill <被测skill目录> --trace results/<VER>/trace-1.json --out results/<VER>/triggers.json
+python scripts/judge_run.py --metric <name> --skill <被测skill目录> --out results/<VER>/judges/<metric>.json
 python scripts/judge_runner.py --validate results/<VER>/judges/<metric>.json
 python scripts/score.py results/<VER>
 python scripts/idem.py results/<VER>/trace-1.json results/<VER>/trace-2.json
@@ -140,7 +148,7 @@ python scripts/report.py results/<VER> --skill <被测skill目录> --evalset eva
 - ~~`skill-evaluator/tests/tmp-ev/triggers/should/s1.json`~~：误提交的 scratch 残渣已在 `a6a2a3` 之后的提交里删除（`git diff d26a6b6 HEAD` 显示 `D tests/tmp-ev/...`），且 `tmp-ev/` 已进 `.gitignore`。
 - **第二大坑（本次实测）**：新建 worktree 里 **`skill-evaluator/evalsets/` 不存在**（gitignore 的本地态目录不随检出走），而 `tests/test_static_check.py::test_evaluator_self_check_passes` 断言 `excluded` 里含 `evalsets`——worktree 里不先 `mkdir -p skill-evaluator/evalsets` 就会挂 1 个测试。clean clone 同样中招，这是测试对本地态的隐性依赖（未修）。
 - **两个 evalset 脚本别混**：`evalset_count.py` = 冻结前的条数闸门（三组各 ≥ 最小条数）；`evalset_check.py` = 触发集质量自检（照抄 description / 组内重复 / 跨组冲突，`--skill` 必填）。合并时后者保留了已发布的名字。
-- `report.py` 是最大脚本（约 1381 行）：`build()` 是约 260 行 if 链，16 指标无子函数拆分；`_HTML_TMPL` 是约 100 行内联 HTML+JS（含审核与建议 tab）。改报告逻辑先读 `build()`，再读 `_tables()`/`_advice()`（ADR-0030 的呈现层）。
+- `report.py` 是最大脚本（约 1342 行）：`build()` 是约 260 行 if 链，16 指标无子函数拆分；`_HTML_TMPL` 是约 100 行内联 HTML+JS（含审核与建议 tab）。改报告逻辑先读 `build()`，再读 `_tables()`/`_advice()`（ADR-0030 的呈现层）。
 - `normalize()`/`grams()` 在 `evalset_check.py` 与 `model_robust.py` 各有一份字节级相同的实现；pi CLI 调用块在 `compare.py`/`trigger_judge.py` 重复两份（`process.py` 已移入 attic）。抽公共模块前注意：评估器指纹会让所有历史报告变 `comparable=false`（ADR-0010）。
 - **已修复，勿再当缺口**：`report.py` 现在会回显 `excluded`/`ignored`（ADR-0012）；`secrets` 组带 `PLACEHOLDER_RE` 占位符过滤；**可移植性闸门不再隐形**（`hardcoded` 非空 → #4 fail，ADR-0030）；**原生 JSON 不再裸奉在报告页**（16 条指标全表格化 + 折叠，ADR-0030）；`pii` 组的示例白名单不会对 `example.com`/`13800138000`/测试卡号误报（ADR-0029）。
 - **本轮（ADR-0029/0030/0031）改写了 1 个旧断言的语义**：`test_report3.py` 里“无表可渲染的长 data 只留 `report.json` 指针”是旧契约，被 ADR-0030 取代为“一律表格化”（已就地改写并注释，不是默默改测试）。

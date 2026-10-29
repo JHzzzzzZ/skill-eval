@@ -34,6 +34,13 @@ _Avoid_: 把 LLM 接口层也叫 Harness
 ### LLM 接口层（LLM Interface）
 T1 评审与触发判定直接调用的模型接口（OpenAI-compatible 优先），不经过 agent 框架，固定无工具、单发（ADR-0034）。
 
+### 编排器（Runner）
+把档位固化为确定性阶段的入口（T0→T3→report），负责串流程、落中间产物、发进度事件；agent 与前端共用同一套契约（ADR-0036）。
+_Avoid_: 把 runner 当成第二个评估器（它不重算指标）
+
+### 前端（Web UI）
+本地页面入口：选档位/执行载体/模型/评测集/真实输入，SSE 看进度，不重算指标；只绑 `127.0.0.1`（ADR-0036）。
+
 ### 真实输入（Real Input）
 用户在 T2B 提供的一例真实业务输入，用于跑 golden 与 baseline 两臂；与冻结评测集分开，存本地 `uploads/`，报告只回显哈希 + 标签（ADR-0033）。
 
@@ -57,7 +64,7 @@ static_check 的编号检查项：被测 skill 出现宿主环境硬编码（绝
 评估产出。`report.json`（机器可读，16 个指标 key，附 `schema: 2`、`legacy_id_map`、档位与评估器指纹字段）+ `report.md`（人可读）+ `report.html`（--html：report.md 的渲染媒介 + 评测集审核界面）+ `meta.json`（本次运行的元数据：评估器指纹、被测 skill 指纹、评测集来源）。report.json/md/html 同一份 data，**网页不得比 Markdown 少信息**。未测的指标标 `skipped`，不打 0 分。
 
 ### 报告模式（Schema）
-`report.json` 的契约版本。schema 2 = 16 条指标 + 新编号；`evolution.py` 只在同 schema 内比较，跨 schema 不构成回归证据（ADR-0032）。
+`report.json` 的契约版本。schema 2 = 16 条指标 + 新编号；跨 schema 不构成回归证据（ADR-0032）；evolution 已随 T4 休眠。
 
 ### 优化建议（Advice）
 报告里可执行的待办项，每项带 `#N` 反链（`{metric, severity, problem, evidence, action}`）。由 `report.py` 从裁决**确定性派生**，不经 LLM——建议与问题同源，结构上不可能脱钩。落地三处：每个指标卡下方内联、report.html 的「优化建议」tab 汇总、report.md 的 `## 优化建议` 段（同一份数据，ADR-0030）。

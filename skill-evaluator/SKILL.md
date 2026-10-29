@@ -4,7 +4,7 @@ description: Evaluate a skill package against 16 quality metrics, producing repo
 disable-model-invocation: true
 version: 2.0.0
 license: MIT
-compatibility: "需要 python3 >= 3.9（仅标准库）与 git；可调阈值在 config.yaml（ADR-0035）；沙箱运行与 LLM 评审另需 pi CLI 和已配置模型（SKILL_EVAL_MODEL 或 pi 默认模型）；测试需 pytest。已实测 Windows(Git Bash) + Python 3.12。"
+compatibility: "需要 python3 >= 3.9（仅标准库）与 git；可调阈值在 config.yaml（ADR-0035）；T2+ 沙箱需 pi CLI；T1 直连 LLM 需 `llm.base_url` 与模型（`llm.model` / SKILL_EVAL_MODEL）；测试需 pytest。已实测 Windows(Git Bash) + Python 3.12。"
 ---
 
 # Skill Evaluator
@@ -17,6 +17,15 @@ compatibility: "需要 python3 >= 3.9（仅标准库）与 git；可调阈值在
 
 本文件与 `scripts/`、`judges/`、`config.yaml`、`reference.md` 同目录，所有相对路径以本 skill 目录为基准（ADR-0006 自闭环）。阈值改 `config.yaml`，不要改脚本常量。
 
+## 一键运行（推荐）
+
+```bash
+python scripts/runner.py --skill <被测skill目录> --tier t2a [--evalset <vN>] [--real-input <file>]
+python web/app.py            # 打开 http://127.0.0.1:8765，选档位/载体/模型，SSE 看进度
+```
+
+runner 是确定性编排，按档位短路；下面的 9 步是它内部做的事，手工排障时按步执行。
+
 ## 流程
 
 1. **前置自检**：跑 `bash scripts/check-deps.sh`（python/git/pytest/pi + `config.yaml` 可解析 + 包内文件齐备，缺硬依赖不要继续）；再确认被测路径下有 `SKILL.md`。任一缺失 → 走 [reference.md § Fallback](./reference.md)
@@ -25,8 +34,8 @@ compatibility: "需要 python3 >= 3.9（仅标准库）与 git；可调阈值在
 4. **评测集**（T2A/T3 前置）：检查 `evalsets/<name>/` 是否已冻结；无则走 [reference.md § 评测集冻结](./reference.md)：自动生成 → **条数闸门**（`scripts/evalset_count.py <evalsets/<name>/vN>`，三组各 ≥10）→ **触发集质量自检**（`scripts/evalset_check.py <evalset目录> --skill <skill目录>`：照抄/重复/冲突先改写）→ **LLM 自动审核**（用与生成不同的模型，见 § 评测集 AI 审核）→ 通过即冻结（`reviewed_by: "ai"`），不阻塞人工
 5. **触发评测**（T2A，仅 `#3 resolved=both`）：三组触发 prompt 带 `--early-exit` 跑触发评测，`trigger_judge.py` 判定，服务 #10。`disable-model-invocation: true`（`resolved=human`）的 skill 直接跳过并记 #10 `skipped`——载体测不到“按 description 触发”（ADR-0018）
 6. **真实场景 A/B**（T2B）：用户提供 ≥1 例真实输入；同 cwd、同输入跑 golden（加载 skill）与 baseline（不加载）两臂，服务 #11 必要性、#12 最小依赖。#11 报告样本数 n，n<3 时最高 warn；真实输入存 `uploads/`，报告只回显哈希 + 标签。未提供真实输入 → 整档 skipped，不自动生成“真实”输入（ADR-0033）
-7. **核心沙箱**（T3）：git worktree 内 golden 主运行 + 重复×N + idem + compare，服务 #13 成本 / #14 结果可验证 / #15 稳定性 / #16 幂等；每 run 前 `git -C <worktree> clean -fdx`，并带 `--guard-repo <评估器仓库>` 把越界写入记进 trace（ADR-0027）；可选跨模型：换 `--model` 再跑一遍，trace 落 `results/<version>/models/<模型名>/`，`scripts/model_robust.py` 出一致率折进 #15（默认不跑，成本 ×模型数）
-8. **LLM 评审**（T1）：**每条 rubric 一次独立单发调用**（固定 prompt = rubric + 被测文件，不携带编排 agent 的探索上下文；必须 `--no-tools`（ADR-0022）；pi 无采样参数，“temperature=0”不可执行），逐项产出 JSON，`judge_runner.py --validate` 通过后存 `judges/<metric>.json`，原始事件流存 `raw/judge-events/<metric>.events.jsonl` 备查（#2 只判两条语义检查点——行数由第 3 步的静态面负责，ADR-0017）
+7. **核心沙箱**（T3）：隔离副本（git 仓库）内 golden 主运行 + 重复×N + idem + compare，服务 #13 成本 / #14 结果可验证 / #15 稳定性 / #16 幂等；每 run 前 `git -C <worktree> clean -fdx`，并带 `--guard-repo <评估器仓库>` 把越界写入记进 trace（ADR-0027）；可选跨模型：换 `--model` 再跑一遍，trace 落 `results/<version>/models/<模型名>/`，`scripts/model_robust.py` 出一致率折进 #15（默认不跑，成本 ×模型数）
+8. **LLM 评审**（T1）：`scripts/judge_run.py --metric <name> --skill <dir> --out judges/<metric>.json` 默认走 `llm` 接口层（固定 prompt = rubric + 被测文件，单发、无 tools，ADR-0022/0034）；`--backend pi` 可回退旧路径。原始 request/response 存 `raw/llm-judge/<metric>.json`（#2 只判两条语义检查点——行数由第 3 步的静态面负责，ADR-0017）
 9. **计算与报告**：`scripts/score.py` + `scripts/idem.py`（T3）→ `scripts/report.py <results目录> --skill <被测skill目录>`（#14 用 `scripts/compare.py`，T3）产出 report.json（`schema: 2` + `legacy_id_map` + 16 key）+ report.md + meta.json（评估器指纹 / 被测 skill 指纹 / 评测集来源）。report.json 记录 `tier` 字段（T0/T1/T2A/T2B/T3）
 
 ## 边界

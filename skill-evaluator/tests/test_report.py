@@ -46,6 +46,8 @@ def test_empty_inputs_all_skipped(tmp_path):
     tmp_path.mkdir(exist_ok=True)
     out = run_report(tmp_path)
     assert len(out["metrics"]) == 16
+    assert out["schema"] == 2
+    assert len(out["legacy_id_map"]) == 16
     for k, v in out["metrics"].items():
         assert v["verdict"] == "skipped", f"{k} 应 skipped"
     assert out["conclusion"] == "with-warnings"  # 全 skipped 不是 all-pass
@@ -570,6 +572,17 @@ def test_brevity_over_limit_html_keeps_both_faces(tmp_path):
 
 
 # --- #5 三分量多数票（ADR-0026）---
+
+def test_necessity_single_sample_caps_pass_to_warn(tmp_path):
+    # T2B 只有 1 例真实输入时，多数票仍可判改善，但结论最高 warn（ADR-0033）
+    write_inputs(tmp_path, {"score.json": {
+        "trigger": "skipped", "cost": "skipped", "passed": True,
+        "necessity": {k: {"golden": 8, "baseline": 10, "improvement": 0.2, "n": 1}
+                      for k in ("tokens", "tool_calls", "seconds")}}})
+    m = run_report(tmp_path)["metrics"]["#11"]
+    assert m["verdict"] == "warn"
+    assert "样本 n=1" in m["note"]
+
 
 def test_necessity_majority_vote_passes_when_two_components_improve(tmp_path):
     write_inputs(tmp_path, {"score.json": {

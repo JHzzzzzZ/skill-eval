@@ -365,9 +365,15 @@ def build(d: Path, evalset_dir: Path | None = None) -> dict:
             comps = {k: v for k, v in n.items() if isinstance(v, dict) and "improvement" in v}
             up = sum(1 for v in comps.values() if v["improvement"] > 0)
             verdict = "pass" if up * 2 > len(comps) else "warn" if up else "fail"
+            samples = [v.get("n") for v in comps.values() if isinstance(v.get("n"), int)]
+            sample_n = min(samples) if samples else None
+            if sample_n is not None and sample_n < 3 and verdict == "pass":
+                verdict = "warn"
             detail = "、".join(f"{k} {v['improvement']*100:+.1f}%" for k, v in comps.items())
+            caveat = (f"；样本 n={sample_n}，少于 3 例，结论最高 warn（ADR-0033）"
+                      if sample_n is not None and sample_n < 3 else "")
             m["#11"] = {"verdict": verdict, "method": METHOD_RUN, "data": n,
-                       "note": f"三分量多数票（{up}/{len(comps)} 改善）：{detail}（ADR-0026）"}
+                       "note": f"三分量多数票（{up}/{len(comps)} 改善）：{detail}{caveat}（ADR-0026）"}
     # #10 人调用型（#3 resolved=human）不适用触发评测：pi 的 formatSkillsForPrompt 会把
     # disable-model-invocation=true 的 skill 从提示中滤除（实测：--skill 加载后模型答
     # “无 available_skills 段”）——“按 description 触发”在该载体上结构上不可能，照跑只是把
@@ -614,7 +620,7 @@ FLOW_STEPS = [  # SKILL.md 的 8 步流程（#43 流程图数据源）
     ("3 静态检查", "static_check.py：#1 规范、#3 调用方式、#4 六组规则、可移植性闸门"),
     ("4 评测集", "检查冻结的 evalsets/<name>/vN/；未冻结则生成 → 条数闸门 + 触发集质量自检 → LLM 自动审核（换模型）即冻结（reviewed_by=ai）"),
     ("5 沙箱运行", "按档增量跑 pi CLI：T2A 触发（early-exit）→ T2B 真实场景 A/B → T3 主运行+重复（可选跨模型 model_robust.py）"),
-    ("6 LLM 评审", "judges/ 逐项计分 rubric，judge_runner.py --validate 通过才进报告"),
+    ("6 LLM 评审", "judge_run.py（默认 llm 直连）逐项计分，judge_runner.py --validate 通过才进报告"),
     ("7 计算", "score.py（P/R/F1、成本、三分量必要性）+ idem.py（幂等）"),
     ("8 报告", "report.py：report.json + report.md（--html 加静态页），16 指标恒出现"),
 ]

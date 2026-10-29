@@ -89,6 +89,7 @@ def necessity(runs: list, baseline: list):
             comps[key] = {
                 "golden": g["mean"], "baseline": b["mean"],
                 "improvement": (b["mean"] - g["mean"]) / b["mean"],
+                "n": min(g["n"], b["n"]),
             }
     if all(v == "skipped" for v in comps.values()):
         return "skipped"

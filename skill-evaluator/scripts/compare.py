@@ -16,6 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from _subprocess import ask_json, build_mode_args, kill_tree, run_pi  # noqa: F401  (kill_tree/run_pi 供其他脚本复用)
+import llm as llm_layer
 
 def build_prompt(expect: str, actual: str) -> str:
     return (f"你是输出质量评审员。判断\"实际产出\"是否满足\"期望描述\"。\n"
@@ -150,6 +151,11 @@ def main():
 
     if events_file:
         answer = extract_answer(Path(events_file).read_text(encoding="utf-8", errors="replace"))
+    elif llm_layer.configured():
+        try:
+            answer = extract_json_object(llm_layer.ask(prompt, model=model or None)) or {}
+        except Exception as exc:
+            answer = {"match": False, "score": 0, "reason": f"LLM 调用失败：{exc}"}
     else:
         mode_args = build_mode_args(model or os.environ.get("SKILL_EVAL_MODEL"), thinking)
         try:

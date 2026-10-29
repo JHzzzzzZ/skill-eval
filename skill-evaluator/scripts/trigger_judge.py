@@ -21,7 +21,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from compare import extract_answer  # 同一 JSON 提取逻辑（花括号配对，支持嵌套 items[]）
+from compare import extract_answer, extract_json_object  # 同一 JSON 提取逻辑（花括号配对，支持嵌套 items[]）
+import llm as llm_layer
 from judge_runner import score_of_items, validate  # 同一计分/校验口径
 from _subprocess import ask_json, build_mode_args
 import _config
@@ -145,6 +146,13 @@ def main():
 
     if events_file:
         raw = extract_answer(Path(events_file).read_text(encoding="utf-8", errors="replace"))
+    elif llm_layer.configured():
+        try:
+            text = llm_layer.ask(prompt, model=model or None)
+            raw = extract_json_object(text) or {"triggered": False,
+                                                "reason": "LLM 未输出合法 JSON"}
+        except Exception as exc:
+            raw = {"triggered": False, "reason": f"LLM 调用失败：{exc}"}
     else:
         mode_args = build_mode_args(model or os.environ.get("SKILL_EVAL_MODEL"), thinking)
         try:

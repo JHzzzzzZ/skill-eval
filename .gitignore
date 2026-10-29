@@ -11,3 +11,7 @@ wt-*/
 tmp-ev/
 .sandbox/
 .sandbox*
+
+# 前端运行目录
+web/runs/
+skill-evaluator/web/runs/

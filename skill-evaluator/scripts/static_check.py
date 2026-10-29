@@ -355,6 +355,8 @@ REF_EXTS = ".py .mjs .js .ts .md .json .sh .ps1 .cmd .bat .toml .yaml .yml".spli
 
 def find_stale_refs(skill_dir: Path, body: str):
     refs, seen = [], set()
+    # 代码块里的路径是示例命令，不是声明引用；先剥掉，避免反引号跨行贪婪吞掉正文。
+    body = re.sub(r"```.*?```", "", body, flags=re.S)
 
     def check(ref, require_slash):
         ref = ref.strip().strip(".,;:)）")

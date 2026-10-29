@@ -103,15 +103,17 @@ evalsets/<name>/v1/
 
 ## 模型配置
 
-沙箱运行（trace_run.py）的模型三层优先级：
+T2+ 执行载体（harness）的模型三层优先级：
 
 1. 命令行 `--model <provider/id>`（显式，最高）
 2. 环境变量 `SKILL_EVAL_MODEL=<provider/id>`（会话级默认，推荐在评估开始前设置）
 3. pi 自身的默认模型（兜底）
 
-可选 `--thinking <off|minimal|low|medium|high|xhigh|max>` 控制思考档位。LLM 评审（judges/）与触发判定（trigger_judge.py）用**同一个模型配置**，保证与被测运行同源。评测集 AI 审核是唯一例外，见 § 评测集 AI 审核。
+T1 评审走 `llm` 接口层（ADR-0034）：`--model` > `llm.model` > `SKILL_EVAL_MODEL`；端点 `llm.base_url`，凭据从 `llm.api_key_env` 指定的**已存在**变量读，或由 `--api-key` 一次性传入。`--backend pi` 可回退旧路径。评测集 AI 审核是唯一例外，见 § 评测集 AI 审核。
 
-可配参数统一在 `config.yaml`（ADR-0035），优先级 CLI > 现有 ENV > config.yaml > 代码默认。关键项：description 字符阈值 384 warn / 1024 fail、正文 150 warn / 500 fail（ADR-0037）、触发集每组最小条数 10、F1 0.7、逐 case 变异系数上限 0.5、幂等比例 0.5、触发集覆盖 0.6/0.8、跨模型相似度 0.5/0.8、触发判定分 0.5、args 上限 2000、UI 单元格 800 / 内联 400；重复运行 3 次、评审单发 1 次/并发 4（runner 在 PR5 读取）。既有 `SKILL_EVAL_TRIGGER_MIN` 仍可覆盖最小条数；`--exclude <路径>`（相对 skill 目录解析）、`--no-default-excludes`（static_check.py）仍是 CLI 开关；`--threshold` 仍可覆盖触发判定分。`JUDGE_SAMPLES=3` 的多数票流程不变（跑 3 次后 `judge_runner.py --merge`，ADR-0028）。
+可选 `--thinking <off|minimal|low|medium|high|xhigh|max>` 控制思考档位。
+
+可配参数统一在 `config.yaml`（ADR-0035），优先级 CLI > 现有 ENV > config.yaml > 代码默认。关键项：description 字符阈值 384 warn / 1024 fail、正文 150 warn / 500 fail（ADR-0037）、触发集每组最小条数 10、F1 0.7、逐 case 变异系数上限 0.5、幂等比例 0.5、触发集覆盖 0.6/0.8、跨模型相似度 0.5/0.8、触发判定分 0.5、args 上限 2000、UI 单元格 800 / 内联 400；重复运行 3 次、评审单发 1 次/并发 4（runner 读取）。既有 `SKILL_EVAL_TRIGGER_MIN` 仍可覆盖最小条数；`--exclude <路径>`（相对 skill 目录解析）、`--no-default-excludes`（static_check.py）仍是 CLI 开关；`--threshold` 仍可覆盖触发判定分。`JUDGE_SAMPLES=3` 的多数票流程不变（跑 3 次后 `judge_runner.py --merge`，ADR-0028）。
 
 判据口径（容易被误读，单独列）：#11 = 三分量多数票（tokens/tool_calls/seconds 各一票，ADR-0026）；
 #5 = 评审面（消融实证随 T4 休眠，ADR-0026）；#12 = 全部 golden trace 取并集，依赖信号分强弱档
@@ -119,9 +121,13 @@ evalsets/<name>/v1/
 （`deps_missing` 非空至少降为 warn，ADR-0031）；#10 = human 型不适用（ADR-0018）；
 #4 = 六组静态规则 + 可移植性闸门与 `judges/pii.json` 取较差者（ADR-0029）。
 
-## 执行载体与扩展点（ADR-0007）
+## 执行载体与扩展点（ADR-0034）
 
-沙箱运行的唯一执行载体是 pi CLI 子进程（逐 case 一次 `pi --mode json --no-session`），触发评测带 `--early-exit`（首次指向被测 SKILL.md 的调用即停，省 token；ADR-0007 修订）。**不使用 subagent 机制**。未来若需支持 pi 以外的 agent，在 trace_run.py 之上加 adapter 层；本期只预留此声明，不实现（避免没有第二个实现的抽象）。
+`scripts/harness.py` 是执行载体适配层：接口 `run_case(prompt, cwd, ...)`，当前只实现 `pi`（内部调用 `trace_run.py`，逐 case 一次 `pi --mode json --no-session`），触发评测带 `--early-exit`。`code_agent` 留接口不实现，前端只显示 `harness.available` 里的项。**不使用 subagent 机制**。
+
+## 前端与 runner（ADR-0036）
+
+`scripts/runner.py` 是确定性编排：按 `--tier` 调 T0→T1→T2A→T2B→T3，最后 `report.py`；进度以 NDJSON 输出，`--results` 指定产物目录，`--real-input` 给 T2B。`web/app.py` 是 stdlib HTTP 入口（只绑 `127.0.0.1`）：`POST /api/run` 启动 runner，`GET /api/events?id=` SSE 推进度，`GET /api/report?id=` 取报告 JSON，`GET /report?id=` 直接开报告页。前端不重算指标。
 
 被测 skill 出现宿主环境硬编码（绝对路径、特定用户目录、.claude/.cursor 等他方生态路径）→ 可移植性闸门整体 fail（ADR-0008，static_check 的 `hardcoded` 字段）。<!-- static-check:ignore -->
 
@@ -136,31 +142,34 @@ evalsets/<name>/v1/
 
 - `triggers.json`：`{"should": [bool...], "should_not": [...], "confusable": [...]}`，布尔值 = 该 prompt 是否实际触发
 - `runs.json`：`[{"case", "tool_calls", "tokens", "seconds"}, ...]`，golden（有 skill）各次运行；`case` 可选，**全条目都带**时 score.py 产出 `cost_by_case`（#15 组内口径的数据源，ADR-0016）；缺一条即不产出
-- `baseline.json`：同 runs.json 格式，基线（无 skill）运行，缺省则 necessity 输出 `skipped`
+- `baseline.json`：T2B 的基线（无 skill）运行；T3 不写它（necessity 只来自 T2B）
+- `t2b/runs.json` + `t2b/baseline.json`：T2B 两臂的原始统计；`t2b/score.json` 的 `necessity` 由 runner 合并进根 `score.json`
+- `real-input.meta.json`：`{"sha256", "label"}`；正文存评估器 `uploads/real-input/<sha>.json`（gitignore，报告不回显）
 - `trace-<序号>.json`：`{"steps": [{"tool", "args", "args_hash"}, ...], "answer", "tokens", "seconds", "triggered", "errors", "host": {"model", "pi", "platform"}}`（trace_run.py 落盘，--out；host 为宿主 pin，事后归因/复现用；离线 --events 重算时仅记 model 意图）
 - `static.json`：static_check.py --out（脚本自写 UTF-8；stdout 同步回显。禁 shell 重定向——GBK 控制台会产 GBK 文件）。全部脚本入口接 `scripts/_console.py::fix()`：GBK 控制台下回显不可编码字符降级为替换符，不崩、退出码 0；`--out` 文件不受影响。含 #4 的六组（`dangerous`/`secrets`/`injection`/`exfil`/`obfuscation`/`pii`）、`hardcoded`、`excluded`/`ignored`（ADR-0012）、`scan_excluded_dirs`（ADR-0012：运行面之外）、`stale_refs`（依赖新鲜度，ADR-0009 延伸：SKILL.md 声明但包内不存在的路径引用，warning 级）、`deps_used`/`deps_declared`/`deps_missing`（依赖全面性，ADR-0031，warning 级）、`skill_md_body_lines`/`skill_md_body_max_lines`（#2 行数主源与自描述阈值，ADR-0017：口径 = frontmatter 之后全文行数，含空行与代码块）
-- `score.json`：score.py --out（同上）；含 `cost`（多次运行汇总）+ `cost_by_case`（逐 case，仅全条目带 case 时出现）
-- `idem.json`：多次 idem.py --out 结果的聚合 `{"ratio", "idempotent"}`
+- `score.json`：score.py --out（同上）；含 `cost`（多次运行汇总）+ `cost_by_case`（逐 case，仅全条目带 case 时出现）+ `necessity`（T2B 合并进来；每分量带 `n`）
+- `idem.json`：多次 idem.py --out 结果的聚合 `{"ratio", "idempotent", "pairs", "idempotent_pairs", "per_pair"}`
 - `golden.json`：主运行的 golden trace（#12 的数据源之一）；同时存在 `traces/golden-*.json` 时，
   #12 取**全部** golden trace 的报错并集（`data.sources` 记录条数，ADR-0025）
 - `traces/`：逐 run 的原始 trace；`--guard-repo` 时另带 `guard.escaped_writes`（越界写入，ADR-0027）
-- `compare.json`：compare.py 裁决（#14）
+- `compare.json`：compare.py --aggregate 裁决（#14）；逐 case 文件在 `compare/`
+- `actual/` + `expected/`：T3 每 case 的实际回答与期望（compare.py 输入）
 - `evalset.json`：evalset_check.py stdout（触发集质量，#10 降级依据）
 - `model_robust.json`：model_robust.py stdout（#15 跨模型一致率）
 - `models/<模型名>/trace-<序号>.json`：跨模型运行的逐 case trace（序号 = 评测集顺序，各模型必须一致）
 - `meta.json`：`{"schema": "skill-eval/results-meta/1", "generated_at", "conclusion", "evaluator", "skill_fingerprint", "evalset_source", "metrics"}`（report.py 写入，ADR-0010）；已存在时**合并保留**人工填写的键（model/sandbox/skipped_reason 等），不静默覆盖
 - `judges/<metric>.json`：judge_runner.py 校验通过的 LLM 评审输出，metric ∈ {brevity, redundancy, fallback, precheck, contract, deps, pii}（**不要**存成 judge-*.json 或放 results 根目录，report.py 只认 judges/<metric>.json）
-- `raw/judge-events/<metric>.events.jsonl`：该次评审的 pi 事件流原文（ADR-0020，可选但推荐——pi 无温度参数，可复现性靠证据留档）
+- `raw/llm-judge/<metric>.json`：T1 直连 LLM 的 request/response（含 prompt，不含密钥）；`--backend pi` 时原始事件流仍存 `raw/judge-events/<metric>.events.jsonl`
 
-`score.py <results目录>` 读同目录三件套；`idem.py <trace1> <trace2>` 出幂等比例。统计口径：均值/标准差/n/min/max（#13/#28）；必要性为 tokens/tool_calls/seconds 三分量各自提升率（#6）。
+`score.py <results目录>` 读同目录三件套；`idem.py <trace1> <trace2>` 出幂等比例。统计口径：均值/标准差/n/min/max（#13/#28）；必要性为 tokens/tool_calls/seconds 三分量各自提升率，每分量带 `n`（#11）。
 
 ## LLM 评审
 
-**调用口径（ADR-0020/0022）**：每条 rubric 一次**独立单发**调用——prompt = rubric 全文 + 被测文件（+ rubric 自声明的附属文件），不携带编排 agent 的历史/探索上下文，且必须带 **`--no-tools`**（实测带工具时判官会 cd 进真实仓库、自造实验、在包目录里留下宿主硬编码文件）；固定可重放。pi CLI 没有采样参数（无 `--temperature`/`--seed`），所以“temperature=0”写不了，只能靠“同一 prompt + 单发 + 无工具 + 留原始事件流”压住漂移：实测同 prompt 重复 4 次逐项一致，而同一 rubric 换带上下文的 agent 判会得出不同分（#7 1.0 vs 0.5）。默认单次；要更高的可信度就开 `JUDGE_SAMPLES=3` 取中位数（成本 ×3，需在报告注明口径）。
+**调用口径（ADR-0020/0022/0034）**：每条 rubric 一次**独立单发**调用——prompt = rubric 全文 + 被测文件（`judge_run.py` 收集，默认上限 60k 字符），不携带编排 agent 的历史/探索上下文。T1 默认走 `llm` 接口层：请求不含 tools/tool_choice，结构上保证无工具；`--backend pi` 回退旧路径时要求 `--no-tools`。固定可重放：同一 prompt、单发、无工具；原始 request/response 存 `raw/llm-judge/`。默认单次；要更高可信度可手工跑 3 次后 `judge_runner.py --merge`（成本 ×3，需在报告注明口径）。
 
 输出：结构化 JSON（`{items: [{name, pass, quote}], score, evidence, reason}`，evidence 必须引用原文；**score = pass 项数/总项数**，0~1 两位小数，judge_runner.py 强制校验）。rubric 文件在 `judges/`。
 
-流程门禁：主 agent 按 rubric 产出 JSON → 运行 `python scripts/judge_runner.py --validate <文件>` → `valid=true` 才能进报告；校验失败把 errors 原文回给 LLM 重产一次，再失败则该指标标 `skipped` 并注明。原始事件流存 `raw/judge-events/<metric>.events.jsonl`（裁决有争议时可回看模型到底看到了什么）；事件流里出现 `tool_execution_start` 则该次评审作废重跑（ADR-0022）。
+流程门禁：`scripts/judge_run.py --metric <name> --skill <dir> --out judges/<metric>.json` 默认走 `llm`（无 tools），校验失败把 errors 回给模型重产一次，再失败则该指标标 `skipped`。原始 request/response 存 `raw/llm-judge/<metric>.json`；`--backend pi` 时事件流里出现 `tool_execution_start` 则该次评审作废重跑（ADR-0022）。
 
 `JUDGE_SAMPLES=3` 时：同一 prompt 跑 3 次 → `python scripts/judge_runner.py --merge <a.json> <b.json> <c.json> --out judges/<metric>.json`
 （逐项多数票，分歧项与各次得分留在输出里，ADR-0028）。

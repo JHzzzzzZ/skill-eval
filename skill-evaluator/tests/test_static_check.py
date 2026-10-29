@@ -544,6 +544,19 @@ def test_body_lines_over_limit_warns_not_fails(tmp_path):
     assert any("#2" in w and "151" in w for w in out["warnings"])
 
 
+def test_fenced_code_links_are_not_stale_refs(tmp_path):
+    d = make_skill(tmp_path, """---
+name: s
+description: d
+---
+```bash
+cat [missing](./nope.md)
+```
+""")
+    out = run_check(d)
+    assert out["stale_refs"] == []
+
+
 def test_body_lines_null_without_skill_md(tmp_path):
     d = tmp_path / "empty-skill"
     d.mkdir()

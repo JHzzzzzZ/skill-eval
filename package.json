@@ -1,0 +1,25 @@
+{
+  "name": "skill-evaluator",
+  "version": "2.0.0",
+  "description": "Evaluate any pi skill package against 16 quality metrics; emits report.json + report.md.",
+  "license": "MIT",
+  "keywords": [
+    "pi-package"
+  ],
+  "pi": {
+    "skills": [
+      "./skill-evaluator"
+    ]
+  },
+  "files": [
+    "skill-evaluator/SKILL.md",
+    "skill-evaluator/reference.md",
+    "skill-evaluator/config.yaml",
+    "skill-evaluator/scripts",
+    "skill-evaluator/web",
+    "skill-evaluator/judges",
+    "skill-evaluator/tests",
+    "skill-evaluator/LICENSE",
+    "skill-evaluator/requirements.txt"
+  ]
+}
