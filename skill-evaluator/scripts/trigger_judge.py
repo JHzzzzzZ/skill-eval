@@ -24,8 +24,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 from compare import extract_answer  # 同一 JSON 提取逻辑（花括号配对，支持嵌套 items[]）
 from judge_runner import score_of_items, validate  # #5 同一计分/校验口径
 from _subprocess import ask_json, build_mode_args
+import _config
 
-DEFAULT_THRESHOLD = 0.5  # 可配参数（reference.md § 可配参数）
 DEFAULT_RUBRIC = Path(__file__).parent.parent / "judges" / "trigger.md"
 
 
@@ -75,15 +75,16 @@ def normalize_payload(raw) -> tuple:
 
 
 def parse_threshold(cli_value=None) -> float:
-    """优先级：--threshold > TRIGGER_PASS_SCORE 环境变量 > 默认 0.5；非法值回落默认。"""
+    """优先级：--threshold > TRIGGER_PASS_SCORE 环境变量 > config.yaml > 0.5；非法值回落配置默认。"""
+    default = _config.get_float("trigger_judge.pass_score", 0.5)
     raw = cli_value if cli_value is not None else os.environ.get("TRIGGER_PASS_SCORE")
     if raw is None or str(raw).strip() == "":
-        return DEFAULT_THRESHOLD
+        return default
     try:
         v = float(raw)
     except ValueError:
-        return DEFAULT_THRESHOLD
-    return v if 0.0 <= v <= 1.0 else DEFAULT_THRESHOLD
+        return default
+    return v if 0.0 <= v <= 1.0 else default
 
 
 def main():

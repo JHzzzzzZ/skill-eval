@@ -6,7 +6,7 @@ SKILL.md 的细则层。指标编号 #N 对应 prompt.txt 的 19 条需求。
 
 | 手段 | 指标 | 本期状态 |
 |---|---|---|
-| 静态检查 | #2 name/description 规范与 token 数、#7 调用方式、#13 六组规则扫描（危险命令/凭据/注入/外发/混淆/个人信息）、#3 正文行数（主源）、#8 依赖全面性 | ✅ 已实现（static_check.py，ADR-0013/0017/0029/0031） |
+| 静态检查 | #2 name/description 规范与字符预算、#7 调用方式、#13 六组规则扫描（危险命令/凭据/注入/外发/混淆/个人信息）、#3 正文行数（主源，150 warn / 500 fail）、#8 依赖全面性 | ✅ 已实现（static_check.py，ADR-0013/0017/0029/0031/0037） |
 | 沙箱运行 | #1 触发精准度、#4 成本、#5 必要性、#8 最小依赖 | ✅ 已实现（trace_run.py + score.py + judges/deps.md 语义面双源） |
 | LLM 评审 | #3 正文精简（语义两项，辅证）、#6 低冗余、#11 fallback、#16 前置自检、#17/18 输入输出契约、#19 副作用可逆 | ✅ 已实现（judges/ + judge_runner.py） |
 | 沙箱运行（多次） | #12 稳定性（组内变异系数）、#15 幂等 | ✅ 已实现（重复运行 ×N + idem.py；#12 口径见 ADR-0016） |
@@ -95,7 +95,7 @@ evalsets/<name>/v1/
 
 | 档 | 场景 | 做什么 | 服务指标 |
 |---|---|---|---|
-| T0 | 静态检查 | static_check.py | #2 #7 #13 #3（行数主源） |
+| T0 | 静态检查 | static_check.py | #2 #7 #13 #3（行数主源，150 warn / 500 fail） |
 | T1 | LLM 评审 | 逐项按 judges/ rubric 评审（4 并发） | #3（语义两项，辅证） #6(评审面) #11 #16 #17 #18 #19 |
 | T2 | 触发评测 | 三组 prompt 各跑一次，带 `--early-exit`（ADR-0007 修订、ADR-0018）：事件流出现**首次指向被测 SKILL.md 的工具调用**（渐进式披露下 = agent 决定加载 skill）即终止该次运行省 token——判定按**路径解析**（相对路径按同串 `cd` 目标/运行 cwd 解析），不是绝对路径子串；未出现该调用的 run 跑完整，其行为正是 precision 的证据；**triggered 由 `trigger_judge.py` 用 LLM 判定**，判定口径与 early-exit 同步：**加载即触发，不要求任务实际完成**，截断运行（回答为空）按已执行步骤裁决（trace_run.triggered 仅作粗筛），环境故障的 case 不计入 P/R 分母。**`#7 resolved=human` 时整档不跑**：#1 记 `skipped`（载体测不到“按 description 触发”，ADR-0018） | #1 |
 | T3 | 主运行 Golden Run | 干净 worktree + 加载 skill，跑 cases，采 trace | #4/#8/#9 |
@@ -115,7 +115,7 @@ evalsets/<name>/v1/
 
 可选 `--thinking <off|minimal|low|medium|high|xhigh|max>` 控制思考档位。LLM 评审（judges/）与触发判定（trigger_judge.py）用**同一个模型配置**，保证与被测运行同源。评测集 AI 审核是唯一例外，见 § 评测集 AI 审核。
 
-可配参数：重复运行 N=3；IDEMPOTENT_MAX_RATIO=0.5（idem.py）；DESCRIPTION_TOKEN_LIMIT=100、NAME_MAX_CHARS=64、SKILL_MD_BODY_MAX_LINES=150（static_check.py；#3 行数主源，超限仅 warn，ADR-0017）、`--exclude <路径>`（相对 skill 目录解析）、`--no-default-excludes`（static_check.py）；触发集每组最小条数 10（evalset_count.py，环境变量 SKILL_EVAL_TRIGGER_MIN / CLI --min*）；F1_PASS=0.7、COST_CV_MAX=0.5（report.py，#12 作用于逐 case 变异系数中位数，无逐 case 数据时回落 pooled，见 ADR-0016）；ECHO_COVERAGE_MAX=0.6、DUP_COVERAGE_MAX=0.8（evalset_check.py）；ANSWER_SIM_MIN=0.5、AGREEMENT_MIN=0.8（model_robust.py）；TRIGGER_PASS_SCORE=0.5（trigger_judge.py，--threshold 可覆盖）；ARGS_MAX_CHARS=2000（trace_run.py，仅对字符串形态的 args 生效，ADR-0024）；JUDGE_SAMPLES=1（LLM 评审单发次数，3 = 跑 3 次后 `judge_runner.py --merge` 逐项多数票，ADR-0028）。
+可配参数统一在 `config.yaml`（ADR-0035），优先级 CLI > 现有 ENV > config.yaml > 代码默认。关键项：description 字符阈值 384 warn / 1024 fail、正文 150 warn / 500 fail（ADR-0037）、触发集每组最小条数 10、F1 0.7、逐 case 变异系数上限 0.5、幂等比例 0.5、触发集覆盖 0.6/0.8、跨模型相似度 0.5/0.8、触发判定分 0.5、args 上限 2000、UI 单元格 800 / 内联 400；重复运行 3 次、评审单发 1 次/并发 4（runner 在 PR5 读取）。既有 `SKILL_EVAL_TRIGGER_MIN` 仍可覆盖最小条数；`--exclude <路径>`（相对 skill 目录解析）、`--no-default-excludes`（static_check.py）仍是 CLI 开关；`--threshold` 仍可覆盖触发判定分。`JUDGE_SAMPLES=3` 的多数票流程不变（跑 3 次后 `judge_runner.py --merge`，ADR-0028）。
 
 判据口径（容易被误读，单独列）：#5 = 三分量多数票（tokens/tool_calls/seconds 各一票，ADR-0026）；
 #6 = 消融对比量按 `higher_is_better` 定向（ADR-0026）；#8 = 全部 golden trace 取并集，依赖信号分强弱档

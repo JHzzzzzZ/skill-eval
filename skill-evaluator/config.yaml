@@ -1,0 +1,85 @@
+# skill-evaluator 运行常量（唯一可调来源）
+#
+# 解析器只支持本文件演示的子集：两级键、标量、行内 # 注释、行内 [a, b] 列表；
+# 不支持锚点、多行块、嵌套列表。格式错误会在启动时报错并给行号，不会静默用默认值。
+# 优先级：CLI 参数 > 现有环境变量 > 本文件 > 代码默认值。
+# 本文件参与评估器指纹（ADR-0010）：改阈值会让历史报告 comparable=false。
+# 指标编号见 ADR-0032；阈值口径见 ADR-0037。
+
+static:
+  # name 最大字符数；超过记 warning，不 fail。单位：Unicode 字符。默认 64。
+  name_max_chars: 64
+  # description 字符数警告线；超过记 warning。单位：Unicode 字符（去首尾空白）。默认 384。
+  description_warn_chars: 384
+  # description 字符数失败线；超过判 fail。单位：Unicode 字符（去首尾空白）。默认 1024。
+  description_fail_chars: 1024
+  # SKILL.md 正文行数警告线；超过记 warning。单位：行（frontmatter 之后全文，含空行/代码块）。默认 150。
+  body_warn_lines: 150
+  # SKILL.md 正文行数失败线；超过判 fail。单位：行（同上）。默认 500。
+  body_fail_lines: 500
+
+evalset:
+  # 触发集三组各自的默认最小条数；低于此值不进入审核。单位：条。默认 10。
+  # 仍可用环境变量 SKILL_EVAL_TRIGGER_MIN 或 CLI --min* 覆盖（兼容 ADR-0009）。
+  trigger_min: 10
+
+report:
+  # 触发评测 F1 及格线；低于此值判 fail。范围 0~1。默认 0.7。
+  f1_pass: 0.7
+  # 稳定性阈值：逐 case tool_calls 变异系数上限；超过判不稳。范围 0~1+。默认 0.5。
+  cost_cv_max: 0.5
+
+run:
+  # 单次 LLM 调用或子进程的上限。单位：秒。默认 300。
+  timeout_s: 300
+  # trace 里 step.args 为字符串时的保留上限；dict 形态原样保留。单位：字符。默认 2000。
+  args_max_chars: 2000
+  # 主运行重复次数；runner 使用（PR5 生效）。单位：次。默认 3。
+  repeat: 3
+  # 单条 rubric 的单发次数；3 = 多数票（runner 使用，PR5 生效）。单位：次。默认 1。
+  judge_samples: 1
+  # LLM 评审并发数；runner 使用（PR5 生效）。单位：路。默认 4。
+  judge_concurrency: 4
+
+idem:
+  # 重复步骤比例上限；超过判不幂等。范围 0~1。默认 0.5。
+  max_ratio: 0.5
+
+evalset_check:
+  # should prompt 对 description 的 3-gram 覆盖率上限；超过警告。范围 0~1。默认 0.6。
+  echo_coverage_max: 0.6
+  # 组内两条 prompt 的互相覆盖率上限；超过警告。范围 0~1。默认 0.8。
+  dup_coverage_max: 0.8
+
+model_robust:
+  # 两次回答的 3-gram Jaccard 下限；低于此值算不一致。范围 0~1。默认 0.5。
+  answer_sim_min: 0.5
+  # 一致 case 占比下限；低于此值判不稳。范围 0~1。默认 0.8。
+  agreement_min: 0.8
+
+trigger_judge:
+  # 触发判定通过分；低于此值算未触发。范围 0~1。默认 0.5。
+  pass_score: 0.5
+
+# 以下两节在 PR4 生效（ADR-0034）；当前脚本只登记，不读取。
+llm:
+  # T1 评审直连协议：openai（/v1/chat/completions）或 anthropic（后续）。默认 openai。
+  protocol: openai
+  # OpenAI-compatible 端点；留空表示由调用方显式传 --base-url。单位：URL。
+  base_url: ""
+  # 凭据来源：已存在的环境变量名；不新增变量，留空表示前端一次性输入。单位：变量名。
+  api_key_env: ""
+  # T1 默认模型 provider/id；留空表示由 CLI/ENV 指定。单位：provider/id。
+  model: ""
+
+harness:
+  # T2+ 执行载体；当前唯一实现是 pi。单位：适配器名。
+  adapter: pi
+  # 前端可选项；只显示已实现项。单位：适配器名列表。
+  available: [pi]
+
+ui:
+  # 表格单元格截断阈值；超过截断并标注。单位：字符。默认 800。
+  cell_max: 800
+  # 无表可渲染时的内联上限；超过折叠。单位：字符。默认 400。
+  inline_max: 400

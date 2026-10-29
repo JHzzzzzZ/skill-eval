@@ -11,7 +11,7 @@ import json
 import sys
 from pathlib import Path
 
-IDEMPOTENT_MAX_RATIO = 0.5  # 可配参数（reference.md § 可配参数）
+import _config
 
 
 def load_trace(path: str) -> list:
@@ -43,11 +43,12 @@ def main():
     repeated = sum(1 for s in steps2 if (s["tool"], s["args_hash"]) in seen1)
     total = len(steps2)
     ratio = repeated / total if total else 0.0
+    max_ratio = _config.get_float("idem.max_ratio", 0.5)
     out = {
         "total_steps": total,
         "repeated_steps": repeated,
         "ratio": ratio,
-        "idempotent": ratio <= IDEMPOTENT_MAX_RATIO,
+        "idempotent": ratio <= max_ratio,
     }
     text = json.dumps(out, ensure_ascii=False)
     if out_path:

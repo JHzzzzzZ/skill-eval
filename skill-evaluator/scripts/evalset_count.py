@@ -19,7 +19,7 @@ import os
 import sys
 from pathlib import Path
 
-DEFAULT_MIN = 10  # 三组各自的默认最小条数（可配：环境变量 / CLI，见模块注释）
+import _config
 
 GROUPS = {"should": "triggers/should", "should_not": "triggers/should-not",
           "confusable": "triggers/confusable"}
@@ -76,7 +76,8 @@ def main():
 
     env = os.environ.get("SKILL_EVAL_TRIGGER_MIN")
     env_v = int(env) if env and env.strip().isdigit() else None
-    minimums = {k: mins.get(k, env_v if env_v is not None else DEFAULT_MIN) for k in GROUPS}
+    default_min = _config.get_int("evalset.trigger_min", 10)
+    minimums = {k: mins.get(k, env_v if env_v is not None else default_min) for k in GROUPS}
 
     counts, issues = {}, []
     for key, sub in GROUPS.items():

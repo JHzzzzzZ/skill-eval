@@ -4,12 +4,13 @@ Generated: 2026-09-22T13:43:08.578Z
 
 ## OVERVIEW
 
-16 个确定性 Python CLI + `check-deps.sh` 前置自检，扁平单层，共约 4000 行（`scripts/*.py` 实测 3992 行 + 83 行 shell）。每个脚本 = 一个有文档的 CLI seam：输出 stdout JSON 或落盘中间产物。脚本之间无 subprocess 调用。
+16 个确定性 Python CLI + `_config.py` 共享模块 + `check-deps.sh` 前置自检，扁平单层，共约 4400 行（`scripts/*.py` 实测 4321 行 + shell）。每个脚本 = 一个有文档的 CLI seam：输出 stdout JSON 或落盘中间产物。脚本之间无 subprocess 调用。
 
 ## WHERE TO LOOK
 
 | 脚本 | 行数 | CLI seam | 服务指标 |
 |---|---|---|---|
+| `_config.py` | 204 | 无 CLI；`get/get_int/get_float/pick` | config.yaml 读取（ADR-0035） |
 | `report.py` | 1307 | `<results目录> [--html] [--evalset <vN>] [--skill <dir>] [--tier <t>]` | 汇总 19 条 + 优化建议 + 报告页 |
 | `static_check.py` | 621 | `<skill目录> [--exclude <p>]... [--no-default-excludes]` | #2/#7/#13 六组 + 可移植性闸门 + #8 依赖全面性 |
 | `trace_run.py` | 245 | `<worktree> <prompt> [--skill\|--no-skill] [--early-exit] [--model] [--events] [--out] [--build-only]` | #1/#4/#5/#8/#12/#15 数据源 |
@@ -51,7 +52,7 @@ Generated: 2026-09-22T13:43:08.578Z
 - **stdout 契约字段恒输出**：输入缺失或非法 → 输出 `"skipped"`，**不崩溃、不打 0 分**（`score.py`、`report.py` 均如此）。
 - **LLM 调用块统一形态**：`cmd = ["pi", "-p", "--no-session", "--no-skills"]`，`shutil.which("pi") or "pi.cmd"`，`timeout=300`。
 - **离线 seam 三件套**：`--build-only`（只打印将执行的命令）、`--events <jsonl>`（离线解析已采集事件流）、`--out <file>`。测试全靠它们，改这三个 flag 会同时打断多个测试。
-- 阈值常量放文件头部并注明"可配"：`IDEMPOTENT_MAX_RATIO=0.5`、`F1_PASS=0.7`、`COST_CV_MAX=0.5`、`ECHO_COVERAGE_MAX=0.6`、`DUP_COVERAGE_MAX=0.8`、`ANSWER_SIM_MIN=0.5`、`AGREEMENT_MIN=0.8`。
+- 阈值常量不再放文件头部：统一在 `config.yaml`（ADR-0035），脚本内用 `_config.get_*` 惰性读取（**不在 import 时读文件**，保持模块 import 无副作用）。
 
 ## ANTI-PATTERNS
 
@@ -72,5 +73,5 @@ Generated: 2026-09-22T13:43:08.578Z
 - 代码级 import 扇入只有三条：`compare.extract_answer` ← `process.py:17`、`trigger_judge.py:24`；`static_check.parse_frontmatter` ← `evalset_check.py:31`；`trace_run.EventAggregator` ← `tests/test_trace_run.py:190`。其余 13 个脚本零代码级依赖。
 - `report.py:298 build()` 是约 260 行 if 链，19 指标无子函数。读它反推所有上游契约是最快路径。
 - `report.py:720 _HTML_TMPL` 是约 100 行内联 HTML + 前端 JS（含评测集审核与建议 tab 的交互）。改 HTML 时注意 JS 字符串里的换行会被截断（历史 bug：commit `0ef26f5`），且指标卡必须带 `id='m-N'`——建议页的锚点靠它跳转（ADR-0030）。
-- 评估器指纹只收 `scripts/*.py` + `judges/*.md` + `SKILL.md` + `reference.md`（`report.py:94`）——`check-deps.sh` 改了**不会**让历史报告变 `comparable=false`，改 `.py` 会。
+- 评估器指纹只收 `scripts/*.py` + `judges/*.md` + `config.yaml` + `SKILL.md` + `reference.md`（`report.py:94`）——`check-deps.sh` 改了**不会**让历史报告变 `comparable=false`，改 `.py`/`config.yaml` 会。
 - 新增 `check-deps.sh` 的坑：Windows 上 `python3` 可能是应用商店占位符，`command -v` 能找到但跑不起来，必须实跑验证再采纳（`check-deps.sh` 已这么写，别简化成 `command -v python3`）。

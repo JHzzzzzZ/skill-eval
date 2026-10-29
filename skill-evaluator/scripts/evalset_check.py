@@ -29,9 +29,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from static_check import parse_frontmatter
+import _config
 
-ECHO_COVERAGE_MAX = 0.6  # prompt 对 description 的 3-gram 覆盖率上限（可配）
-DUP_COVERAGE_MAX = 0.8   # 组内两条 prompt 的互相覆盖率上限（可配）
 NGRAM = 3
 
 # 沙箱外路径（ADR-0027）：worktree 只限定 cwd，不限定写权限——实测 prompt 里带真实仓库路径时
@@ -134,6 +133,8 @@ def find_out_of_sandbox(items: list) -> list:
 
 
 def check(evalset_dir: Path, skill_dir: Path) -> dict:
+    echo_max = _config.get_float("evalset_check.echo_coverage_max", 0.6)
+    dup_max = _config.get_float("evalset_check.dup_coverage_max", 0.8)
     errors = []
     triggers = evalset_dir / "triggers"
     groups = {g: load_group(triggers, g, errors) for g in GROUPS}
@@ -151,7 +152,7 @@ def check(evalset_dir: Path, skill_dir: Path) -> dict:
     for item in groups["should"]:  # 只有"应触发"组照抄才影响指标；should-not 照抄反而是正常负例
         if desc_norm:
             cov = coverage(item["norm"], desc_norm)
-            if cov >= ECHO_COVERAGE_MAX:
+            if cov >= echo_max:
                 echoes_desc.append({"file": item["file"], "prompt": item["prompt"],
                                     "coverage": round(cov, 2)})
         if name_norm and name_norm in item["norm"]:
@@ -159,8 +160,8 @@ def check(evalset_dir: Path, skill_dir: Path) -> dict:
 
     duplicates = []
     for g in GROUPS:
-        duplicates += find_duplicates(groups[g], DUP_COVERAGE_MAX)
-    conflicts = find_conflicts(groups["should"], groups["should-not"], DUP_COVERAGE_MAX)
+        duplicates += find_duplicates(groups[g], dup_max)
+    conflicts = find_conflicts(groups["should"], groups["should-not"], dup_max)
     cases = load_cases(evalset_dir / "cases", errors)
     oos = find_out_of_sandbox([*[i for g in GROUPS for i in groups[g]], *cases])
 
@@ -169,7 +170,7 @@ def check(evalset_dir: Path, skill_dir: Path) -> dict:
     else:
         problems = []
         if echoes_desc:
-            problems.append(f"{len(echoes_desc)} 条 should prompt 与 description 高度重合（≥{ECHO_COVERAGE_MAX}）")
+            problems.append(f"{len(echoes_desc)} 条 should prompt 与 description 高度重合（≥{echo_max}）")
         if echoes_name:
             problems.append(f"{len(echoes_name)} 条 should prompt 直接含 skill name")
         if duplicates:

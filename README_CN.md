@@ -10,7 +10,7 @@
 
 | 测量手段 | 指标 | 工具 |
 |---|---|---|
-| 静态检查 | #2 name/description 规范与 token 预算、#7 调用方式、#13 危险命令扫描、#3 正文行数（主源） | `scripts/static_check.py` |
+| 静态检查 | #2 name/description 规范与字符预算（384 警告 / 1024 失败）、#7 调用方式、#13 危险命令扫描、#3 正文行数（主源，150 警告 / 500 失败） | `scripts/static_check.py` |
 | 沙箱运行 | #1 触发 P/R/F1、#4 成本统计、#5 必要性 A/B、#8 最小依赖、#9 结果可验证、#10 过程审计、#12 稳定性、#15 幂等 | `scripts/trace_run.py`、`score.py`、`trigger_judge.py`、`idem.py`、`compare.py`、`process.py` |
 | LLM 评审 | #3 正文精简（语义两项，辅证）、#6 低冗余、#11 fallback、#16 前置自检、#17/18 输入输出契约、#19 副作用可逆、#13 个人信息语义面（工号/客户名/内部系统）、#8 依赖全面性 | `judges/*.md` rubric + `judge_runner.py` |
 | 历史对比 | #14 版本演进 | `scripts/evolution.py` |
@@ -24,12 +24,13 @@
 skill-evaluator/
 ├── SKILL.md            # 编排：五档流程（T0–T4，默认 T2），只放立即要做的事
 ├── reference.md        # 细则：档位定义、指标映射、沙箱定义、版本号、契约、fallback
+├── config.yaml         # 可调阈值（384/1024 字符、150/500 行等）；参与评估器指纹
 ├── LICENSE             # MIT
 ├── requirements.txt    # 运行时零第三方依赖（标准库）；pytest 仅测试用
 ├── judges/             # LLM 评审 rubric（结构化 JSON 输出，固定单发 prompt）
 ├── scripts/            # 确定性工具；check-deps.sh = 前置自检（#16）
-└── tests/              # 298 个测试，全部走 subprocess seam
-docs/adr/               # 31 条架构决策记录
+└── tests/              # 320 个测试，全部走 subprocess seam
+docs/adr/               # 37 条架构决策记录
 ```
 
 评估器**自闭环**：脚本与测试全部在 skill 包内（ADR-0006）。评估产物（评测集、报告）放 `skill-evaluator/evalsets/<skill名>/`，按版本冻结——重跑不重新生成。
@@ -37,7 +38,7 @@ docs/adr/               # 31 条架构决策记录
 ## 使用
 
 1. 安装：把 `skill-evaluator/` 复制到 `~/.pi/agent/skills/`
-2. 前置自检：`bash scripts/check-deps.sh`（python ≥ 3.9 / git / pytest / pi CLI）
+2. 前置自检：`bash scripts/check-deps.sh`（python ≥ 3.9 / git / pytest / pi CLI / config.yaml 可解析）
 3. 会话里说：*"评估这个 skill：`<路径>`"*
 4. 拿到 `skill-evaluator/evalsets/<name>/results/<version>/` 下的 `report.json` + `report.md` + `meta.json`（`report.py --skill <被测skill目录>` 顺手记下被测 skill 的内容指纹，ADR-0010；`--html` 另出单文件静态页：报告 + 评测集审核 + SVG 流程图）
 
@@ -60,7 +61,7 @@ docs/adr/               # 31 条架构决策记录
 
 ```bash
 cd skill-evaluator
-python -m pytest tests        # 298 个测试全绿
+python -m pytest tests        # 320 个测试全绿
 ```
 
 设计决策及理由见 `docs/adr/`。英文版见 `README.md`。

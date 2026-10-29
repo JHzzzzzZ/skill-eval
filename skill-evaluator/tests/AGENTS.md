@@ -4,14 +4,15 @@ Generated: 2026-09-22T13:43:08.578Z
 
 ## OVERVIEW
 
-20 个测试文件 / 298 个 test，全部走 subprocess seam：把脚本当 CLI 跑，不 import 被测脚本（`test_trace_run.py` 例外，它 import `EventAggregator` 做增量消费断言）。
+21 个测试文件 / 320 个 test，全部走 subprocess seam：把脚本当 CLI 跑，不 import 被测脚本（`test_trace_run.py` 例外，它 import `EventAggregator` 做增量消费断言；`test_config.py` 直接 import 纯解析模块 `_config.py`）。
 
 ## WHERE TO LOOK
 
 | 测试文件 | 覆盖 | test 数 |
 |---|---|---|
-| `test_static_check.py` | `scripts/static_check.py`（六组规则 + PII + 依赖全面性） | 55 |
-| `test_report.py` | `report.py` 19-key 契约基线 | 44 |
+| `test_static_check.py` | `scripts/static_check.py`（六组规则 + PII + 依赖全面性 + 字符/行阈值） | 59 |
+| `test_config.py` | `scripts/_config.py`（YAML 子集解析/优先级/类型） | 7 |
+| `test_report.py` | `report.py` 19-key 契约基线 | 47 |
 | `test_trace_run.py` | `scripts/trace_run.py` | 39 |
 | `test_report3.py` | `report.py` 元数据/指纹批次（ADR-0010/0011）+ data 渲染层 | 25 |
 | `test_report4.py` | `report.py` 报告可用性（表格化/折叠/闸门可见/建议/✓✗/依赖全面性/PII，ADR-0029/0030/0031） | 17 |
@@ -30,7 +31,7 @@ Generated: 2026-09-22T13:43:08.578Z
 | `test_idem.py` | `scripts/idem.py` | 4 |
 | `test_console.py` | `scripts/_console.py`（GBK 控制台降级） | 4 |
 
-`scripts/` 16 个 Python 脚本全覆盖，无缺口。`report.py` 是唯一拆成 4 个文件覆盖的脚本。`check-deps.sh` 无 Python 测试（前置自检靠实跑验证）。
+`scripts/` 16 个 Python CLI + `_config.py` 全覆盖，无缺口。`report.py` 是唯一拆成 4 个文件覆盖的脚本。`check-deps.sh` 无 Python 测试（前置自检靠实跑验证）。
 
 ## CONVENTIONS
 

@@ -17,14 +17,13 @@ import statistics
 import sys
 from pathlib import Path
 
-F1_PASS = 0.7  # 触发评测及格线（可配）
-COST_CV_MAX = 0.5  # #12 稳定性阈值：tool_calls 变异系数上限（可配）
+import _config
 META_SCHEMA = "skill-eval/results-meta/1"  # 与 uploads/、evalsets/ 下的同名 meta.json 靠此字段区分
 EVALUATOR_ROOT = Path(__file__).resolve().parent.parent  # 评估器自身目录（指纹范围）
 
 # #19/#20：每个指标的中文含义（report.md 与 report.json 的 note 均引用，不能只写 #N）
 DIM_NAMES = {
-    "#1": "触发精准度", "#2": "name/description 规范与 token 预算", "#3": "正文精简",
+    "#1": "触发精准度", "#2": "name/description 规范与字符预算", "#3": "正文精简",
     "#4": "运行成本", "#5": "必要性 A/B", "#6": "低冗余", "#7": "调用方式",
     "#8": "最小依赖", "#9": "结果可验证", "#10": "过程可验证", "#11": "fallback",
     "#12": "稳定性", "#13": "权限最小化", "#14": "版本演进", "#15": "幂等可恢复",
@@ -92,7 +91,7 @@ def _sha256_files(root: Path, files) -> str:
 
 
 def evaluator_fingerprint(root: Path = None) -> dict:
-    """评估器指纹（ADR-0010）：scripts/*.py + judges/*.md + SKILL.md + reference.md 的内容 sha256。
+    """评估器指纹（ADR-0010）：scripts/*.py + judges/*.md + config.yaml + SKILL.md + reference.md 的内容 sha256。
 
     用途：results/meta.json 与 report.json 记录"这份报告由哪个评估器产生"；#14 跨版本对比时
     评估器换过版 → 指标差异不再构成被测 skill 的回归证据。
@@ -102,7 +101,8 @@ def evaluator_fingerprint(root: Path = None) -> dict:
     try:
         files = sorted([p for p in list((root / "scripts").glob("*.py"))
                         + list((root / "judges").glob("*.md"))
-                        + [root / "SKILL.md", root / "reference.md"] if p.is_file()],
+                        + [root / "config.yaml", root / "SKILL.md", root / "reference.md"]
+                        if p.is_file()],
                        key=lambda p: p.relative_to(root).as_posix())
     except OSError:
         files = []
@@ -190,17 +190,42 @@ def from_static(static, m: dict):
         return
     errors = static.get("errors", [])
     invoke_warn = any("disable-model-invocation" in w for w in static.get("warnings", []))
+    # 旧 static.json（无 description_level）仍走旧的子串口径；新产物读结构化字段（ADR-0037）。
     m_err = any("name" in e or "description" in e for e in errors)
     token_warn = any("token" in w for w in static.get("warnings", []))
-    m["#2"] = {"verdict": "fail" if m_err else "warn" if token_warn else "pass",
-               "method": METHOD_STATIC,
-               "data": {"description_tokens": static.get("description_tokens")},
-               "note": "name/description 规范与 token 阈值"}
+    level = static.get("description_level")
+    if level == "fail":
+        verdict = "fail"
+    elif level == "warn":
+        verdict = "warn"
+    elif level == "skipped":
+        verdict = "skipped"
+    elif level == "ok":
+        verdict = "pass"
+    else:
+        verdict = "fail" if m_err else "warn" if token_warn else "pass"
+    chars = static.get("description_chars")
+    warn = static.get("description_warn_chars")
+    fail = static.get("description_fail_chars")
+    if level == "skipped":
+        note = "human 型：name/description 可省略（静态面 skipped，ADR-0037）"
+    elif isinstance(chars, int) and isinstance(warn, int) and isinstance(fail, int):
+        note = f"description {chars} 字符（警告线 {warn} / 失败线 {fail}，ADR-0037）"
+    else:
+        note = "name/description 规范与字符阈值"
+    m["#2"] = {"verdict": verdict, "method": METHOD_STATIC,
+               "data": {"description_chars": chars,
+                        "description_warn_chars": warn,
+                        "description_fail_chars": fail,
+                        "description_tokens": static.get("description_tokens"),
+                        "human": static.get("human")},
+               "note": note}
     m["#7"] = {"verdict": "warn" if invoke_warn
                else "pass" if static.get("invoke", {}).get("resolved") in ("human", "both")
                else "skipped",
                "method": METHOD_STATIC, "data": static.get("invoke"),
-               "note": "调用方式 frontmatter 校验（disable-model-invocation：true=human，缺省=both）"}
+               "note": "调用方式 frontmatter 校验（disable-model-invocation：true=human；"
+                       "name/description 同时缺失也按 human）"}
     # #13 权限最小化（ADR-0013/0029）：六组静态规则 + 可移植性闸门。
     # 四组命中即 fail；混淆/个人信息仅 warn（待人工复核）。闸门（宿主硬编码，ADR-0008）
     # 命中同样 fail——旧实现只把 errors 填非空、passed=false，而 conclusion() 只看指标裁决，
@@ -320,8 +345,9 @@ def build(d: Path, evalset_dir: Path | None = None) -> dict:
     if isinstance(score, dict):
         t = score.get("trigger")
         if isinstance(t, dict):
-            m["#1"] = {"verdict": "pass" if t.get("f1", 0) >= F1_PASS else "fail",
-                       "method": METHOD_RUN, "data": t, "note": f"F1 及格线 {F1_PASS}"}
+            f1_pass = _config.get_float("report.f1_pass", 0.7)
+            m["#1"] = {"verdict": "pass" if t.get("f1", 0) >= f1_pass else "fail",
+                       "method": METHOD_RUN, "data": t, "note": f"F1 及格线 {f1_pass}"}
         cost = score.get("cost")
         if isinstance(cost, dict) and any(v != "skipped" for v in cost.values()):
             m["#4"] = {"verdict": "pass", "method": METHOD_RUN, "data": cost, "note": "单次运行成本统计"}
@@ -396,6 +422,7 @@ def build(d: Path, evalset_dir: Path | None = None) -> dict:
         # pooled 会把 case 间的难度差算成“不稳定”（实测：组间均值极差 8.5 步 → pooled cv 0.65，
         # 组内中位数 0.45）。无逐 case 数据（旧产物/旧 harness）时回退 pooled 并在 note 标注口径。
         cost_data = score["cost"]
+        cv_max = _config.get_float("report.cost_cv_max", 0.5)
         pooled = cost_data["tool_calls"]
         n = pooled.get("n", 1)
         pooled_cv = cv_of(pooled)
@@ -413,27 +440,27 @@ def build(d: Path, evalset_dir: Path | None = None) -> dict:
             worst = max(cv_cases, key=lambda c: cv_cases[c])
             tail = (f"；pooled 口径 {pooled_cv:.2f}（含跨 case 难度差，仅作参考）"
                     if pooled_cv is not None else "")
-            if med <= COST_CV_MAX:
+            if med <= cv_max:
                 verdict = "pass"
-                note = (f"组内（逐 case）变异系数中位数 {med:.2f} ≤ {COST_CV_MAX}，稳定"
+                note = (f"组内（逐 case）变异系数中位数 {med:.2f} ≤ {cv_max}，稳定"
                         f"（最大 {cv_cases[worst]:.2f} @ {worst}）{tail}")
             else:
                 verdict = "warn"
-                note = (f"组内（逐 case）变异系数中位数 {med:.2f} 超过阈值 {COST_CV_MAX}，不稳定"
+                note = (f"组内（逐 case）变异系数中位数 {med:.2f} 超过阈值 {cv_max}，不稳定"
                         f"（最大 {cv_cases[worst]:.2f} @ {worst}）{tail}")
-            data = {"cv_scope": "within-case", "cv_threshold": COST_CV_MAX,
+            data = {"cv_scope": "within-case", "cv_threshold": cv_max,
                     "cv_median": round(med, 3), "cv_max": round(cv_cases[worst], 3),
                     "cv_max_case": worst, "cv_by_case": {c: round(v, 3) for c, v in cv_cases.items()},
                     "cv_pooled": None if pooled_cv is None else round(pooled_cv, 3),
                     "cost_by_case": raw_cases, "cost": cost_data}
         else:
-            stable = pooled_cv is not None and pooled_cv <= COST_CV_MAX
+            stable = pooled_cv is not None and pooled_cv <= cv_max
             shown = 0.0 if pooled_cv is None else pooled_cv
-            note = (f"变异系数 {shown:.2f} ≤ {COST_CV_MAX}，稳定（pooled 口径：无逐 case 数据）"
+            note = (f"变异系数 {shown:.2f} ≤ {cv_max}，稳定（pooled 口径：无逐 case 数据）"
                     if stable else
-                    f"变异系数 {shown:.2f} > {COST_CV_MAX}，不稳定（pooled 口径：无逐 case 数据）")
+                    f"变异系数 {shown:.2f} > {cv_max}，不稳定（pooled 口径：无逐 case 数据）")
             verdict = "pass" if stable else "warn"
-            data = {"cv_scope": "pooled", "cv_threshold": COST_CV_MAX,
+            data = {"cv_scope": "pooled", "cv_threshold": cv_max,
                     "cv_pooled": None if pooled_cv is None else round(pooled_cv, 3), "cost": cost_data}
         m["#12"] = {"verdict": verdict, "method": METHOD_RUN, "data": data, "note": note}
 
@@ -489,26 +516,41 @@ def build(d: Path, evalset_dir: Path | None = None) -> dict:
             "note": ((cur.get("note") or "") + "；" if cur.get("note") else "")
                     + f"语义面 pii 评审（逐项：{items}）：{pii_j.get('reason') or ''}"}
 
-    # #3 双源（ADR-0017）：正文行数 = 可数事实 → 静态面主源（超线即 warn，机械证据优先）；
+    # #3 双源（ADR-0017）：正文行数 = 可数事实 → 静态面主源（超线即 warn/fail，机械证据优先）；
     # 语义两项 → LLM 面辅证，结果原形状保留在同一份 data 里，不丢。
     if isinstance(static, dict):
-        lines, limit = static.get("skill_md_body_lines"), static.get("skill_md_body_max_lines")
-        if isinstance(lines, int) and isinstance(limit, int):
+        lines = static.get("skill_md_body_lines")
+        if isinstance(lines, int):
+            level = static.get("body_level")
+            warn = static.get("skill_md_body_warn_lines")
+            fail = static.get("skill_md_body_fail_lines")
+            limit = static.get("skill_md_body_max_lines")  # 旧字段 = warn 线，兼容旧 static.json
+            if level not in ("ok", "warn", "fail"):
+                level = "warn" if isinstance(limit, int) and lines > limit else "ok"
             cur = m["#3"]
-            merged = {"skill_md_body_lines": lines, "skill_md_body_max_lines": limit}
+            merged = {"skill_md_body_lines": lines, "body_level": level}
+            for key, value in (("skill_md_body_warn_lines", warn),
+                               ("skill_md_body_fail_lines", fail),
+                               ("skill_md_body_max_lines", limit)):
+                if isinstance(value, int):
+                    merged[key] = value
             if isinstance(cur.get("data"), dict):
                 merged.update(cur["data"])
-            if lines > limit:
+            if level == "fail":
+                m["#3"] = {"verdict": "fail", "method": METHOD_STATIC, "data": merged,
+                           "note": f"正文 {lines} 行 > 失败阈值 {fail} 行（静态面主源，ADR-0037）；"
+                                   + (cur.get("note") or "无语义评审输出")}
+            elif level == "warn":
                 m["#3"] = {"verdict": "warn", "method": METHOD_STATIC, "data": merged,
-                           "note": f"正文 {lines} 行 > 阈值 {limit} 行（静态面主源，ADR-0017）；"
+                           "note": f"正文 {lines} 行 > 警告阈值 {warn} 行（静态面主源，ADR-0037）；"
                                    + (cur.get("note") or "无语义评审输出")}
             elif isinstance(cur.get("data"), dict):
                 m["#3"] = {**cur, "data": merged,
                            "note": (cur.get("note") or "")
-                                   + f"；正文 {lines} 行 ≤ 阈值 {limit}（静态面）"}
+                                   + f"；正文 {lines} 行 ≤ 警告阈值（静态面）"}
             else:
                 m["#3"] = {"verdict": "skipped", "method": METHOD_STATIC, "data": merged,
-                           "note": f"正文 {lines} 行 ≤ 阈值 {limit}（静态面通过）；无语义评审输出"}
+                           "note": f"正文 {lines} 行 ≤ 警告阈值（静态面通过）；无语义评审输出"}
 
     m["#10"] = {"verdict": "skipped", "method": METHOD_RUN, "data": None, "note": "无 process.json"}
     proc = load(d, "process.json")
@@ -819,8 +861,7 @@ function rvSubmit(){var root=document.getElementById('rv-root');if(!root)return;
 </body></html>'''
 
 
-DATA_INLINE_MAX = 400  # 无表可渲染时的内联阈值（字符）；超过则折叠
-CELL_MAX = 800  # 表格单元格截断阈值（字符）；全文在折叠的原始 data 里
+
 # data 渲染口径（见 reference.md § 报告契约）：表格优先 → 原始 JSON 折叠；短 data 内联；**不静默截断**
 # （旧实现 [:2000] 会把 #15 这种 2165 字符的 data 切成非法 JSON）
 
@@ -838,12 +879,13 @@ def _fmt(v, nd=3) -> str:
 
 
 def _cell(v) -> str:
-    """表格单元格文本：压平空白；超 CELL_MAX 截断（全文仍在折叠的原始 data 里）。"""
+    """表格单元格文本：压平空白；超 ui.cell_max 截断（全文仍在折叠的原始 data 里）。"""
     if v is None:
         return ""
     text = json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else str(v)
     text = " ".join(text.split())
-    return text if len(text) <= CELL_MAX else text[:CELL_MAX] + "…（截断，全文见原始 data）"
+    limit = _config.get_int("ui.cell_max", 800)
+    return text if len(text) <= limit else text[:limit] + "…（截断，全文见原始 data）"
 
 
 def _md_cell(v) -> str:
@@ -927,7 +969,7 @@ def _raw_html(data, folded=False) -> str:
     折叠不是省略：表格是视图，折叠里是原文（ADR-0030，HTML 不得比 md/json 少信息）。
     """
     raw = json.dumps(data, ensure_ascii=False, indent=2)
-    if folded or len(raw) > DATA_INLINE_MAX:
+    if folded or len(raw) > _config.get_int("ui.inline_max", 400):
         return (f"<details><summary>原始 JSON（{len(raw)} 字符，与 report.json 同源）</summary>"
                 f"<pre>{_esc(raw)}</pre></details>")
     return f"<pre>{_esc(raw)}</pre>"
@@ -940,7 +982,7 @@ ADV_SEV_RANK = {"fail": 0, "warn": 1, "info": 2}
 # 每条指标的建议动作（确定性文本，问题与建议同源 → 结构上无法服钩，ADR-0030）
 ADVICE_ACTIONS = {
     "#1": "修 description 或触发集：应触发项未触发看召回率，不应触发被触发看精确率",
-    "#2": "把 description 压到 token 阈值内，并确认 name/description 齐全可读",
+    "#2": "把 description 压到字符阈值内（>384 警告，>1024 失败），并确认 name/description 齐全可读",
     "#3": "把细节下沉到 reference.md，SKILL.md 只留立即要做的步骤",
     "#4": "合并重复调用、减少不必要的读取，把单次运行成本降到最低",
     "#5": "删掉不改变产出的步骤（与无 skill 基线对比；省步不省 token 也算必要性不足）",

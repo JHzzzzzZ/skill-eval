@@ -6,6 +6,8 @@
 stdout 契约（字段恒输出）：
 {
   "name": str|null, "description": str|null, "description_tokens": int,
+  "description_chars": int, "description_warn_chars": int, "description_fail_chars": int,
+  "description_level": "ok"|"warn"|"fail"|"skipped", "human": bool,
   "invoke": {"allowed": [str...], "resolved": str, "note": str},   # resolved: both|human（映射 disable-model-invocation）
   "dangerous": [{"pattern": str, "line": int, "file": str, "text": str}],
   "secrets": [...], "injection": [...], "exfil": [...],   # 同为 #13，命中即 error（ADR-0013）
@@ -22,7 +24,9 @@ stdout 契约（字段恒输出）：
   "scan_excluded_dirs": [str],   # 默认豁免目录中实际存在者（ADR-0012：运行面之外）
   "stale_refs": [str],           # SKILL.md 声明但包内不存在的路径（依赖新鲜度，warning 级）
   "skill_md_body_lines": int|null,       # #3 正文行数（frontmatter 之后全文；无 SKILL.md 时为 null）
-  "skill_md_body_max_lines": int,        # 该次检查使用的阈值（自描述，report.py 据此判定，不复制常量）
+  "skill_md_body_warn_lines": int, "skill_md_body_fail_lines": int,
+  "body_level": "ok"|"warn"|"fail",
+  "skill_md_body_max_lines": int,        # 兼容旧字段 = warn 线（report.py 新代码读 body_level）
   "errors": [str], "warnings": [str], "issues": [str],   # issues = errors + warnings
   "passed": bool          # errors 为空即 True（危险命令/缺 name 都算 error）
 }
@@ -50,12 +54,7 @@ import re
 import sys
 from pathlib import Path
 
-# 可配置常量（reference.md § 可配参数）
-DESCRIPTION_TOKEN_LIMIT = 100
-NAME_MAX_CHARS = 64
-# #3 正文行数上限（ADR-0017）：口径 = parse_frontmatter 之后的全文行数，含空行、含代码块。
-# 这是自定阈值（原 rubric 的 ">150 行倾向臃肿" 的硬化），不是 19 条需求里的数字；超限仅 warning。
-SKILL_MD_BODY_MAX_LINES = 150
+import _config
 
 INVOKE_VALUES = {"human", "both"}  # pi 真实三态归约：缺省/false=both（模型+用户）；disable-model-invocation:true=human
 
@@ -510,14 +509,28 @@ def main():
               "[--no-default-excludes] [--out <file>]", file=sys.stderr)
         sys.exit(2)
     skill_dir = Path(rest[0])
+    name_max_chars = _config.get_int("static.name_max_chars", 64)
+    desc_warn = _config.get_int("static.description_warn_chars", 384)
+    desc_fail = _config.get_int("static.description_fail_chars", 1024)
+    body_warn = _config.get_int("static.body_warn_lines", 150)
+    body_fail = _config.get_int("static.body_fail_lines", 500)
+    if desc_warn > desc_fail:
+        raise _config.ConfigError("static.description_warn_chars 不能大于 description_fail_chars")
+    if body_warn > body_fail:
+        raise _config.ConfigError("static.body_warn_lines 不能大于 body_fail_lines")
     exclude_paths = ([] if no_defaults else default_excludes(skill_dir)) + resolve_excludes(skill_dir, excludes)
     out = {"name": None, "description": None, "description_tokens": 0,
+           "description_chars": 0, "description_warn_chars": desc_warn,
+           "description_fail_chars": desc_fail, "description_level": "skipped",
+           "human": False,
            "invoke": {"allowed": sorted(INVOKE_VALUES), "resolved": "both", "note": ""},
            "dangerous": [], "secrets": [], "injection": [], "exfil": [], "obfuscation": [], "pii": [],
            "hardcoded": [], "excluded": rel_paths(exclude_paths, skill_dir),
            "ignored": [], "scan_excluded_dirs": [], "stale_refs": [],
            "deps_used": [], "deps_declared": [], "deps_missing": [],
-           "skill_md_body_lines": None, "skill_md_body_max_lines": SKILL_MD_BODY_MAX_LINES,
+           "skill_md_body_lines": None, "skill_md_body_warn_lines": body_warn,
+           "skill_md_body_fail_lines": body_fail, "skill_md_body_max_lines": body_warn,
+           "body_level": "ok",
            "errors": [], "warnings": [], "issues": [], "passed": True}
     skill_md = skill_dir / "SKILL.md"
     if not skill_md.is_file():
@@ -535,32 +548,56 @@ def main():
     out["name"] = meta.get("name")
     out["description"] = meta.get("description")
 
+    # #7 调用方式：映射 pi 真实 frontmatter 字段 disable-model-invocation（ADR-0008）。
+    # human 的第二条信号：name/description 同时缺失——人工读的 skill 不靠 description 触发（ADR-0037）。
+    raw = (meta.get("disable-model-invocation") or "").strip().strip('"').lower()
+    invoke_human = raw in ("true", "yes", "1")
+    missing_frontmatter = not out["name"] and not out["description"]
+    human = invoke_human or missing_frontmatter
+    out["human"] = human
+
     if not out["name"]:
-        out["errors"].append("frontmatter 缺 name")
-    elif len(out["name"]) > NAME_MAX_CHARS:
-        out["warnings"].append(f"name {len(out['name'])} 字符，超过 {NAME_MAX_CHARS}（#2）")
+        if not human:
+            out["errors"].append("frontmatter 缺 name")
+    elif len(out["name"]) > name_max_chars:
+        out["warnings"].append(f"name {len(out['name'])} 字符，超过 {name_max_chars}（#2）")
+
     if not out["description"]:
-        out["errors"].append("frontmatter 缺 description")
-        out["passed"] = False
+        out["description_level"] = "skipped" if human else "fail"
+        if not human:
+            out["errors"].append("frontmatter 缺 description")
     else:
+        out["description_chars"] = len(out["description"].strip())
         out["description_tokens"] = token_estimate(out["description"])
-        if out["description_tokens"] > DESCRIPTION_TOKEN_LIMIT:
+        if out["description_chars"] > desc_fail:
+            out["description_level"] = "fail"
+            out["errors"].append(
+                f"description {out['description_chars']} 字符，超过失败阈值 {desc_fail}（#2）")
+        elif out["description_chars"] > desc_warn:
+            out["description_level"] = "warn"
             out["warnings"].append(
-                f"description 约 {out['description_tokens']} token，超过阈值 {DESCRIPTION_TOKEN_LIMIT}（#2）")
+                f"description {out['description_chars']} 字符，超过警告阈值 {desc_warn}（#2）")
+        else:
+            out["description_level"] = "ok"
 
     # #3 正文精简（ADR-0017）：行数属可数事实 → 静态面出数，report.py 拿它当主源。
     # 语义两项（无可下沉细节、有索引结构）仍由 judges/brevity.md 判，两边在报告里合成。
     out["skill_md_body_lines"] = len(body.splitlines())
-    if out["skill_md_body_lines"] > SKILL_MD_BODY_MAX_LINES:
+    if out["skill_md_body_lines"] > body_fail:
+        out["body_level"] = "fail"
+        out["errors"].append(
+            f"SKILL.md 正文 {out['skill_md_body_lines']} 行，超过失败阈值 {body_fail}（#3）")
+    elif out["skill_md_body_lines"] > body_warn:
+        out["body_level"] = "warn"
         out["warnings"].append(
-            f"SKILL.md 正文 {out['skill_md_body_lines']} 行，超过 {SKILL_MD_BODY_MAX_LINES}（#3，仅警告）")
+            f"SKILL.md 正文 {out['skill_md_body_lines']} 行，超过警告阈值 {body_warn}（#3）")
 
-    # #7 调用方式：映射 pi 真实 frontmatter 字段 disable-model-invocation（ADR-0008）。
-    # 不再检查虚构的 invoke 字段：pi/Agent Skills 规范无此字段，检查恒空转。
-    raw = (meta.get("disable-model-invocation") or "").strip().strip('"').lower()
-    if raw in ("true", "yes", "1"):
+    if invoke_human:
         out["invoke"]["resolved"] = "human"
         out["invoke"]["note"] = "disable-model-invocation=true：对模型隐藏，仅 /skill:name 手动调用"
+    elif missing_frontmatter:
+        out["invoke"]["resolved"] = "human"
+        out["invoke"]["note"] = "human 型：未声明 name/description，按人工调用处理（#2 记 skipped）"
     elif raw in ("", "false", "0", "no"):
         out["invoke"]["note"] = "缺省/false：模型按 description 触发，用户也可手动调用"
     else:

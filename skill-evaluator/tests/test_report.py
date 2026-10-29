@@ -499,6 +499,41 @@ def test_brevity_body_lines_over_limit_is_warn(tmp_path):
     assert "200 行" in m["note"]
 
 
+def test_brevity_body_lines_over_fail_is_fail(tmp_path):
+    write_inputs(tmp_path, {"static.json": _static(
+        skill_md_body_lines=600, skill_md_body_warn_lines=150,
+        skill_md_body_fail_lines=500, body_level="fail")})
+    m = run_report(tmp_path)["metrics"]["#3"]
+    assert m["verdict"] == "fail" and m["method"] == "静态检查"
+    assert m["data"]["body_level"] == "fail"
+    assert "600 行" in m["note"] and "失败阈值" in m["note"]
+
+
+def test_static_description_chars_warn_and_fail(tmp_path):
+    write_inputs(tmp_path, {"static.json": _static(
+        description_level="warn", description_chars=500,
+        description_warn_chars=384, description_fail_chars=1024)})
+    m = run_report(tmp_path)["metrics"]["#2"]
+    assert m["verdict"] == "warn"
+    assert m["data"]["description_chars"] == 500
+    assert "500 字符" in m["note"]
+
+    write_inputs(tmp_path, {"static.json": _static(
+        description_level="fail", description_chars=1100,
+        description_warn_chars=384, description_fail_chars=1024)})
+    m = run_report(tmp_path)["metrics"]["#2"]
+    assert m["verdict"] == "fail"
+
+
+def test_static_human_without_frontmatter_is_skipped(tmp_path):
+    write_inputs(tmp_path, {"static.json": _static(
+        human=True, description_level="skipped",
+        invoke={"resolved": "human"})})
+    m = run_report(tmp_path)["metrics"]["#2"]
+    assert m["verdict"] == "skipped"
+    assert "human" in m["note"]
+
+
 def test_brevity_under_limit_keeps_judge_verdict(tmp_path):
     write_inputs(tmp_path, {"static.json": _static(skill_md_body_lines=70, skill_md_body_max_lines=150),
                             "judges/brevity.json": _brevity()})
@@ -512,7 +547,9 @@ def test_brevity_without_judge_still_reports_static_pass(tmp_path):
     write_inputs(tmp_path, {"static.json": _static(skill_md_body_lines=70, skill_md_body_max_lines=150)})
     m = run_report(tmp_path)["metrics"]["#3"]
     assert m["verdict"] == "skipped"                # 语义面未测，不冒充 pass
-    assert m["data"] == {"skill_md_body_lines": 70, "skill_md_body_max_lines": 150}
+    # ADR-0037：body_level 是新增的结构化裁决字段（旧 static.json 回退时补 ok）
+    assert m["data"] == {"skill_md_body_lines": 70, "skill_md_body_max_lines": 150,
+                         "body_level": "ok"}
 
 
 def test_brevity_old_static_json_without_lines_ignores_gate(tmp_path):

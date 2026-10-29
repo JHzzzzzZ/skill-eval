@@ -11,7 +11,7 @@ ok()   { printf "  [ok]   %s\n" "$1"; }
 bad()  { printf "  [FAIL] %s\n" "$1"; FAIL=1; }
 warn() { printf "  [warn] %s\n" "$1"; }
 
-echo "skill-evaluator 依赖自检（python3 >= 3.9 / git / pytest / pi CLI）"
+echo "skill-evaluator 依赖自检（python3 >= 3.9 / git / pytest / pi CLI / config.yaml）"
 
 # --- python3 >= 3.9 ---
 # 注意：Windows 上 `python3` 是应用商店占位符，能 command -v 找到但跑不起来 → 必须实跑验证再采纳。
@@ -31,6 +31,16 @@ else
   bad "python $PYVER 低于 3.9（Path.is_relative_to 需要）"
 fi
 
+# --- config.yaml 可解析（ADR-0035）---
+# 文件格式错必须在前置自检暴露，不能等某个脚本静默用默认值。
+if [ -n "$PY" ]; then
+  if "$PY" -c 'import sys; sys.path.insert(0, sys.argv[1]); import _config; _config.load()' "$HERE" >/dev/null 2>&1; then
+    ok "config.yaml 可解析"
+  else
+    bad "config.yaml 解析失败（改坏了就先修；不要静默用默认值）"
+  fi
+fi
+
 # --- git（沙箱 = git worktree，ADR-0001）---
 if command -v git >/dev/null 2>&1; then
   ok "git $(git --version | awk '{print $3}')"
@@ -48,7 +58,7 @@ fi
 # --- 包内文件齐备（#16「声明与实现一致」：正文说“包内文件齐备”，就得真查齐）---
 # 为什么用显式清单而不是 `for f in "$ROOT"/scripts/*.py`：glob 只会展开成**已存在**的文件，
 # 删掉任何一个都拓不到（实测：删 report.py + contract.md 仍退出 0）。清单 = 流程声明要用的东西。
-REQUIRED="SKILL.md reference.md requirements.txt LICENSE scripts/check-deps.sh
+REQUIRED="SKILL.md reference.md requirements.txt LICENSE config.yaml scripts/_config.py scripts/check-deps.sh
 scripts/static_check.py scripts/evalset_count.py scripts/evalset_check.py scripts/trace_run.py
 scripts/trigger_judge.py scripts/judge_runner.py scripts/score.py scripts/idem.py scripts/compare.py
 scripts/process.py scripts/report.py scripts/evolution.py scripts/model_robust.py scripts/ablation.py

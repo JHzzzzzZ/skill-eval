@@ -10,7 +10,7 @@ It is itself a skill (for [pi](https://github.com/earendil-works/pi-coding-agent
 
 | Method | Metrics | Tooling |
 |---|---|---|
-| Static analysis | #2 name/description rules & token budget, #7 invocation mode, #13 dangerous-command scan, #3 body line count (primary source) | `scripts/static_check.py` |
+| Static analysis | #2 name/description rules & character budget (384 warn / 1024 fail), #7 invocation mode, #13 dangerous-command scan, #3 body line count (primary source, 150 warn / 500 fail) | `scripts/static_check.py` |
 | Sandbox runs | #1 trigger precision/recall/F1, #4 cost stats, #5 necessity A/B, #8 minimal deps, #9 result verification, #10 process audit, #12 stability, #15 idempotency | `scripts/trace_run.py`, `score.py`, `trigger_judge.py`, `idem.py`, `compare.py`, `process.py` |
 | LLM review | #3 brevity (two semantic checkpoints, supporting evidence), #6 redundancy, #11 fallback, #16 pre-check, #17/18 I/O contract, #19 side-effect reversibility, #13 PII semantics (employees IDs / customer names / internal hosts), #8 dependency completeness | `judges/*.md` rubrics + `judge_runner.py` |
 | Historical diff | #14 version evolution | `scripts/evolution.py` |
@@ -24,12 +24,13 @@ Several metrics share one sandbox run — the 6 scenarios are grouped into incre
 skill-evaluator/
 ├── SKILL.md            # orchestration: tiered flow (T0–T4, default T2), indexes only
 ├── reference.md        # details: tier definitions, metric map, sandbox, versioning, contracts, fallbacks
+├── config.yaml         # tunable thresholds (384/1024 chars, 150/500 lines, ...); part of the fingerprint
 ├── LICENSE             # MIT
 ├── requirements.txt    # zero runtime deps (stdlib); pytest for tests only
 ├── judges/             # LLM-judge rubrics (structured JSON output, fixed single-shot prompt)
 ├── scripts/            # deterministic tooling; check-deps.sh = preflight (#16)
-└── tests/              # 298 tests, subprocess-seam based
-docs/adr/               # 31 architecture decisions
+└── tests/              # 320 tests, subprocess-seam based
+docs/adr/               # 37 architecture decisions
 ```
 
 The evaluator is **self-contained**: all scripts and tests live inside the skill package (ADR-0006). Evaluation artifacts (eval sets, reports) live in `skill-evaluator/evalsets/<skill-name>/` and are frozen per version — never regenerated on re-runs.
@@ -37,7 +38,7 @@ The evaluator is **self-contained**: all scripts and tests live inside the skill
 ## Usage
 
 1. Install: copy `skill-evaluator/` into `~/.pi/agent/skills/`
-2. Preflight: `bash scripts/check-deps.sh` (python >= 3.9, git, pytest, pi CLI)
+2. Preflight: `bash scripts/check-deps.sh` (python >= 3.9, git, pytest, pi CLI, config.yaml parses)
 3. Say: *"evaluate this skill: <path>"*
 4. Get `report.json` + `report.md` + `meta.json` under `skill-evaluator/evalsets/<name>/results/<version>/` — pass `--skill <path>` to have `meta.json` record the skill's own content hash (ADR-0010)
 
@@ -60,7 +61,7 @@ Tier entry: `--tier <static|review|trigger|core|full>` (default T2); higher tier
 
 ```bash
 cd skill-evaluator
-python -m pytest tests        # 298 tests, all green
+python -m pytest tests        # 320 tests, all green
 ```
 
 Design decisions and their reasoning live in `docs/adr/`. See `README_CN.md` for the Chinese version.

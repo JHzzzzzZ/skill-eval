@@ -6,7 +6,7 @@
 
 判定只用确定性信号（不调 LLM）：
 - triggered 一致性：各模型是否都触发/都不触发
-- 回答相似度：任意两模型回答的字符 3-gram Jaccard ≥ ANSWER_SIM_MIN（全空回答 = 无信息，只看触发面；
+- 回答相似度：任意两模型回答的字符 3-gram Jaccard ≥ model_robust.answer_sim_min（全空回答 = 无信息，只看触发面；
   部分空回答 = 不一致，除非空的那个是 early-exit 截断）
 - 步数差（tool_calls 极差）只作展示，不计入一致判定（模型步数本就允许不同）
 
@@ -28,8 +28,8 @@ import re
 import sys
 from pathlib import Path
 
-ANSWER_SIM_MIN = 0.5  # 两条回答的 3-gram Jaccard 下限（可配）
-AGREEMENT_MIN = 0.8   # 一致 case 占比下限（可配）
+import _config
+
 NGRAM = 3
 
 TRACE_RE = re.compile(r"^trace-(\d+)\.json$")
@@ -77,6 +77,8 @@ def mean(vals):
 
 
 def analyze(results_dir: Path) -> dict:
+    answer_sim_min = _config.get_float("model_robust.answer_sim_min", 0.5)
+    agreement_min = _config.get_float("model_robust.agreement_min", 0.8)
     models_dir = results_dir / "models"
     errors = []
     if not models_dir.is_dir():
@@ -124,7 +126,7 @@ def analyze(results_dir: Path) -> dict:
         else:
             sims = [jaccard(answers[i], answers[j])
                     for i in range(len(answers)) for j in range(i + 1, len(answers))]
-            answer_similar = min(sims) >= ANSWER_SIM_MIN
+            answer_similar = min(sims) >= answer_sim_min
         agree = triggered_agree and answer_similar is not False
         agree_n += 1 if agree else 0
         tcs = [t.get("tool_calls", 0) for t in traces]
@@ -134,12 +136,12 @@ def analyze(results_dir: Path) -> dict:
                        "tool_calls_spread": (max(tcs) - min(tcs)) if tcs else 0})
 
     ratio = agree_n / len(common) if common else None
-    robust = None if ratio is None else ratio >= AGREEMENT_MIN
+    robust = None if ratio is None else ratio >= agreement_min
     if ratio is None:
         note = "各模型无共同 case 序号，无法对比"
     else:
         note = (f"{len(names)} 个模型 × {len(common)} 个 case：一致 {agree_n}/{len(common)}"
-                f"（{ratio:.2f}，阈值 {AGREEMENT_MIN}）→ "
+                f"（{ratio:.2f}，阈值 {agreement_min}）→ "
                 + ("鲁棒" if robust else "不鲁棒，同一 skill 换模型行为漂移"))
     if incomplete:
         note += f"；{len(incomplete)} 个 case 序号不是所有模型都有，未计入"

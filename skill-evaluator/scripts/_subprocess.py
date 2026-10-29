@@ -15,7 +15,7 @@ import shutil
 import subprocess
 import sys
 
-TIMEOUT_S = 300  # 可配：单次 LLM 裁决上限（reference.md § 可配参数）
+import _config
 
 
 def resolve_pi() -> str | None:
@@ -44,12 +44,14 @@ def build_mode_args(model: str | None, thinking: str | None) -> list:
     return args
 
 
-def run_cmd(cmd: list, prompt: str | None = None, timeout: int = TIMEOUT_S) -> tuple[int, str, str]:
+def run_cmd(cmd: list, prompt: str | None = None, timeout: int | None = None) -> tuple[int, str, str]:
     """跑一个子进程，返回 (returncode, stdout, stderr)。
 
     prompt 非 None 时经 stdin 传入（避开 Windows argv 长度/转义限制）；
     超时杀整棵进程树后重抛 TimeoutExpired（保守语义留给调用方标注），保证不悬挂。
     """
+    if timeout is None:
+        timeout = _config.get_int("run.timeout_s", 300)
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE if prompt is not None else subprocess.DEVNULL,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                             text=True, encoding="utf-8", errors="replace")
@@ -66,7 +68,7 @@ def run_cmd(cmd: list, prompt: str | None = None, timeout: int = TIMEOUT_S) -> t
         raise
 
 
-def run_pi(mode_args: list, prompt: str | None = None, timeout: int = TIMEOUT_S) -> tuple[int, str, str]:
+def run_pi(mode_args: list, prompt: str | None = None, timeout: int | None = None) -> tuple[int, str, str]:
     """跑一次 pi（resolve_pi 失败抛 FileNotFoundError）。mode_args 见 build_mode_args。"""
     pi = resolve_pi()
     if not pi:
@@ -80,7 +82,7 @@ def json_args(mode_args: list) -> list:
     return ["--mode", "json", "--no-session", "--no-skills", *mode_args]
 
 
-def ask_json(mode_args: list, prompt: str, timeout: int = TIMEOUT_S) -> str:
+def ask_json(mode_args: list, prompt: str, timeout: int | None = None) -> str:
     """LLM 裁决专用形态：--mode json 事件流，prompt 走 stdin，返回事件流全文。"""
     _rc, out, _err = run_pi(json_args(mode_args), prompt=prompt, timeout=timeout)
     return out

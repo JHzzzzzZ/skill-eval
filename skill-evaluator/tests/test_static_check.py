@@ -59,11 +59,11 @@ def test_missing_name(tmp_path):
     assert any("name" in issue for issue in out["issues"])
 
 
-# --- Slice 2: description token 超限告警（#2）---
+# --- Slice 2: description 字符阈值（#2，ADR-0037）---
 
-def test_description_over_token_limit(tmp_path):
-    # 100 token 阈值：400+ 英文字符即超
-    long_desc = "word " * 100
+def test_description_over_warn_chars(tmp_path):
+    # 384 字符警告线：400 字符即超，但未到 1024 失败线
+    long_desc = "a" * 400
     d = make_skill(tmp_path, (
         "---\n"
         "name: sample-skill\n"
@@ -72,7 +72,26 @@ def test_description_over_token_limit(tmp_path):
         "body\n"
     ))
     out = run_check(d)
-    assert any("token" in issue for issue in out["issues"])
+    assert out["description_chars"] == 400
+    assert out["description_level"] == "warn"
+    assert any("384" in issue and "字符" in issue for issue in out["issues"])
+    assert out["passed"] is True
+
+
+def test_description_over_fail_chars_is_error(tmp_path):
+    # 1024 字符失败线
+    long_desc = "a" * 1100
+    d = make_skill(tmp_path, (
+        "---\n"
+        "name: sample-skill\n"
+        f'description: "{long_desc}"\n'
+        "---\n"
+        "body\n"
+    ))
+    out = run_check(d)
+    assert out["description_level"] == "fail"
+    assert out["passed"] is False
+    assert any("1024" in issue and "字符" in issue for issue in out["issues"])
 
 
 def test_description_within_limit_no_warning(tmp_path):
@@ -84,7 +103,33 @@ def test_description_within_limit_no_warning(tmp_path):
         "body\n"
     ))
     out = run_check(d)
-    assert not any("token" in issue for issue in out["issues"])
+    assert out["description_level"] == "ok"
+    assert not any("字符" in issue for issue in out["issues"])
+
+
+def test_human_skill_without_frontmatter_is_skipped(tmp_path):
+    # human 型：disable-model-invocation=true，name/description 可省略（ADR-0037）
+    d = make_skill(tmp_path, "---\ndisable-model-invocation: true\n---\nbody\n")
+    out = run_check(d)
+    assert out["human"] is True
+    assert out["invoke"]["resolved"] == "human"
+    assert out["description_level"] == "skipped"
+    assert out["passed"] is True
+
+
+def test_body_over_warn_and_fail_lines(tmp_path):
+    warn = make_skill(tmp_path, "---\nname: s\ndescription: d\n---\n" + "line\n" * 160)
+    out = run_check(warn)
+    assert out["body_level"] == "warn"
+    assert out["passed"] is True
+
+    fail_dir = tmp_path / "fail-skill"
+    fail_dir.mkdir()
+    (fail_dir / "SKILL.md").write_text(
+        "---\nname: s\ndescription: d\n---\n" + "line\n" * 510, encoding="utf-8")
+    out = run_check(fail_dir)
+    assert out["body_level"] == "fail"
+    assert out["passed"] is False
 
 
 # --- Slice 3: 危险命令扫描（#13）---
@@ -115,15 +160,16 @@ def test_dangerous_hits_fail_static_check(tmp_path):
     assert len(out["errors"]) >= 1
 
 
-def test_token_overlimit_is_warning_not_error(tmp_path):
-    long_desc = "word " * 100
+def test_description_between_lines_is_warning_not_error(tmp_path):
+    long_desc = "word " * 100  # 500 字符：超过 384 警告线，低于 1024 失败线
     d = make_skill(tmp_path, (
         "---\nname: s\n"
         f'description: "{long_desc}"\n---\nbody\n'
     ))
     out = run_check(d)
-    # token 超限是"警告"档，不算失败
+    # 警告档不算失败（ADR-0037）
     assert out["passed"] is True
+    assert out["description_level"] == "warn"
     assert len(out["warnings"]) == 1
 
 

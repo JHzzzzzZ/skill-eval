@@ -23,6 +23,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from _subprocess import kill_tree as _kill_tree  # 共享：杀进程树（Windows cmd 壳问题）
+import _config
 
 # 供测试/外部直接导入（test_trace_run.test_kill_tree_terminates_wrapped_process）
 kill_tree = _kill_tree
@@ -76,8 +77,9 @@ class EventAggregator:
             # 有界保留原始 args（ISS-3：触发判定/过程审计要第一手证据）。旧版上限 200 字符：
             # 实测 pi 的 bash/read 工具 args 是 **dict**（{"command": ...}），该分支对它们从未生效，
             # 而字符串形态的工具参数会被切到 200。上限提到 2000 并在截断时留标记（ADR-0024）。
-            if isinstance(raw_args, str) and len(raw_args) > ARGS_MAX_CHARS:
-                step["args"] = raw_args[:ARGS_MAX_CHARS]
+            args_limit = _config.get_int("run.args_max_chars", 2000)
+            if isinstance(raw_args, str) and len(raw_args) > args_limit:
+                step["args"] = raw_args[:args_limit]
                 step["args_truncated"] = True
             self.steps.append(step)
             if hit:
@@ -194,9 +196,6 @@ def parse_events(lines, early_exit: bool = False, skill_marker: str | None = Non
 
 
 DEFAULT_MODEL_ENV = "SKILL_EVAL_MODEL"  # 环境变量作默认模型，--model 显式覆盖
-
-ARGS_MAX_CHARS = 2000  # 可配：step.args 是字符串时的保留上限（dict 形态原样保留，见 ADR-0024）
-
 
 def _porcelain(repo: str) -> set:
     """仓库脏状态快照（越界写入检测的基准）。非 git 仓库/命令不可用 → 空集。"""

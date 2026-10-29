@@ -3,7 +3,7 @@
 Generated: 2026-09-22T13:43:08.578Z
 Snapshot: 2026-09-24 · 基准 commit `7d6b6e5` · Branch: main
 最近一次在分支 `feat/report-advice-and-pii` 上做的更新（ADR-0029/0030/0031）：
-计数与结构已重算（298 tests / 31 ADR / 16 个 Python 脚本 + 9 份 rubric）。
+计数与结构已重算（320 tests / 37 ADR / 16 个 Python CLI + 1 个共享模块 + 9 份 rubric）。v2 设计（ADR-0032–0037）已落文档，代码按 PR1–PR5 分批。
 
 ## OVERVIEW
 
@@ -19,10 +19,11 @@ skill-evaluator/        # 产品本体（自闭环，ADR-0006）
 ├── reference.md        # 契约全集：指标映射/沙箱/版本号/中间产物/fallback
 ├── requirements.txt    # 只声明 pytest>=7；运行时零第三方依赖（stdlib）
 ├── LICENSE             # MIT
-├── scripts/            # 16 个确定性 Python CLI + check-deps.sh 前置自检，扁平单层
+├── config.yaml         # 可调阈值/常量（ADR-0035），参与评估器指纹
+├── scripts/            # 16 个 Python CLI + _config.py 共享模块 + check-deps.sh 前置自检，扁平单层
 ├── judges/             # 9 份 LLM 评审 rubric（md）
-└── tests/              # 298 个测试，扁平单层；conftest.py 只设 PYTHONIOENCODING
-docs/adr/               # 31 条架构决策（0001–0031）
+└── tests/              # 320 个测试，扁平单层；conftest.py 只设 PYTHONIOENCODING
+docs/adr/               # 37 条架构决策（0001–0037）
 evalsets/               # ⚠ 被 gitignore：评测集 + 运行产物，本地态```
 
 非显然点：
@@ -31,7 +32,7 @@ evalsets/               # ⚠ 被 gitignore：评测集 + 运行产物，本地�
 - `evalsets/` 有两处：根级（被测 skill 的集）与 `skill-evaluator/evalsets/`（评估器自己的集）。**两处都不入库。**
 - 无 `pyproject.toml` / `setup.py` / `Makefile` / `.github/` / `conftest.py` / `pytest.ini` / `__init__.py`。`requirements.txt` 只声明 `pytest>=7`——**运行时零第三方依赖**，但需 **Python ≥ 3.9**（`Path.is_relative_to`）+ git。外部能力依赖 pi CLI。
 - `scripts/` 内部靠 `sys.path.insert(0, Path(__file__).parent)` 做同目录导入，必须以脚本目录为基准调用。
-- `scripts/check-deps.sh` 是 #16 前置自检（退出码 0/1），但**不在评估器指纹范围内**——指纹只收 `scripts/*.py` + `judges/*.md` + `SKILL.md` + `reference.md`（`report.py:94`），改 .sh 不会让历史报告变 `comparable=false`。
+- `scripts/check-deps.sh` 是 #16 前置自检（退出码 0/1），但**不在评估器指纹范围内**——指纹只收 `scripts/*.py` + `judges/*.md` + `config.yaml` + `SKILL.md` + `reference.md`（`report.py:94`），改 .sh 不会让历史报告变 `comparable=false`。
 
 ## WHERE TO LOOK
 
@@ -39,6 +40,7 @@ evalsets/               # ⚠ 被 gitignore：评测集 + 运行产物，本地�
 
 | 我要…… | 去哪 |
 |---|---|
+| 改阈值/常量（384/1024 字符、150/500 行等） | `skill-evaluator/config.yaml`（ADR-0035）；解析器在 `scripts/_config.py` |
 | 改评估逻辑、指标阈值、扫描规则 | `skill-evaluator/scripts/` → 先读该目录 `AGENTS.md` |
 | 改 LLM 评审标准 | `skill-evaluator/judges/<metric>.md` |
 | 改契约（指标映射 / 沙箱 / 版本号 / 中间产物 / fallback） | `skill-evaluator/reference.md` |
@@ -76,7 +78,7 @@ evalsets/               # ⚠ 被 gitignore：评测集 + 运行产物，本地�
 - **报告契约**：19 个 key 恒定出现，未测标 `skipped`（**绝不打 0**），不合成加权总分，只三档结论（ADR-0004）。
 - **报告呈现**（ADR-0030）：所有指标 data 一律表格化（定制表 → 通用兜底），有表就把原始 JSON 折叠；结果符号 pass=✓/fail=✗/warn=⚠/skipped=–；`report.json.advice` 与指标裁决同源（每条带 `#N` 反链），`report.html` 有「优化建议」tab。
 - **可移植性闸门可见**：`static.json.hardcoded` 非空 → #13 裁决 = fail（ADR-0008/0030）。闸门不占独立指标，只能挂 #13 才进得了 `conclusion()`。
-- **评估器指纹** = `scripts/*.py` + `judges/*.md` + `SKILL.md` + `reference.md` 的内容 sha256（路径也参与），形如 `auto-3f9c1a7b`（ADR-0010）。**不收 `.sh`、不收 `CONTEXT.md`/README**——改这些不会让历史报告变不可比。
+- **评估器指纹** = `scripts/*.py` + `judges/*.md` + `config.yaml` + `SKILL.md` + `reference.md` 的内容 sha256（路径也参与），形如 `auto-3f9c1a7b`（ADR-0010）。**不收 `.sh`、不收 `CONTEXT.md`/README**——改这些不会让历史报告变不可比。
 - **运行时需 Python ≥ 3.9**（`Path.is_relative_to`）+ git（沙箱用 worktree）。`requirements.txt` 里的 `pytest>=7` 仅跑测试用。
 - 决策走 `docs/adr/`：新编号新文件，不改旧 ADR。
 
@@ -107,7 +109,7 @@ cd skill-evaluator                    # 所有相对路径以此目录为基准
 bash scripts/check-deps.sh            # 前置自检，退出码 0 = 可跑（缺硬依赖不要继续）
 pip install -r requirements.txt       # 仅跑测试时需要（pytest>=7）
 
-python -m pytest tests                # 全量：298 个测试
+python -m pytest tests                # 全量：320 个测试
 python -m pytest tests/test_idem.py   # 单文件
 python -m pytest tests -k "idem or report"
 
