@@ -1,22 +1,20 @@
 # Reference — Skill Evaluator
 
-SKILL.md 的细则层。指标编号 #N 对应 prompt.txt 的 19 条需求。
+SKILL.md 的细则层。16 条指标编号见 ADR-0032（按档位连续）。脚本共用 `_console` / `_subprocess` / `_config` 三个内部模块。
 
 ## 指标 → 测量手段映射
 
 | 手段 | 指标 | 本期状态 |
 |---|---|---|
-| 静态检查 | #2 name/description 规范与字符预算、#7 调用方式、#13 六组规则扫描（危险命令/凭据/注入/外发/混淆/个人信息）、#3 正文行数（主源，150 warn / 500 fail）、#8 依赖全面性 | ✅ 已实现（static_check.py，ADR-0013/0017/0029/0031/0037） |
-| 沙箱运行 | #1 触发精准度、#4 成本、#5 必要性、#8 最小依赖 | ✅ 已实现（trace_run.py + score.py + judges/deps.md 语义面双源） |
-| LLM 评审 | #3 正文精简（语义两项，辅证）、#6 低冗余、#11 fallback、#16 前置自检、#17/18 输入输出契约、#19 副作用可逆 | ✅ 已实现（judges/ + judge_runner.py） |
-| 沙箱运行（多次） | #12 稳定性（组内变异系数）、#15 幂等 | ✅ 已实现（重复运行 ×N + idem.py；#12 口径见 ADR-0016） |
-| 沙箱运行（多模型，可选） | #12 稳定性（跨模型一致率） | ✅ 已实现（model_robust.py，ADR-0011，默认不跑） |
-| 触发集自检 | #1 触发精准度的可信度 | ✅ 已实现（evalset_check.py，ADR-0011） |
-| Trace 对照 | #10 过程可验证 | ✅ 已实现（process.py） |
-| 历史报告 diff | #14 版本演进 | ✅ 已实现（evolution.py） |
+| 静态检查 | #1 name/description 规范与字符预算、#3 调用方式、#4 六组规则扫描（危险命令/凭据/注入/外发/混淆/个人信息）、#2 正文行数（主源，150 warn / 500 fail）、#12 依赖全面性 | ✅ 已实现（static_check.py，ADR-0013/0017/0029/0031/0037） |
+| 沙箱运行 | #10 触发精准度、#13 成本、#11 必要性、#12 最小依赖 | ✅ 已实现（trace_run.py + score.py + judges/deps.md 语义面双源） |
+| LLM 评审 | #2 正文精简（语义两项，辅证）、#5 低冗余、#6 fallback、#7 前置自检、#8/#9 输入输出契约、#4 PII 语义面 | ✅ 已实现（judges/ + judge_runner.py） |
+| 沙箱运行（多次） | #15 稳定性（组内变异系数）、#16 幂等 | ✅ 已实现（重复运行 ×N + idem.py；#15 口径见 ADR-0016） |
+| 沙箱运行（多模型，可选） | #15 稳定性（跨模型一致率） | ✅ 已实现（model_robust.py，ADR-0011，默认不跑） |
+| 触发集自检 | #10 触发精准度的可信度 | ✅ 已实现（evalset_check.py，ADR-0011） |
 
-多源指标（ADR-0017）：一条指标可有**一个主源 + N 个辅证**，裁决主源优先，辅证以原始形状保留在 `data` 里不丢、不加权合成：#3（静态行数主源 + 语义评审辅证）、#8（trace 报错主源 + `judges/deps.json` + 静态声明面 `deps_missing`，ADR-0031）、#13（六组静态规则 + 可移植性闸门主源 + `judges/pii.json` 语义辅证，ADR-0029）、#6（评审 + 消融实证，消融覆盖）、#17/#18（共用一份 contract 评审）。
-多源合取较差者：`worse(a, b)` 按 skipped → pass → warn → fail 的顺序取较差的一条（#13 用）。
+多源指标（ADR-0017）：一条指标可有**一个主源 + N 个辅证**，裁决主源优先，辅证以原始形状保留在 `data` 里不丢、不加权合成：#2（静态行数主源 + 语义评审辅证）、#12（trace 报错主源 + `judges/deps.json` + 静态声明面 `deps_missing`，ADR-0031）、#4（六组静态规则 + 可移植性闸门主源 + `judges/pii.json` 语义辅证，ADR-0029）、#5（评审；消融实证随 T4 休眠）、#8/#9（共用一份 contract 评审）。
+多源合取较差者：`worse(a, b)` 按 skipped → pass → warn → fail 的顺序取较差的一条（#4 用）。
 
 ## 沙箱
 
@@ -30,9 +28,9 @@ prompt 不写沙箱外路径（ADR-0018/0027）：worktree 只限定 cwd，不�
 
 Windows 上杀 pi 子进程树用 `taskkill /T`（`_subprocess.py` 的硬依赖，仅在 Windows 生效；POSIX 走 `killpg`）。
 
-权限边界（#13）：worktree 方案下只能做到静态扫描 + trace 审计（看 trace 里是否出现了不该有的命令），做不到强制拦截。扫描规则见 `scripts/static_check.py` 内的六组正则（ADR-0013/0029）：危险命令 / 硬编码凭据 / 注入指令 / 数据外发 / 混淆 / 个人信息。前四组命中即 fail，后两组仅 warn。
+权限边界（#4）：worktree 方案下只能做到静态扫描 + trace 审计（看 trace 里是否出现了不该有的命令），做不到强制拦截。扫描规则见 `scripts/static_check.py` 内的六组正则（ADR-0013/0029）：危险命令 / 硬编码凭据 / 注入指令 / 数据外发 / 混淆 / 个人信息。前四组命中即 fail，后两组仅 warn。
 
-依赖全面性（#8 静态面，ADR-0031）：`static_check.py` 报「用了什么 vs 声明了什么」——`deps_used`（shebang 解释器 / python import / `subprocess` 字面量 argv[0]）、`deps_declared`（SKILL.md 正文 + reference.md + `requirements.txt` + `check-deps.sh` 里出现过的名字，**任意出现即算声明，含随口提到——偏宽，漏报方向**）、`deps_missing`（差集）。缺声明只把 #8 降到 warn。已知漏检：argv 由变量拼时取不到 argv[0]；声明面是同义词不敏感的子串匹配（“Python3” 与 “python” 会漏判）。宿主基座（python/bash/sh/cmd/powershell…）不算未声明。
+依赖全面性（#12 静态面，ADR-0031）：`static_check.py` 报「用了什么 vs 声明了什么」——`deps_used`（shebang 解释器 / python import / `subprocess` 字面量 argv[0]）、`deps_declared`（SKILL.md 正文 + reference.md + `requirements.txt` + `check-deps.sh` 里出现过的名字，**任意出现即算声明，含随口提到——偏宽，漏报方向**）、`deps_missing`（差集）。缺声明只把 #12 降到 warn。已知漏检：argv 由变量拼时取不到 argv[0]；声明面是同义词不敏感的子串匹配（“Python3” 与 “python” 会漏判）。宿主基座（python/bash/sh/cmd/powershell…）不算未声明。
 
 已知漏检（如实告知，不要当成"扫过就是安全"）：自造格式的高熵 token、改写的语义注入、跨段拼接的注入、无读取动词的 `.env` 引用。混淆与个人信息类命中仅警告，需人工复核。PII 静态面的边界：只能认格式化的个人标识（邮箱/手机号/身份证/银行卡/公网 IP，带 Luhn 与证件校验位），自造示例（如真实号段格式的假号码）会误报、工号与客户名会漏报——后者靠 `judges/pii.md` 四项检查点补。
 
@@ -58,7 +56,7 @@ git worktree add <沙箱目录> HEAD                                # worktree �
 
 注意区分两个号：本包 SKILL.md frontmatter 的 `version`（给人看的发布号）与报告里的 `auto-<sha256>` 评估器指纹（ADR-0010，用来判定两份报告能不能横向比）。不要互相替代。
 
-相同内容重复上传 → 相同 hash → 结果落同一目录（幂等 #15）。
+相同内容重复上传 → 相同 hash → 结果落同一目录（幂等 #16）。
 
 ## 评测集冻结
 
@@ -87,23 +85,21 @@ evalsets/<name>/v1/
 
 审核内容：逐条标通过/驳回（与人工审核同一标准），通过率达标才冻结；不通过把驳回原因回给生成阶段修复后重审。报告口径：`report.py` 读 meta.json 的 `reviewed_by`，为 `"ai"` 时注明「评测集 AI 审核，未经人工复核」。
 
-冻结前跑质量自检（ADR-0011）：`python scripts/evalset_check.py <evalset目录> --skill <skill目录>`，查 should prompt 照抄 description、组内近似重复、同句跨组冲突；命中则先改写再冻结，裁决落 `evalset.json`（clean=false → report.py 把 #1 降级为 warn）。
+冻结前跑质量自检（ADR-0011）：`python scripts/evalset_check.py <evalset目录> --skill <skill目录>`，查 should prompt 照抄 description、组内近似重复、同句跨组冲突；命中则先改写再冻结，裁决落 `evalset.json`（clean=false → report.py 把 #10 降级为 warn）。
 
 ## 运行场景
 
-档位（tier）定义增量递进的评估深度（ADR-0014），入口参数 `--tier <static|review|trigger|core|full>`（或 T0–T4），**默认 T2**。高档复用低档产物：结果目录里各中间产物记录生成时的 skill content_sha256，一致则复用，不一致则作废重跑。低档先行、后续增量补跑（staged）不重做已完成档。
+档位（tier）定义增量递进的评估深度（ADR-0033），入口参数 `--tier <t0|t1|t2a|t2b|t3>`（也接受 `T0`–`T3`），**默认 T2A**。高档复用低档产物：结果目录里各中间产物记录生成时的 skill content_sha256，一致则复用，不一致则作废重跑。低档先行、后续增量补跑（staged）不重做已完成档。T4 不开放（ADR-0032）。
 
 | 档 | 场景 | 做什么 | 服务指标 |
 |---|---|---|---|
-| T0 | 静态检查 | static_check.py | #2 #7 #13 #3（行数主源，150 warn / 500 fail） |
-| T1 | LLM 评审 | 逐项按 judges/ rubric 评审（4 并发） | #3（语义两项，辅证） #6(评审面) #11 #16 #17 #18 #19 |
-| T2 | 触发评测 | 三组 prompt 各跑一次，带 `--early-exit`（ADR-0007 修订、ADR-0018）：事件流出现**首次指向被测 SKILL.md 的工具调用**（渐进式披露下 = agent 决定加载 skill）即终止该次运行省 token——判定按**路径解析**（相对路径按同串 `cd` 目标/运行 cwd 解析），不是绝对路径子串；未出现该调用的 run 跑完整，其行为正是 precision 的证据；**triggered 由 `trigger_judge.py` 用 LLM 判定**，判定口径与 early-exit 同步：**加载即触发，不要求任务实际完成**，截断运行（回答为空）按已执行步骤裁决（trace_run.triggered 仅作粗筛），环境故障的 case 不计入 P/R 分母。**`#7 resolved=human` 时整档不跑**：#1 记 `skipped`（载体测不到“按 description 触发”，ADR-0018） | #1 |
-| T3 | 主运行 Golden Run | 干净 worktree + 加载 skill，跑 cases，采 trace | #4/#8/#9 |
-| T3 | 基线 A/B | 同 cases、同 worktree，但**不加载** skill | #5 |
-| T3 | 重复运行 ×N | 主运行重复 N 次，每次 trace 存档 | #12（组内）/#15 |
-| T3 | 跨模型运行（可选，默认不跑） | 同批 cases 换 `--model` 再跑，trace 落 `models/<模型名>/`，model_robust.py 出一致率 | #12（跨模型） |
-| T4 | 消融运行 | 删掉疑似冗余段落后重跑 | #6 实证（三期） |
-| T4 | 过程审计 / 版本演进 | process.py / evolution.py | #10/#14 |
+| T0 | 静态检查 | static_check.py | #1 #3 #4 #2（行数主源，150 warn / 500 fail） |
+| T1 | LLM 评审 | 逐项按 judges/ rubric 评审（4 并发） | #2（语义两项，辅证） #5 #6 #7 #8 #9 |
+| T2A | 触发评测 | 三组 prompt 各跑一次，带 `--early-exit`（ADR-0007 修订、ADR-0018）：事件流出现**首次指向被测 SKILL.md 的工具调用**（渐进式披露下 = agent 决定加载 skill）即终止该次运行省 token——判定按**路径解析**（相对路径按同串 `cd` 目标/运行 cwd 解析），不是绝对路径子串；未出现该调用的 run 跑完整，其行为正是 precision 的证据；**triggered 由 `trigger_judge.py` 用 LLM 判定**，判定口径与 early-exit 同步：**加载即触发，不要求任务实际完成**，截断运行（回答为空）按已执行步骤裁决（trace_run.triggered 仅作粗筛），环境故障的 case 不计入 P/R 分母。**`#3 resolved=human` 时整档不跑**：#10 记 `skipped`（载体测不到“按 description 触发”，ADR-0018） | #10 |
+| T2B | 真实场景 A/B | 用户提供 ≥1 例真实输入；同 cwd、同输入跑 golden（加载 skill）与 baseline（不加载）两臂；#11 报告样本数 n，n<3 时最高 warn；#12 用 golden 臂 trace + 静态声明面；真实输入存 `uploads/`，报告只回显哈希 + 标签（ADR-0033）。未提供输入 → 整档 skipped | #11 #12 |
+| T3 | 主运行 Golden Run | 干净 worktree + 加载 skill，跑冻结 cases，采 trace | #13 成本 / #14 结果可验证 |
+| T3 | 重复运行 ×N | 主运行重复 N 次，每次 trace 存档 | #15（组内）/#16 |
+| T3 | 跨模型运行（可选，默认不跑） | 同批 cases 换 `--model` 再跑，trace 落 `models/<模型名>/`，model_robust.py 出一致率 | #15（跨模型） |
 
 ## 模型配置
 
@@ -117,12 +113,11 @@ evalsets/<name>/v1/
 
 可配参数统一在 `config.yaml`（ADR-0035），优先级 CLI > 现有 ENV > config.yaml > 代码默认。关键项：description 字符阈值 384 warn / 1024 fail、正文 150 warn / 500 fail（ADR-0037）、触发集每组最小条数 10、F1 0.7、逐 case 变异系数上限 0.5、幂等比例 0.5、触发集覆盖 0.6/0.8、跨模型相似度 0.5/0.8、触发判定分 0.5、args 上限 2000、UI 单元格 800 / 内联 400；重复运行 3 次、评审单发 1 次/并发 4（runner 在 PR5 读取）。既有 `SKILL_EVAL_TRIGGER_MIN` 仍可覆盖最小条数；`--exclude <路径>`（相对 skill 目录解析）、`--no-default-excludes`（static_check.py）仍是 CLI 开关；`--threshold` 仍可覆盖触发判定分。`JUDGE_SAMPLES=3` 的多数票流程不变（跑 3 次后 `judge_runner.py --merge`，ADR-0028）。
 
-判据口径（容易被误读，单独列）：#5 = 三分量多数票（tokens/tool_calls/seconds 各一票，ADR-0026）；
-#6 = 消融对比量按 `higher_is_better` 定向（ADR-0026）；#8 = 全部 golden trace 取并集，依赖信号分强弱档
+判据口径（容易被误读，单独列）：#11 = 三分量多数票（tokens/tool_calls/seconds 各一票，ADR-0026）；
+#5 = 评审面（消融实证随 T4 休眠，ADR-0026）；#12 = 全部 golden trace 取并集，依赖信号分强弱档
 （弱档要求报错里带含分隔符的路径，agent 自己写错相对路径不算，ADR-0025），另有静态声明面
-（`deps_missing` 非空至少降为 warn，ADR-0031）；#10 = 需 `--case` 才能把判据
-限定在用例范围内（ADR-0024）；#14 = 需 `evolution.json` 才能裁决（ADR-0025）；#1 = human 型不适用（ADR-0018）；
-#13 = 六组静态规则 + 可移植性闸门与 `judges/pii.json` 取较差者（ADR-0029）。
+（`deps_missing` 非空至少降为 warn，ADR-0031）；#10 = human 型不适用（ADR-0018）；
+#4 = 六组静态规则 + 可移植性闸门与 `judges/pii.json` 取较差者（ADR-0029）。
 
 ## 执行载体与扩展点（ADR-0007）
 
@@ -133,39 +128,35 @@ evalsets/<name>/v1/
 ## 规则
 
 - 评估器目录内不得出现针对特定被测 skill 的脚本（#31）；历史运行证据存 `evalsets/<name>/provenance/`
-- LLM 评审一律逐项计分：rubric 拆检查点，每项 1 分，score 由 items 推导（#5，judge_runner.py 强制校验）
+- LLM 评审一律逐项计分：rubric 拆检查点，每项 1 分，score 由 items 推导（#11，judge_runner.py 强制校验）
 
 ## 中间产物契约
 
 所有中间文件落盘在 `evalsets/<name>/results/<version>/`（与报告同目录）：
 
 - `triggers.json`：`{"should": [bool...], "should_not": [...], "confusable": [...]}`，布尔值 = 该 prompt 是否实际触发
-- `runs.json`：`[{"case", "tool_calls", "tokens", "seconds"}, ...]`，golden（有 skill）各次运行；`case` 可选，**全条目都带**时 score.py 产出 `cost_by_case`（#12 组内口径的数据源，ADR-0016）；缺一条即不产出
+- `runs.json`：`[{"case", "tool_calls", "tokens", "seconds"}, ...]`，golden（有 skill）各次运行；`case` 可选，**全条目都带**时 score.py 产出 `cost_by_case`（#15 组内口径的数据源，ADR-0016）；缺一条即不产出
 - `baseline.json`：同 runs.json 格式，基线（无 skill）运行，缺省则 necessity 输出 `skipped`
 - `trace-<序号>.json`：`{"steps": [{"tool", "args", "args_hash"}, ...], "answer", "tokens", "seconds", "triggered", "errors", "host": {"model", "pi", "platform"}}`（trace_run.py 落盘，--out；host 为宿主 pin，事后归因/复现用；离线 --events 重算时仅记 model 意图）
-- `static.json`：static_check.py --out（脚本自写 UTF-8；stdout 同步回显。禁 shell 重定向——GBK 控制台会产 GBK 文件）。全部脚本入口接 `scripts/_console.py::fix()`：GBK 控制台下回显不可编码字符降级为替换符，不崩、退出码 0；`--out` 文件不受影响。含 #13 的六组（`dangerous`/`secrets`/`injection`/`exfil`/`obfuscation`/`pii`）、`hardcoded`、`excluded`/`ignored`（ADR-0012）、`scan_excluded_dirs`（ADR-0012：运行面之外）、`stale_refs`（依赖新鲜度，ADR-0009 延伸：SKILL.md 声明但包内不存在的路径引用，warning 级）、`deps_used`/`deps_declared`/`deps_missing`（依赖全面性，ADR-0031，warning 级）、`skill_md_body_lines`/`skill_md_body_max_lines`（#3 行数主源与自描述阈值，ADR-0017：口径 = frontmatter 之后全文行数，含空行与代码块）
+- `static.json`：static_check.py --out（脚本自写 UTF-8；stdout 同步回显。禁 shell 重定向——GBK 控制台会产 GBK 文件）。全部脚本入口接 `scripts/_console.py::fix()`：GBK 控制台下回显不可编码字符降级为替换符，不崩、退出码 0；`--out` 文件不受影响。含 #4 的六组（`dangerous`/`secrets`/`injection`/`exfil`/`obfuscation`/`pii`）、`hardcoded`、`excluded`/`ignored`（ADR-0012）、`scan_excluded_dirs`（ADR-0012：运行面之外）、`stale_refs`（依赖新鲜度，ADR-0009 延伸：SKILL.md 声明但包内不存在的路径引用，warning 级）、`deps_used`/`deps_declared`/`deps_missing`（依赖全面性，ADR-0031，warning 级）、`skill_md_body_lines`/`skill_md_body_max_lines`（#2 行数主源与自描述阈值，ADR-0017：口径 = frontmatter 之后全文行数，含空行与代码块）
 - `score.json`：score.py --out（同上）；含 `cost`（多次运行汇总）+ `cost_by_case`（逐 case，仅全条目带 case 时出现）
 - `idem.json`：多次 idem.py --out 结果的聚合 `{"ratio", "idempotent"}`
-- `golden.json`：主运行的 golden trace（#8 的数据源之一）；同时存在 `traces/golden-*.json` 时，
-  #8 取**全部** golden trace 的报错并集（`data.sources` 记录条数，ADR-0025）
-- `ablation.json`：`{"metric", "full", "ablated", "higher_is_better", "deleted": [...]}`（#6 实证，
-  兼容旧 `f1_full`/`f1_ablated`；只有 `reason` 时保留评审面裁决，ADR-0026）
-- `evolution.json`：`evolution.py --out` 的跨版本对比（#14 的数据源，ADR-0025）
+- `golden.json`：主运行的 golden trace（#12 的数据源之一）；同时存在 `traces/golden-*.json` 时，
+  #12 取**全部** golden trace 的报错并集（`data.sources` 记录条数，ADR-0025）
 - `traces/`：逐 run 的原始 trace；`--guard-repo` 时另带 `guard.escaped_writes`（越界写入，ADR-0027）
-- `compare.json`：compare.py 裁决（#9）
-- `process.json`：process.py 裁决（#10）
-- `evalset.json`：evalset_check.py stdout（触发集质量，#1 降级依据）
-- `model_robust.json`：model_robust.py stdout（#12 跨模型一致率）
+- `compare.json`：compare.py 裁决（#14）
+- `evalset.json`：evalset_check.py stdout（触发集质量，#10 降级依据）
+- `model_robust.json`：model_robust.py stdout（#15 跨模型一致率）
 - `models/<模型名>/trace-<序号>.json`：跨模型运行的逐 case trace（序号 = 评测集顺序，各模型必须一致）
 - `meta.json`：`{"schema": "skill-eval/results-meta/1", "generated_at", "conclusion", "evaluator", "skill_fingerprint", "evalset_source", "metrics"}`（report.py 写入，ADR-0010）；已存在时**合并保留**人工填写的键（model/sandbox/skipped_reason 等），不静默覆盖
-- `judges/<metric>.json`：judge_runner.py 校验通过的 LLM 评审输出，metric ∈ {brevity, redundancy, fallback, precheck, contract, side-effects, deps, pii}（**不要**存成 judge-*.json 或放 results 根目录，report.py 只认 judges/<metric>.json）
+- `judges/<metric>.json`：judge_runner.py 校验通过的 LLM 评审输出，metric ∈ {brevity, redundancy, fallback, precheck, contract, deps, pii}（**不要**存成 judge-*.json 或放 results 根目录，report.py 只认 judges/<metric>.json）
 - `raw/judge-events/<metric>.events.jsonl`：该次评审的 pi 事件流原文（ADR-0020，可选但推荐——pi 无温度参数，可复现性靠证据留档）
 
-`score.py <results目录>` 读同目录三件套；`idem.py <trace1> <trace2>` 出幂等比例。统计口径：均值/标准差/n/min/max（#10/#28）；必要性为 tokens/tool_calls/seconds 三分量各自提升率（#11）。
+`score.py <results目录>` 读同目录三件套；`idem.py <trace1> <trace2>` 出幂等比例。统计口径：均值/标准差/n/min/max（#13/#28）；必要性为 tokens/tool_calls/seconds 三分量各自提升率（#6）。
 
 ## LLM 评审
 
-**调用口径（ADR-0020/0022）**：每条 rubric 一次**独立单发**调用——prompt = rubric 全文 + 被测文件（+ rubric 自声明的附属文件），不携带编排 agent 的历史/探索上下文，且必须带 **`--no-tools`**（实测带工具时判官会 cd 进真实仓库、自造实验、在包目录里留下宿主硬编码文件）；固定可重放。pi CLI 没有采样参数（无 `--temperature`/`--seed`），所以“temperature=0”写不了，只能靠“同一 prompt + 单发 + 无工具 + 留原始事件流”压住漂移：实测同 prompt 重复 4 次逐项一致，而同一 rubric 换带上下文的 agent 判会得出不同分（#16 1.0 vs 0.5）。默认单次；要更高的可信度就开 `JUDGE_SAMPLES=3` 取中位数（成本 ×3，需在报告注明口径）。
+**调用口径（ADR-0020/0022）**：每条 rubric 一次**独立单发**调用——prompt = rubric 全文 + 被测文件（+ rubric 自声明的附属文件），不携带编排 agent 的历史/探索上下文，且必须带 **`--no-tools`**（实测带工具时判官会 cd 进真实仓库、自造实验、在包目录里留下宿主硬编码文件）；固定可重放。pi CLI 没有采样参数（无 `--temperature`/`--seed`），所以“temperature=0”写不了，只能靠“同一 prompt + 单发 + 无工具 + 留原始事件流”压住漂移：实测同 prompt 重复 4 次逐项一致，而同一 rubric 换带上下文的 agent 判会得出不同分（#7 1.0 vs 0.5）。默认单次；要更高的可信度就开 `JUDGE_SAMPLES=3` 取中位数（成本 ×3，需在报告注明口径）。
 
 输出：结构化 JSON（`{items: [{name, pass, quote}], score, evidence, reason}`，evidence 必须引用原文；**score = pass 项数/总项数**，0~1 两位小数，judge_runner.py 强制校验）。rubric 文件在 `judges/`。
 
@@ -178,13 +169,13 @@ evalsets/<name>/v1/
 
 后续可切换为 3 次取中位数或多模型交叉——切换时只改本节，rubric 不动。
 
-## 幂等（#15）
+## 幂等（#16）
 
-重复运行的 trace 两两跑 `idem.py`：第二次重复第一次已完成步骤的比例 > 0.5 → 不幂等，进报告 `#15` 项。
+重复运行的 trace 两两跑 `idem.py`：第二次重复第一次已完成步骤的比例 > 0.5 → 不幂等，进报告 `#16` 项。
 
-## 稳定性与跨模型（#12）
+## 稳定性与跨模型（#15）
 
-#12 有两个独立信号，报告里分写不合并（ADR-0011）：
+#15 有两个独立信号，报告里分写不合并（ADR-0011）：
 
 - **组内**：重复运行 ×N 的 tool_calls 变异系数 ≤ COST_CV_MAX(0.5) → 稳定；n < 2 时只记"无稳定性证据"
 - **跨模型**：`model_robust.py` 的一致率 ≥ AGREEMENT_MIN(0.8) → 鲁棒；默认不跑（成本 ×模型数）
@@ -196,7 +187,7 @@ case 一致 = triggered 全同 且 回答相似（字符 3-gram Jaccard ≥ 0.5�
 
 ```
 evalsets/<name>/results/<version>/
-├── report.json   # tier + 19 个 key=指标名，值={verdict: pass|warn|fail|skipped, method, data, note}
+├── report.json   # schema=2 + legacy_id_map + tier + 16 个 key=指标名，值={verdict: pass|warn|fail|skipped, method, data, note}
 │                 # 顶层另带 advice（优化建议数组）、evaluator（评估器指纹）、reviewed_by 与 generated_at，不占指标 key
 ├── report.md     # 每条指标一节：表格化的数据 + 证据；末尾「## 优化建议」段（顶部显示档位/审核口径/评估器指纹）
 ├── report.html   # --html：report.md 的渲染媒介 + 优化建议 tab + 评测集审核界面；报告 tab 不得比 report.md 少信息
@@ -206,18 +197,18 @@ evalsets/<name>/results/<version>/
 ```
 
 规则：
-- `tier` 记录本次跑到的最高档位；#14 evolution diff 时先比 tier 再比分数，档位不同不直接比指标值
+- `tier` 记录本次跑到的最高档位；跨档位的指标值不直接比较
 - 各中间产物记录生成时的 skill content_sha256；高档复用低档产物时校验一致，不一致则该产物作废重跑
-- 19 条指标全部出现；未测的标 `skipped` 并注明原因，不打 0 分
-- **data 渲染**（report.md / report.html 共用一套，ADR-0030）：**所有指标一律表格化**——已知形状走定制表（#15 `per_pair`、#12 `cost_by_case`+`cv_by_case`、#4 `cost`、#9 `per_case`、#1 三率、#5 三分量、#6 消融、#8 报错与评审项、#10 步骤、#13 六组与闸门、#14 跨版本变化），其余走**通用兜底**（dict/list 递归压平成 key-value 表）；judge 面（`items`）另加 score/reason 摘要行。原始 JSON 一律保留：**有表就折叠**（`<details>`，不管多短），无表且 ≤400 字符才内联；单元格 >800 字符截断并标注。**不得静默截断**（旧实现 `[:2000]` 会把 2165 字符的 #15 data 切成非法 JSON）。渲染层不得反向改 `report.json` 的形状
-- **结果符号**：卡片徽章、表格结果列与顶部 19 行总览表（`id="overview"`）统一 pass=✓ / fail=✗ / warn=⚠ / skipped=–
+- 16 条指标全部出现；未测的标 `skipped` 并注明原因，不打 0 分
+- **data 渲染**（report.md / report.html 共用一套，ADR-0030）：**所有指标一律表格化**——已知形状走定制表（#16 `per_pair`、#15 `cost_by_case`+`cv_by_case`、#13 `cost`、#14 `per_case`、#10 三率、#11 三分量、#12 报错与评审项、#4 六组与闸门），其余走**通用兜底**（dict/list 递归压平成 key-value 表）；judge 面（`items`）另加 score/reason 摘要行。原始 JSON 一律保留：**有表就折叠**（`<details>`，不管多短），无表且 ≤400 字符才内联；单元格 >800 字符截断并标注。**不得静默截断**（旧实现 `[:2000]` 会把 2165 字符的 #16 data 切成非法 JSON）。渲染层不得反向改 `report.json` 的形状
+- **结果符号**：卡片徽章、表格结果列与顶部 16 行总览表（`id="overview"`）统一 pass=✓ / fail=✗ / warn=⚠ / skipped=–
 - **优化建议**（ADR-0030）：`report.json.advice` = `[{metric, severity, problem, evidence, action}]`，由 `build()` 从裁决确定性派生（`severity` = fail/warn/info，排序 fail→warn→info）；每个指标卡下方内联该指标建议，`report.html` 另有「优化建议」tab（`#N` 锚点跳回指标卡），report.md 有 `## 优化建议` 段。问题与建议同源，不存在“建议里说了、指标里没有”
-- **可移植性闸门可见性**（ADR-0008/0030）：`static.json.hardcoded` 非空 → #13 裁决 = fail（闸门不属于独立指标，只能挂在 #13 上才进得了 `conclusion()`）；`stale_refs` / `scan_excluded_dirs` 只作 #13 卡的信息行，不改裁决
-- 评测集 `reviewed_by: "ai"` 时，报告与 #1/#5/#9 的结论处注明「评测集 AI 审核，未经人工复核」
+- **可移植性闸门可见性**（ADR-0008/0030）：`static.json.hardcoded` 非空 → #4 裁决 = fail（闸门不属于独立指标，只能挂在 #4 上才进得了 `conclusion()`）；`stale_refs` / `scan_excluded_dirs` 只作 #4 卡的信息行，不改裁决
+- 评测集 `reviewed_by: "ai"` 时，报告与 #10/#11/#14 的结论处注明「评测集 AI 审核，未经人工复核」
 - 不合成加权总分；结论分三档：必测全过 / 有警告 / 有失败
-- `report.json` 机器可读，供 #14 版本演进做横向 diff
+- `report.json` 顶层带 `schema: 2` 与 `legacy_id_map`；旧报告不重写、不迁移（ADR-0032）
 - `report.py <results目录> --skill <被测skill目录> [--evalset <evalsets/<name>/vN>]`：`--skill` 让 meta.json 记下被测 skill 的内容指纹——vN 目录命名下唯一能看出"评的是哪份内容"的来源
-- 评估器指纹不一致的版本之间，指标差异不构成回归证据（evolution.py 输出 `comparable=false`）
+- 评估器指纹或 report schema 不一致的版本之间，指标差异不构成回归证据
 
 ## Fallback
 
@@ -230,29 +221,17 @@ evalsets/<name>/results/<version>/
 | worktree 创建失败 | 换临时目录 + 提示隔离降级，继续跑 |
 | 沙箱运行崩溃 | 降级（fallback）到最近一个已完成的低档：报告标注缺失指标与原因，不静默丢指标 |
 | 审核模型不可用 | 评测集保持未冻结状态，提示人工审核路径，不阻塞已完成的低档位报告 |
-| 评测集未审核 | #1/#5/#9 标 `skipped`，其余照常 |
-| 触发集未做质量自检 | #1 只按 F1 判（不降级），meta.json 里评测集来源照记 |
-| 跨模型未跑 | #12 只出组内信号，不扣分 |
-| `disable-model-invocation: true`（#7=human） | #1 标 `skipped`：不跑触发评测（ADR-0018）；已实测的数据留在 `data` 里作证据 |
+| 评测集未审核 | #10/#11/#14 标 `skipped`，其余照常 |
+| 触发集未做质量自检 | #10 只按 F1 判（不降级），meta.json 里评测集来源照记 |
+| 跨模型未跑 | #15 只出组内信号，不扣分 |
+| `disable-model-invocation: true`（#3=human） | #10 标 `skipped`：不跑触发评测（ADR-0018）；已实测的数据留在 `data` 里作证据 |
 
-## 三期工具
+## T4 休眠
 
-- `scripts/process.py --skill <SKILL.md> --trace <trace.json> [--case <用例.json>]`：#10 过程审计，
-  LLM 对照声明与 trace 找无意义步骤，裁决 `{meaningless, score, reason}` 落 `process.json`。
-  **给 `--case` 时判据限定在用例范围内**（用例没要求的后续步骤不算无意义，ADR-0024）；
-  与 #9（expect vs actual）结论相反时，报告里要写明分歧，不直接采信任一方
-- `scripts/ablation.py --skill <dir> --delete "标题" --out <dir>`：#6 消融——按 ## 标题删段生成消融副本，
-  再用消融副本跑对比。`ablation.json` 形状：`{"metric": str, "full": num, "ablated": num,
-  "higher_is_better": bool, "deleted": [...]}`（兼容旧 `f1_full`/`f1_ablated`）——human 型 skill 不跑 T2，
-  对比量改用 T3 成本/质量分（ADR-0026）；只有 `reason` 时保留评审面裁决并附原因
-- `scripts/evolution.py evalsets/<name> [--out <results/<version>/evolution.json>]`：#14 版本演进——读
-  results/*/report.json，输出跨版本每指标 verdict 变化与最新结论；`--out` 落到某个版本目录后，
-  `report.py` 才会把 #14 判成 pass（comparable=true）/warn（false），否则 skipped（ADR-0025）
-
-三者实调 LLM 时同样走 `SKILL_EVAL_MODEL` 环境变量或显式 `--model`。
+`process.py`（过程审计）、`ablation.py`（消融）、`evolution.py`（版本演进）与 `judges/side-effects.md` 已移入 `attic/`，不随包分发、不跑测试；将来 T4 回归再启用（ADR-0032）。
 
 ## 可信度工具（ADR-0010 / ADR-0011 / ADR-0016）
 
 - `scripts/evalset_count.py <evalsets/<name>/vN>`：冻结前置的**条数闸门**——三组触发集各 ≥ 最小条数（默认 10，可配），并提示 `meta.json counts` 与实际的差异；不达标不进入审核
-- `scripts/evalset_check.py <evalset目录> --skill <skill目录>`：#1 可信度——3-gram 覆盖率查照抄/重复/冲突，裁决落 `evalset.json`（`clean=false` → report.py 把 #1 降级为 warn）
-- `scripts/model_robust.py <results目录>`：#12 跨模型一致率——读 `models/<模型名>/trace-<序号>.json`，裁决落 `model_robust.json`；单模型或无 `models/` 目录 → `skipped`
+- `scripts/evalset_check.py <evalset目录> --skill <skill目录>`：#10 可信度——3-gram 覆盖率查照抄/重复/冲突，裁决落 `evalset.json`（`clean=false` → report.py 把 #10 降级为 warn）
+- `scripts/model_robust.py <results目录>`：#15 跨模型一致率——读 `models/<模型名>/trace-<序号>.json`，裁决落 `model_robust.json`；单模型或无 `models/` 目录 → `skipped`

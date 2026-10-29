@@ -1,4 +1,4 @@
-"""触发集质量自检（#1 的可信度闸门）。Seam: python evalset_check.py <evalset目录> --skill <skill目录> [--out f]
+"""触发集质量自检（#10 的可信度闸门）。Seam: python evalset_check.py <evalset目录> --skill <skill目录> [--out f]
 
 为什么需要：should 类 prompt 若照抄 description 措辞，触发评测测的是"字面匹配"而非"语义触发"，
 precision/recall 会虚高（ADR-0002 早已写下的规则，本脚本是它的执行检查）。用确定性字符 3-gram
@@ -16,7 +16,7 @@ stdout 契约（字段恒输出）：
   "note": str
 }
 
-阈值是启发式（可配参数，reference.md § 可配参数），命中即"疑似"，不阻断评估，由 report.py 把 #1 降级为 warn。
+阈值是启发式（可配参数，reference.md § 可配参数），命中即"疑似"，不阻断评估，由 report.py 把 #10 降级为 warn。
 """
 import _console
 
@@ -166,7 +166,7 @@ def check(evalset_dir: Path, skill_dir: Path) -> dict:
     oos = find_out_of_sandbox([*[i for g in GROUPS for i in groups[g]], *cases])
 
     if checked == 0:
-        clean, note = None, "无可检查的触发 prompt（triggers/ 缺失或为空），#1 触发集质量未判"
+        clean, note = None, "无可检查的触发 prompt（triggers/ 缺失或为空），#10 触发集质量未判"
     else:
         problems = []
         if echoes_desc:
@@ -181,7 +181,7 @@ def check(evalset_dir: Path, skill_dir: Path) -> dict:
             problems.append(f"{len(oos)} 条 prompt 引用沙箱外路径（agent 会走出 worktree 改真实仓库，ADR-0027）")
         clean = not problems
         note = (f"检查 {checked} 条 prompt：无照抄/重复/冲突" if clean
-                else f"检查 {checked} 条 prompt：" + "；".join(problems) + "——#1 指标可能虚高，建议改写触发集")
+                else f"检查 {checked} 条 prompt：" + "；".join(problems) + "——#10 指标可能虚高，建议改写触发集")
     if errors:
         note += f"（另有 {len(errors)} 条无法解析，见 errors）"
 

@@ -2,7 +2,7 @@
 Seam: python report.py <results目录> [--html] [--evalset <evalsets/<name>/vN>] [--skill <被测skill目录>]
 
 读同目录中间产物（static.json/score.json/idem.json/compare.json/golden.json/evalset.json/
-model_robust.json/judges/*.json），产出 report.json（19 key，机器可读）+ report.md（人可读）
+model_robust.json/judges/*.json），产出 report.json（16 key，机器可读；schema=2，ADR-0032）+ report.md（人可读）
 + meta.json（本次运行的元数据：评估器指纹 + 被测 skill 指纹 + 评测集来源，ADR-0010）。
 契约见 tests/test_report.py 模块注释。
 """
@@ -21,22 +21,24 @@ import _config
 META_SCHEMA = "skill-eval/results-meta/1"  # 与 uploads/、evalsets/ 下的同名 meta.json 靠此字段区分
 EVALUATOR_ROOT = Path(__file__).resolve().parent.parent  # 评估器自身目录（指纹范围）
 
-# #19/#20：每个指标的中文含义（report.md 与 report.json 的 note 均引用，不能只写 #N）
+# 每个指标的中文含义（report.md 与 report.json 的 note 均引用，不能只写 #N）；编号见 ADR-0032。
 DIM_NAMES = {
-    "#1": "触发精准度", "#2": "name/description 规范与字符预算", "#3": "正文精简",
-    "#4": "运行成本", "#5": "必要性 A/B", "#6": "低冗余", "#7": "调用方式",
-    "#8": "最小依赖", "#9": "结果可验证", "#10": "过程可验证", "#11": "fallback",
-    "#12": "稳定性", "#13": "权限最小化", "#14": "版本演进", "#15": "幂等可恢复",
-    "#16": "前置自检", "#17": "输入契约", "#18": "输出契约", "#19": "副作用可逆",
+    "#1": "name/description 规范与字符预算", "#2": "正文精简",
+    "#3": "调用方式", "#4": "权限最小化",
+    "#5": "低冗余", "#6": "fallback", "#7": "前置自检",
+    "#8": "输入契约", "#9": "输出契约",
+    "#10": "触发精准度",
+    "#11": "必要性 A/B", "#12": "最小依赖",
+    "#13": "运行成本", "#14": "结果可验证", "#15": "稳定性", "#16": "幂等可恢复",
 }
 
-# #13 的六个静态规则组（ADR-0013/0029）：用于 note 与表格里的命中摘要
-DIM_13_GROUPS = {"dangerous": "危险命令", "secrets": "硬编码凭据",
-                 "injection": "注入指令", "exfil": "数据外发", "obfuscation": "混淆",
-                 "pii": "个人信息"}
+# #4 的六个静态规则组（ADR-0013/0029）：用于 note 与表格里的命中摘要
+DIM_PERM_GROUPS = {"dangerous": "危险命令", "secrets": "硬编码凭据",
+                   "injection": "注入指令", "exfil": "数据外发", "obfuscation": "混淆",
+                   "pii": "个人信息"}
 # 命中即 fail 的四组；其余两组（混淆/个人信息）仅 warn，待人工复核（ADR-0013/0029）
-DIM_13_HARD = ("dangerous", "secrets", "injection", "exfil")
-DIM_13_SOFT = ("obfuscation", "pii")
+DIM_PERM_HARD = ("dangerous", "secrets", "injection", "exfil")
+DIM_PERM_SOFT = ("obfuscation", "pii")
 VERDICT_RANK = {"skipped": 0, "pass": 1, "warn": 2, "fail": 3}
 
 
@@ -44,13 +46,18 @@ def worse(a: str, b: str) -> str:
     """取两条裁决里较差的一条（多源合并用；未知值当 skipped）。"""
     return a if VERDICT_RANK.get(a, 0) >= VERDICT_RANK.get(b, 0) else b
 
-ALL_KEYS = [f"#{i}" for i in range(1, 20)]
+ALL_KEYS = [f"#{i}" for i in range(1, 17)]
 THREE_TIER = {"pass", "warn", "fail", "skipped"}
 METHOD_STATIC = "静态检查"
 METHOD_RUN = "沙箱运行"
-METHOD_DIFF = "历史对比"  # #14 专属：evolution.py 读历史 report.json，不碰沙箱
 METHOD_JUDGE = "LLM评审"
 METHOD_COMPARE = "对比"
+
+# old → new 编号（ADR-0032）；旧报告靠 report.json 顶层的 legacy_id_map 追溯。
+LEGACY_ID_MAP = {"#1": "#10", "#2": "#1", "#3": "#2", "#4": "#13", "#5": "#11",
+                 "#6": "#5", "#7": "#3", "#8": "#12", "#9": "#14", "#11": "#6",
+                 "#12": "#15", "#13": "#4", "#15": "#16", "#16": "#7",
+                 "#17": "#8", "#18": "#9"}
 
 
 def load(d: Path, name: str):
@@ -93,7 +100,7 @@ def _sha256_files(root: Path, files) -> str:
 def evaluator_fingerprint(root: Path = None) -> dict:
     """评估器指纹（ADR-0010）：scripts/*.py + judges/*.md + config.yaml + SKILL.md + reference.md 的内容 sha256。
 
-    用途：results/meta.json 与 report.json 记录"这份报告由哪个评估器产生"；#14 跨版本对比时
+    用途：results/meta.json 与 report.json 记录"这份报告由哪个评估器产生"；跨版本对比时
     评估器换过版 → 指标差异不再构成被测 skill 的回归证据。
     用内容指纹而非人手 semver：零维护、无法忘记更新、可复现。
     """
@@ -177,7 +184,7 @@ def write_meta(d: Path, meta: dict) -> None:
 
 
 def verdict_of_ratio(ratio) -> str:
-    """#5：LLM 评审分数是 pass 项数/总项数（0~1），全过 pass、有挂 warn、全挂 fail。"""
+    """LLM 评审分数是 pass 项数/总项数（0~1），全过 pass、有挂 warn、全挂 fail。"""
     return "pass" if ratio >= 1 else "warn" if ratio > 0 else "fail"
 
 
@@ -213,35 +220,35 @@ def from_static(static, m: dict):
         note = f"description {chars} 字符（警告线 {warn} / 失败线 {fail}，ADR-0037）"
     else:
         note = "name/description 规范与字符阈值"
-    m["#2"] = {"verdict": verdict, "method": METHOD_STATIC,
+    m["#1"] = {"verdict": verdict, "method": METHOD_STATIC,
                "data": {"description_chars": chars,
                         "description_warn_chars": warn,
                         "description_fail_chars": fail,
                         "description_tokens": static.get("description_tokens"),
                         "human": static.get("human")},
                "note": note}
-    m["#7"] = {"verdict": "warn" if invoke_warn
+    m["#3"] = {"verdict": "warn" if invoke_warn
                else "pass" if static.get("invoke", {}).get("resolved") in ("human", "both")
                else "skipped",
                "method": METHOD_STATIC, "data": static.get("invoke"),
                "note": "调用方式 frontmatter 校验（disable-model-invocation：true=human；缺省=both；"
                        "name/description 缺失不推断 human）"}
-    # #13 权限最小化（ADR-0013/0029）：六组静态规则 + 可移植性闸门。
+    # #4 权限最小化（ADR-0013/0029）：六组静态规则 + 可移植性闸门。
     # 四组命中即 fail；混淆/个人信息仅 warn（待人工复核）。闸门（宿主硬编码，ADR-0008）
     # 命中同样 fail——旧实现只把 errors 填非空、passed=false，而 conclusion() 只看指标裁决，
     # 导致"整体 fail"在报告里完全不可见（ADR-0030）。
     # 旧的 static.json（无新字段）走同一分支：get→None→[]，verdict 与旧版一致。
-    groups = {k: (static.get(k) or []) for k in (*DIM_13_HARD, *DIM_13_SOFT)}
+    groups = {k: (static.get(k) or []) for k in (*DIM_PERM_HARD, *DIM_PERM_SOFT)}
     gate = static.get("hardcoded") or []
-    hit = [k for k in DIM_13_HARD if groups[k]]
-    soft_hit = [k for k in DIM_13_SOFT if groups[k]]
+    hit = [k for k in DIM_PERM_HARD if groups[k]]
+    soft_hit = [k for k in DIM_PERM_SOFT if groups[k]]
     note = "六组静态规则（危险命令/凭据/注入/外发/混淆/个人信息）"
     if hit:
-        note += "；命中：" + "、".join(f"{DIM_13_GROUPS[k]}×{len(groups[k])}" for k in hit)
+        note += "；命中：" + "、".join(f"{DIM_PERM_GROUPS[k]}×{len(groups[k])}" for k in hit)
     if soft_hit:
         # 硬组或闸门也命中时不能写"仅"（否则读起来像“只有警告”）
         note += ("；另有" if (hit or gate) else "；仅") + "、".join(
-            f"{DIM_13_GROUPS[k]}×{len(groups[k])}（警告）" for k in soft_hit)
+            f"{DIM_PERM_GROUPS[k]}×{len(groups[k])}（警告）" for k in soft_hit)
     if gate:
         note += f"；可移植性闸门命中×{len(gate)}（宿主环境硬编码，ADR-0008，命中即 fail）"
     # 排除/抑制/闸门旁证必须可见（ADR-0012/0030）：不静默丢指标
@@ -254,7 +261,7 @@ def from_static(static, m: dict):
     stale = static.get("stale_refs") or []
     if stale:
         note += f"；SKILL.md 声明但包内不存在的引用 {len(stale)} 处（信息行，不改裁决）"
-    m["#13"] = {
+    m["#4"] = {
         "verdict": "fail" if (hit or gate) else "warn" if soft_hit else "pass",
         "method": METHOD_STATIC,
         "data": {**groups, "hardcoded": gate, "stale_refs": stale,
@@ -264,7 +271,7 @@ def from_static(static, m: dict):
 
 
 def cv_of(comp):
-    """变异系数（#12，ADR-0016）：std/mean；n<2 或字段不合法 → None（不参与裁决）。
+    """变异系数（#15，ADR-0016）：std/mean；n<2 或字段不合法 → None（不参与裁决）。
 
     均值 0 时与旧实现同口径（无波动 0；有波动 99，保守判不稳）。
     """
@@ -291,7 +298,7 @@ def dependency_errors(errors) -> tuple[list, list]:
     """从 trace 报错里分出「依赖缺失信号」与「agent 自己的路径笔误」（ADR-0025）。
 
     旧实现把任何含 not found / no such 的报错都算依赖问题——实测 agent 自己写错相对路径
-    （`cat: AGENTS.md: No such file or directory`）就会被当成缺依赖（#8 假 fail）。现分两档：
+    （`cat: AGENTS.md: No such file or directory`）就会被当成缺依赖（#12 假 fail）。现分两档：
     - 强信号（command not found / ModuleNotFoundError / not installed…）直接算；
     - 弱信号（no such file / not found / 不存在）还要看**缺的是什么**：包内入口（scripts/、SKILL.md、
       judges/、check-deps…）或解释器/工具（python/node/pi/git/bash…）缺失才算依赖问题；
@@ -331,53 +338,53 @@ def build(d: Path, evalset_dir: Path | None = None) -> dict:
     golden = load(d, "golden.json")
 
     # 静态组
-    for k in ("#2", "#7", "#13"):
+    for k in ("#1", "#3", "#4"):
         m[k] = {"verdict": "skipped", "method": METHOD_STATIC, "data": None, "note": "无 static.json"}
     if isinstance(static, dict):
         from_static(static, m)
 
     # 运行组
-    m["#1"] = {"verdict": "skipped", "method": METHOD_RUN, "data": None, "note": "无触发评测数据"}
-    m["#4"] = {"verdict": "skipped", "method": METHOD_RUN, "data": None, "note": "无成本数据"}
-    m["#5"] = {"verdict": "skipped", "method": METHOD_RUN, "data": None, "note": "无基线数据"}
-    m["#8"] = {"verdict": "skipped", "method": METHOD_RUN, "data": None, "note": "无 golden trace"}
-    m["#12"] = {"verdict": "skipped", "method": METHOD_RUN, "data": None, "note": "无多次运行数据"}
+    m["#10"] = {"verdict": "skipped", "method": METHOD_RUN, "data": None, "note": "无触发评测数据"}
+    m["#13"] = {"verdict": "skipped", "method": METHOD_RUN, "data": None, "note": "无成本数据"}
+    m["#11"] = {"verdict": "skipped", "method": METHOD_RUN, "data": None, "note": "无基线数据"}
+    m["#12"] = {"verdict": "skipped", "method": METHOD_RUN, "data": None, "note": "无 golden trace"}
+    m["#15"] = {"verdict": "skipped", "method": METHOD_RUN, "data": None, "note": "无多次运行数据"}
     if isinstance(score, dict):
         t = score.get("trigger")
         if isinstance(t, dict):
             f1_pass = _config.get_float("report.f1_pass", 0.7)
-            m["#1"] = {"verdict": "pass" if t.get("f1", 0) >= f1_pass else "fail",
+            m["#10"] = {"verdict": "pass" if t.get("f1", 0) >= f1_pass else "fail",
                        "method": METHOD_RUN, "data": t, "note": f"F1 及格线 {f1_pass}"}
         cost = score.get("cost")
         if isinstance(cost, dict) and any(v != "skipped" for v in cost.values()):
-            m["#4"] = {"verdict": "pass", "method": METHOD_RUN, "data": cost, "note": "单次运行成本统计"}
+            m["#13"] = {"verdict": "pass", "method": METHOD_RUN, "data": cost, "note": "单次运行成本统计"}
         n = score.get("necessity")
         if isinstance(n, dict):
-            # #5 三分量多数票（ADR-0026）：旧口径只看 token，会把「省步不省 token」判成 fail
+            # #11 三分量多数票（ADR-0026）：旧口径只看 token，会把「省步不省 token」判成 fail
             # （实测 golden 步数 −22%、token +1.5%）。现三分量各投一票，多数改善才 pass。
             comps = {k: v for k, v in n.items() if isinstance(v, dict) and "improvement" in v}
             up = sum(1 for v in comps.values() if v["improvement"] > 0)
             verdict = "pass" if up * 2 > len(comps) else "warn" if up else "fail"
             detail = "、".join(f"{k} {v['improvement']*100:+.1f}%" for k, v in comps.items())
-            m["#5"] = {"verdict": verdict, "method": METHOD_RUN, "data": n,
+            m["#11"] = {"verdict": verdict, "method": METHOD_RUN, "data": n,
                        "note": f"三分量多数票（{up}/{len(comps)} 改善）：{detail}（ADR-0026）"}
-    # #1 人调用型（#7 resolved=human）不适用触发评测：pi 的 formatSkillsForPrompt 会把
+    # #10 人调用型（#3 resolved=human）不适用触发评测：pi 的 formatSkillsForPrompt 会把
     # disable-model-invocation=true 的 skill 从提示中滤除（实测：--skill 加载后模型答
     # “无 available_skills 段”）——“按 description 触发”在该载体上结构上不可能，照跑只是把
     # 载体限制记成 skill 的 fail。已实测的数据不丢，原样留在 data 里作证据，但不改判。
     if isinstance(static, dict) and (static.get("invoke") or {}).get("resolved") == "human":
-        m["#1"] = {"verdict": "skipped", "method": METHOD_RUN, "data": m["#1"]["data"],
+        m["#10"] = {"verdict": "skipped", "method": METHOD_RUN, "data": m["#10"]["data"],
                    "note": ("调用方式为 human（disable-model-invocation=true）：不跑触发评测，"
                             "本指标不适用（SKILL.md 未声明触发式调用）")}
-    # #1 触发集质量（ADR-0002 的执行检查）：照抄 description 的 prompt 会让 P/R 虚高 → 降级为 warn，
+    # #10 触发集质量（ADR-0002 的执行检查）：照抄 description 的 prompt 会让 P/R 虚高 → 降级为 warn，
     # 不做整体闸门（与 ADR-0008 的区别：那是客观硬事实，这里是启发式阈值，疑似不该一票否决）
     ev = load(d, "evalset.json")
-    if isinstance(ev, dict) and ev.get("clean") is False and m["#1"]["verdict"] != "skipped":
-        m["#1"]["verdict"] = "fail" if m["#1"]["verdict"] == "fail" else "warn"
-        m["#1"]["data"] = {**(m["#1"]["data"] or {}), "evalset_quality": ev}
-        m["#1"]["note"] = (m["#1"].get("note") or "") + f"；触发集质量警告：{ev.get('note')}"
+    if isinstance(ev, dict) and ev.get("clean") is False and m["#10"]["verdict"] != "skipped":
+        m["#10"]["verdict"] = "fail" if m["#10"]["verdict"] == "fail" else "warn"
+        m["#10"]["data"] = {**(m["#10"]["data"] or {}), "evalset_quality": ev}
+        m["#10"]["note"] = (m["#10"].get("note") or "") + f"；触发集质量警告：{ev.get('note')}"
 
-    # #8 双源（#29/#30）：trace 报错（实跑面）+ judges/deps.json（语义面）合成裁决。
+    # #12 双源（#29/#30）：trace 报错（实跑面）+ judges/deps.json（语义面）合成裁决。
     # 多 trace 并集（ADR-0025）：只读单条 golden.json 时，换成同 case 另一条重复运行就会翻结论
     # （实测 r1 干净、r3 带 agent 路径笔误）——所以有 traces/golden-*.json 就全部纳入。
     g_traces = [t for t in (_load_path(p) for p in sorted((d / "traces").glob("golden-*.json")))
@@ -396,17 +403,17 @@ def build(d: Path, evalset_dir: Path | None = None) -> dict:
             dep_verdict, dep_note = "pass", "golden trace 中无依赖类报错即 pass"
         if ignored_errs:
             dep_note += f"；另有 {len(ignored_errs)} 条报错判为 agent 自身路径笔误（见 ignored_errors）"
-        m["#8"] = {"verdict": dep_verdict, "method": METHOD_RUN,
+        m["#12"] = {"verdict": dep_verdict, "method": METHOD_RUN,
                    "data": {"dependency_errors": dep_errs, "ignored_errors": ignored_errs,
                             "sources": len(g_sources),
                             "deps_judge": {"score": deps["score"], "items": deps.get("items")} if deps else None},
                    "note": dep_note}
-    # #8 第三源：依赖全面性（ADR-0031）。缺声明是文档缺陷 → 最多降到 warn，不 fail
+    # #12 第三源：依赖全面性（ADR-0031）。缺声明是文档缺陷 → 最多降到 warn，不 fail
     # （与 trace 面"跑得通"的证据冲突时，恒不能两者同时成立）。
     miss = (static or {}).get("deps_missing") if isinstance(static, dict) else None
     if miss:
-        cur = m["#8"]
-        m["#8"] = {
+        cur = m["#12"]
+        m["#12"] = {
             "verdict": worse(cur.get("verdict", "skipped"), "warn"),
             "method": METHOD_STATIC if cur.get("verdict") == "skipped" else cur.get("method"),
             "data": {**(cur.get("data") if isinstance(cur.get("data"), dict) else {}),
@@ -418,7 +425,7 @@ def build(d: Path, evalset_dir: Path | None = None) -> dict:
                       f"（{'、'.join(miss[:5])}）（ADR-0031）"}
     if isinstance(score, dict) and isinstance(score.get("cost"), dict) \
             and isinstance(score["cost"].get("tool_calls"), dict):
-        # #12（ADR-0016）：裁决用**组内（逐 case）** 变异系数中位数——
+        # #15（ADR-0016）：裁决用**组内（逐 case）** 变异系数中位数——
         # pooled 会把 case 间的难度差算成“不稳定”（实测：组间均值极差 8.5 步 → pooled cv 0.65，
         # 组内中位数 0.45）。无逐 case 数据（旧产物/旧 harness）时回退 pooled 并在 note 标注口径。
         cost_data = score["cost"]
@@ -462,35 +469,35 @@ def build(d: Path, evalset_dir: Path | None = None) -> dict:
             verdict = "pass" if stable else "warn"
             data = {"cv_scope": "pooled", "cv_threshold": cv_max,
                     "cv_pooled": None if pooled_cv is None else round(pooled_cv, 3), "cost": cost_data}
-        m["#12"] = {"verdict": verdict, "method": METHOD_RUN, "data": data, "note": note}
+        m["#15"] = {"verdict": verdict, "method": METHOD_RUN, "data": data, "note": note}
 
-    # #12 跨模型一致性（ADR-0011：折进稳定性，不新增第 20 指标）：
+    # #15 跨模型一致性（ADR-0011：折进稳定性，不新增独立指标）：
     # 组内变异系数与跨模型一致率分写在同一 data 下，不混成一个数字。
     # 保守口径：跨模型只能**降级**（发现漂移），不能升级——它不能代替组内重复运行。
     mr = load(d, "model_robust.json")
     if isinstance(mr, dict) and mr.get("skipped") is False and mr.get("robust") is not None:
         rank = {"skipped": 0, "pass": 1, "warn": 2, "fail": 3}
         cross = "pass" if mr["robust"] else "warn"
-        m["#12"] = {"verdict": max((m["#12"]["verdict"], cross), key=lambda v: rank.get(v, 0)),
+        m["#15"] = {"verdict": max((m["#15"]["verdict"], cross), key=lambda v: rank.get(v, 0)),
                     "method": METHOD_RUN,
-                    "data": {"intra_model_cost": m["#12"].get("data"), "model_robust": mr},
-                    "note": (m["#12"].get("note") or "") + f"；跨模型一致性：{mr.get('note')}"}
+                    "data": {"intra_model_cost": m["#15"].get("data"), "model_robust": mr},
+                    "note": (m["#15"].get("note") or "") + f"；跨模型一致性：{mr.get('note')}"}
 
-    m["#9"] = {"verdict": "skipped", "method": METHOD_COMPARE, "data": None, "note": "无 expect/actual 对比"}
+    m["#14"] = {"verdict": "skipped", "method": METHOD_COMPARE, "data": None, "note": "无 expect/actual 对比"}
     if isinstance(compare, dict) and (compare.get("score") is not None
                                       or compare.get("mean_score") is not None):
-        m["#9"] = {"verdict": "pass" if compare.get("match") else "fail",
+        m["#14"] = {"verdict": "pass" if compare.get("match") else "fail",
                    "method": METHOD_COMPARE, "data": compare,
                    "note": "期望输出 vs 实际产出（聚合口径：多数 case 匹配即 pass）"}
 
-    m["#15"] = {"verdict": "skipped", "method": METHOD_RUN, "data": None, "note": "无幂等数据"}
+    m["#16"] = {"verdict": "skipped", "method": METHOD_RUN, "data": None, "note": "无幂等数据"}
     if isinstance(idem, dict) and "idempotent" in idem:
-        m["#15"] = {"verdict": "pass" if idem["idempotent"] else "fail",
+        m["#16"] = {"verdict": "pass" if idem["idempotent"] else "fail",
                     "method": METHOD_RUN, "data": idem, "note": "重复步骤比例 ≤ 0.5 即幂等"}
 
     # LLM 评审组
-    judges = {"#3": "brevity", "#6": "redundancy", "#11": "fallback", "#16": "precheck",
-              "#17": "contract", "#18": "contract", "#19": "side-effects"}
+    judges = {"#2": "brevity", "#5": "redundancy", "#6": "fallback", "#7": "precheck",
+              "#8": "contract", "#9": "contract"}
     for key, name in judges.items():
         j = load_judge(d, name)
         m[key] = {"verdict": verdict_of_ratio(j["score"]) if j else "skipped",
@@ -501,13 +508,13 @@ def build(d: Path, evalset_dir: Path | None = None) -> dict:
                       f"{i['name']}={'✓' if i['pass'] else '✗'}" for i in j.get("items", [])) + "）")
                   if j else "无评审输出"}
 
-    # #13 语义面（ADR-0029）：工号/客户名/内部系统地址这类公司特化信息没有可枚举格式，
+    # #4 语义面（ADR-0029）：工号/客户名/内部系统地址这类公司特化信息没有可枚举格式，
     # 只能靠评审。与静态面（六组 + 闸门）取**较差者**（ADR-0017 多源口径：主源 + 辅证）。
     pii_j = load_judge(d, "pii")
     if pii_j:
-        cur = m["#13"]
+        cur = m["#4"]
         items = "/".join(f"{i['name']}={'✓' if i['pass'] else '✗'}" for i in pii_j.get("items", []))
-        m["#13"] = {
+        m["#4"] = {
             "verdict": worse(cur.get("verdict", "skipped"), verdict_of_ratio(pii_j["score"])),
             "method": METHOD_JUDGE if cur.get("verdict") == "skipped" else cur.get("method"),
             "data": {**(cur.get("data") if isinstance(cur.get("data"), dict) else {}),
@@ -516,7 +523,7 @@ def build(d: Path, evalset_dir: Path | None = None) -> dict:
             "note": ((cur.get("note") or "") + "；" if cur.get("note") else "")
                     + f"语义面 pii 评审（逐项：{items}）：{pii_j.get('reason') or ''}"}
 
-    # #3 双源（ADR-0017）：正文行数 = 可数事实 → 静态面主源（超线即 warn/fail，机械证据优先）；
+    # #2 双源（ADR-0017）：正文行数 = 可数事实 → 静态面主源（超线即 warn/fail，机械证据优先）；
     # 语义两项 → LLM 面辅证，结果原形状保留在同一份 data 里，不丢。
     if isinstance(static, dict):
         lines = static.get("skill_md_body_lines")
@@ -527,7 +534,7 @@ def build(d: Path, evalset_dir: Path | None = None) -> dict:
             limit = static.get("skill_md_body_max_lines")  # 旧字段 = warn 线，兼容旧 static.json
             if level not in ("ok", "warn", "fail"):
                 level = "warn" if isinstance(limit, int) and lines > limit else "ok"
-            cur = m["#3"]
+            cur = m["#2"]
             merged = {"skill_md_body_lines": lines, "body_level": level}
             for key, value in (("skill_md_body_warn_lines", warn),
                                ("skill_md_body_fail_lines", fail),
@@ -537,66 +544,34 @@ def build(d: Path, evalset_dir: Path | None = None) -> dict:
             if isinstance(cur.get("data"), dict):
                 merged.update(cur["data"])
             if level == "fail":
-                m["#3"] = {"verdict": "fail", "method": METHOD_STATIC, "data": merged,
+                m["#2"] = {"verdict": "fail", "method": METHOD_STATIC, "data": merged,
                            "note": f"正文 {lines} 行 > 失败阈值 {fail} 行（静态面主源，ADR-0037）；"
                                    + (cur.get("note") or "无语义评审输出")}
             elif level == "warn":
-                m["#3"] = {"verdict": "warn", "method": METHOD_STATIC, "data": merged,
+                m["#2"] = {"verdict": "warn", "method": METHOD_STATIC, "data": merged,
                            "note": f"正文 {lines} 行 > 警告阈值 {warn} 行（静态面主源，ADR-0037）；"
                                    + (cur.get("note") or "无语义评审输出")}
             elif isinstance(cur.get("data"), dict):
-                m["#3"] = {**cur, "data": merged,
+                m["#2"] = {**cur, "data": merged,
                            "note": (cur.get("note") or "")
                                    + f"；正文 {lines} 行 ≤ 警告阈值（静态面）"}
             else:
-                m["#3"] = {"verdict": "skipped", "method": METHOD_STATIC, "data": merged,
+                m["#2"] = {"verdict": "skipped", "method": METHOD_STATIC, "data": merged,
                            "note": f"正文 {lines} 行 ≤ 警告阈值（静态面通过）；无语义评审输出"}
 
-    m["#10"] = {"verdict": "skipped", "method": METHOD_RUN, "data": None, "note": "无 process.json"}
-    proc = load(d, "process.json")
-    if isinstance(proc, dict) and isinstance(proc.get("score"), int):
-        m["#10"] = {"verdict": verdict_of_score(proc["score"]), "method": METHOD_RUN,
-                    "data": proc, "note": "trace 对照声明的过程审计"}
-    ab = load(d, "ablation.json")
-    if isinstance(ab, dict):
-        # #6 消融（ADR-0026）：对比量不再写死 f1——human 型 skill 不跑 T2，没有触发 F1，
-        # 改用 T3 的成本/质量分；方向由 higher_is_better 决定（质量分越高越好=默认，成本越低越好=false）。
-        full, ablated = ab.get("full"), ab.get("ablated")
-        metric = ab.get("metric", "f1")
-        if full is None or ablated is None:  # 兼容旧形状 f1_full/f1_ablated
-            full, ablated, metric = ab.get("f1_full"), ab.get("f1_ablated"), "f1"
-        if full is not None and ablated is not None:
-            hib = ab.get("higher_is_better", True)
-            redundant = (ablated > full) if hib else (ablated < full)
-            m["#6"] = {"verdict": "warn" if redundant else "pass", "method": METHOD_RUN, "data": ab,
-                       "note": (f"消融对比量 {metric}：完整 {full} → 消融 {ablated}；"
-                                + ("消融后更好 = 被删段落冗余（警告）" if redundant
-                                   else "消融后变差 = 被删段落必要（通过）"))}
-        elif ab.get("reason"):
-            m["#6"]["note"] = (m["#6"].get("note") or "") + f"；消融未跑：{ab['reason']}"
-            m["#6"]["data"] = {**(m["#6"].get("data") or {}), "ablation": ab}
-    # #14 版本演进（ADR-0025）：读 evolution.py --out 落的 evolution.json（results/<version>/ 下）
-    evo = load(d, "evolution.json")
-    if isinstance(evo, dict) and isinstance(evo.get("changes"), list):
-        comp = bool(evo.get("comparable"))
-        m["#14"] = {"verdict": "pass" if comp else "warn", "method": METHOD_DIFF, "data": evo,
-                    "note": (f"跨版本对比 {len(evo.get('versions') or [])} 个版本、{len(evo['changes'])} 条指标变化；"
-                             + ("评估器指纹一致，差异可比" if comp
-                                else "评估器指纹不同 → 差异不构成回归证据"))}
-    else:
-        m["#14"] = {"verdict": "skipped", "method": METHOD_DIFF, "data": None,
-                    "note": "无 evolution.json（evolution.py --out 产出）"}
+
 
     # 评测集 AI 审核（#49）：reviewed_by=ai 时给依赖评测集的指标加标注
     reviewed_by = _evalset_reviewed_by(d, evalset_dir)
     if reviewed_by == "ai":
         ai_note = "评测集 AI 审核，未经人工复核"
-        for k in ("#1", "#5", "#9"):
+        for k in ("#10", "#11", "#14"):
             if m[k]["verdict"] != "skipped":
                 m[k]["note"] = f"{m[k]['note']}（{ai_note}）"
 
     from datetime import datetime
-    report = {"metrics": m, "conclusion": conclusion(m),
+    report = {"schema": 2, "legacy_id_map": LEGACY_ID_MAP,
+              "metrics": m, "conclusion": conclusion(m),
               "advice": _advice(m),
               "reviewed_by": reviewed_by,
               "evaluator": evaluator_fingerprint(),
@@ -636,12 +611,12 @@ def conclusion(m: dict) -> str:
 FLOW_STEPS = [  # SKILL.md 的 8 步流程（#43 流程图数据源）
     ("1 前置自检", "scripts/judges/reference.md 存在；被测路径有 SKILL.md，缺失走 Fallback"),
     ("2 存档与定版", "只读存档 uploads/，副本 git init+commit，版本号 = 短 hash"),
-    ("3 静态检查", "static_check.py：#2 规范、#7 调用方式、#13 五组规则、可移植性闸门"),
+    ("3 静态检查", "static_check.py：#1 规范、#3 调用方式、#4 六组规则、可移植性闸门"),
     ("4 评测集", "检查冻结的 evalsets/<name>/vN/；未冻结则生成 → 条数闸门 + 触发集质量自检 → LLM 自动审核（换模型）即冻结（reviewed_by=ai）"),
-    ("5 沙箱运行", "按档增量跑 pi CLI：T2 触发（early-exit）→ T3 主运行+基线+重复（可选跨模型 model_robust.py）→ T4 审计/消融"),
+    ("5 沙箱运行", "按档增量跑 pi CLI：T2A 触发（early-exit）→ T2B 真实场景 A/B → T3 主运行+重复（可选跨模型 model_robust.py）"),
     ("6 LLM 评审", "judges/ 逐项计分 rubric，judge_runner.py --validate 通过才进报告"),
     ("7 计算", "score.py（P/R/F1、成本、三分量必要性）+ idem.py（幂等）"),
-    ("8 报告", "report.py：report.json + report.md（--html 加静态页），19 指标恒出现"),
+    ("8 报告", "report.py：report.json + report.md（--html 加静态页），16 指标恒出现"),
 ]
 
 
@@ -863,7 +838,7 @@ function rvSubmit(){var root=document.getElementById('rv-root');if(!root)return;
 
 
 # data 渲染口径（见 reference.md § 报告契约）：表格优先 → 原始 JSON 折叠；短 data 内联；**不静默截断**
-# （旧实现 [:2000] 会把 #15 这种 2165 字符的 data 切成非法 JSON）
+# （旧实现 [:2000] 会把 #16 这种 2165 字符的 data 切成非法 JSON）
 
 
 def _fmt(v, nd=3) -> str:
@@ -895,11 +870,11 @@ def _md_cell(v) -> str:
 def _data_table(metric: str, data):
     """已知形状的 data → (摘要行, 列名, 行)；无表可渲染返回 None。
 
-    只覆盖“同构行数组”型 data（#15/#12/#4/#9），形状与 report.json 同源，
+    只覆盖“同构行数组”型 data（#16/#15/#13/#14），形状与 report.json 同源，
     渲染层不得反过来改 report.json 的形状。"""
     if not isinstance(data, dict):
         return None
-    if metric == "#15":
+    if metric == "#16":
         pairs = data.get("per_pair")
         if not isinstance(pairs, list) or not pairs:
             return None
@@ -911,7 +886,7 @@ def _data_table(metric: str, data):
                  "✓" if p.get("idempotent") else "✗"]
                 for p in pairs if isinstance(p, dict)]
         return summary, ["case", "pair", "ratio", "repeated/total", "幂等"], rows
-    if metric == "#12":
+    if metric == "#15":
         per = data.get("cost_by_case")
         if not isinstance(per, dict) or not per:
             return None
@@ -929,14 +904,14 @@ def _data_table(metric: str, data):
                          _fmt((comps.get("seconds") or {}).get("mean")),
                          _fmt(cv_by_case.get(c))])
         return summary, ["case", "tool_calls 均值(标准差, n)", "tokens 均值", "秒 均值", "组内 cv"], rows
-    if metric == "#4":
+    if metric == "#13":
         labels = {"tool_calls": "工具步数", "tokens": "tokens", "seconds": "秒"}
         rows = [[labels[k]] + [_fmt((data.get(k) or {}).get(x)) for x in ("mean", "std", "n", "min", "max")]
                 for k in ("tool_calls", "tokens", "seconds") if isinstance(data.get(k), dict)]
         if not rows:
             return None
         return f"单次运行成本（{len(rows)} 个分量，pooled）", ["分量", "均值", "标准差", "n", "最小", "最大"], rows
-    if metric == "#9":
+    if metric == "#14":
         per = data.get("per_case")
         if not isinstance(per, list) or not per:
             return None
@@ -981,25 +956,22 @@ ADV_SEV_RANK = {"fail": 0, "warn": 1, "info": 2}
 
 # 每条指标的建议动作（确定性文本，问题与建议同源 → 结构上无法服钩，ADR-0030）
 ADVICE_ACTIONS = {
-    "#1": "修 description 或触发集：应触发项未触发看召回率，不应触发被触发看精确率",
-    "#2": "把 description 压到字符阈值内（>384 警告，>1024 失败），并确认 name/description 齐全可读",
-    "#3": "把细节下沉到 reference.md，SKILL.md 只留立即要做的步骤",
-    "#4": "合并重复调用、减少不必要的读取，把单次运行成本降到最低",
-    "#5": "删掉不改变产出的步骤（与无 skill 基线对比；省步不省 token 也算必要性不足）",
-    "#6": "删掉消融后反而更好的段落，或补一份 A/B 实证",
-    "#7": "确认调用方式：human 型加 disable-model-invocation: true，模型触发型留空",
-    "#8": "补齐依赖声明（SKILL.md 依赖小节 + requirements.txt/check-deps.sh），并复跑 golden trace",
-    "#9": "把期望输出写成可判定的产物（文件/字段），不要只写自然语言描述",
-    "#10": "删掉 trace 里与声明流程和用例都无关的步骤",
-    "#11": "给需要凭据/网络/外部服务的步骤补降级路径",
-    "#12": "定位波动最大的 case：先对齐多次运行的输入，再消除随机步骤",
-    "#13": "按命中项处置：凭据轮换、个人信息脱敏、危险命令改可逆操作、宿主硬编码改相对路径",
-    "#14": "评估器指纹不一致时重跑旧版本；无可比数据时先冻结评测集",
-    "#15": "让重复步骤幂等：重跑前清理产物，或加已完成短路判断",
-    "#16": "补齐前置自检脚本，并在 SKILL.md 里声明自检不通过就不继续",
-    "#17": "明确输入契约：必填/可选、缺失与非法时的处理",
-    "#18": "明确输出契约：路径、格式，以及失败时留下什么",
-    "#19": "让副作用可逆：写操作前备份，或限制在沙箱内",
+    "#1": "把 description 压到字符阈值内（>384 警告，>1024 失败），并确认 name/description 齐全可读",
+    "#2": "把细节下沉到 reference.md，SKILL.md 只留立即要做的步骤",
+    "#3": "确认调用方式：human 型加 disable-model-invocation: true，模型触发型留空",
+    "#4": "按命中项处置：凭据轮换、个人信息脱敏、危险命令改可逆操作、宿主硬编码改相对路径",
+    "#5": "删掉与附属文件重复、复读 frontmatter 或客套的段落",
+    "#6": "给需要凭据/网络/外部服务的步骤补降级路径",
+    "#7": "补齐前置自检脚本，并在 SKILL.md 里声明自检不通过就不继续",
+    "#8": "明确输入契约：必填/可选、缺失与非法时的处理",
+    "#9": "明确输出契约：路径、格式，以及失败时留下什么",
+    "#10": "修 description 或触发集：应触发项未触发看召回率，不应触发被触发看精确率",
+    "#11": "删掉不改变产出的步骤（与无 skill 基线对比；省步不省 token 也算必要性不足）",
+    "#12": "补齐依赖声明（SKILL.md 依赖小节 + requirements.txt/check-deps.sh），并复跑 golden trace",
+    "#13": "合并重复调用、减少不必要的读取，把单次运行成本降到最低",
+    "#14": "把期望输出写成可判定的产物（文件/字段），不要只写自然语言描述",
+    "#15": "定位波动最大的 case：先对齐多次运行的输入，再消除随机步骤",
+    "#16": "让重复步骤幂等：重跑前清理产物，或加已完成短路判断",
 }
 
 
@@ -1016,8 +988,8 @@ def _glyph(verdict: str) -> str:
 def _advice_items(data: dict) -> list:
     """取该指标下所有 judge 检查点组。
 
-    检查点不一定在顶层：顶层 items 是普通评审（#3/#6/#11/#16–19），
-    而 #8 的 deps 评审嵌在 `deps_judge`、#13 的 pii 评审嵌在 `pii_judge`——
+    检查点不一定在顶层：顶层 items 是普通评审（#2/#5/#6/#7–9），
+    而 #12 的 deps 评审嵌在 `deps_judge`、#4 的 pii 评审嵌在 `pii_judge`——
     只看顶层会永远取不到这两类（docstring 声称的"检查点级"就成了空头支票）。
     """
     out = []
@@ -1044,7 +1016,7 @@ def _advice(m: dict) -> list:
     """从裁决确定性派生优化建议（ADR-0030）：每条带 #N 反链，问题与建议同源。
 
     三档粒度：指标级（非 pass 即一条）、检查点级（judge 里 pass=false 的项）、
-    #13 命中级（每个命中的规则组/闸门一条）。排序 fail → warn → info，同级按指标号。
+    #4 命中级（每个命中的规则组/闸门一条）。排序 fail → warn → info，同级按指标号。
     """
     out = []
     for k in ALL_KEYS:
@@ -1069,16 +1041,16 @@ def _advice(m: dict) -> list:
                                 "problem": f"检查点未通过：{it.get('name')}",
                                 "evidence": str(it.get("quote") or "").strip() or "—",
                                 "action": action})
-        if k != "#13":
+        if k != "#4":
             continue
-        for g, label in DIM_13_GROUPS.items():
+        for g, label in DIM_PERM_GROUPS.items():
             hits = [h for h in (data.get(g) or []) if isinstance(h, dict)]
             if hits:
                 out.append({"metric": k,
-                            "severity": "fail" if g in DIM_13_HARD else sev,
+                            "severity": "fail" if g in DIM_PERM_HARD else sev,
                             "problem": f"静态规则命中：{label}（{g}）×{len(hits)}",
                             "evidence": "；".join(f"{h.get('file')}:{h.get('line')}" for h in hits[:3]),
-                            "action": ADVICE_ACTIONS["#13"]})
+                            "action": ADVICE_ACTIONS["#4"]})
         gate = [h for h in (data.get("hardcoded") or []) if isinstance(h, dict)]
         if gate:
             out.append({"metric": k, "severity": "fail",
@@ -1119,11 +1091,11 @@ def _tables(metric: str, data, allow_generic=True) -> list:
     if known:
         out.append(known)
     if isinstance(data, dict):
-        if metric == "#1" and "f1" in data:
+        if metric == "#10" and "f1" in data:
             out.append(("触发精准度（应触发/不应触发/易混淆三组）", ["分量", "值"],
                         [["精确率", _fmt(data.get("precision"))],
                          ["召回率", _fmt(data.get("recall"))], ["F1", _fmt(data.get("f1"))]]))
-        elif metric == "#5":
+        elif metric == "#11":
             labels = {"tokens": "tokens", "tool_calls": "工具步数", "seconds": "秒"}
             rows = [[labels.get(key, key), _fmt(comp.get("golden")), _fmt(comp.get("baseline")),
                      f"{comp['improvement'] * 100:+.1f}%"]
@@ -1132,13 +1104,7 @@ def _tables(metric: str, data, allow_generic=True) -> list:
             if rows:
                 out.append(("有 skill（golden）对比无 skill（baseline）",
                             ["分量", "有 skill 均值", "无 skill 基线", "提升率"], rows))
-        elif metric == "#6" and ("full" in data or "f1_full" in data):
-            out.append((f"消融对比量 {data.get('metric', 'f1')}（越大越好 ="
-                        f" {_fmt(data.get('higher_is_better', True))}）",
-                        ["状态", "值"],
-                        [["完整", _fmt(data.get("full", data.get("f1_full")))],
-                         ["消融后", _fmt(data.get("ablated", data.get("f1_ablated")))]]))
-        elif metric == "#8":
+        elif metric == "#12":
             rows = [["依赖类报错", _cell(e)] for e in data.get("dependency_errors") or []]
             rows += [["忽略的报错（agent 自身路径笔误）", _cell(e)]
                      for e in data.get("ignored_errors") or []]
@@ -1154,20 +1120,16 @@ def _tables(metric: str, data, allow_generic=True) -> list:
                             f"已声明 {len(data.get('deps_declared') or [])} 项",
                             ["未声明的依赖", "说明"],
                             [[m, "未在文档/requirements.txt/check-deps.sh 声明"] for m in miss]))
-        elif metric == "#10":
-            rows = [["score", _fmt(data.get("score"))], ["理由", _cell(data.get("reason"))]]
-            rows += [["无意义步骤", _cell(s)] for s in data.get("meaningless") or []]
-            out.append((None, ["项目", "内容"], rows))
-        elif metric == "#13":
-            level = {**{g: "error → fail" for g in DIM_13_HARD},
-                     **{g: "warning（人工复核）" for g in DIM_13_SOFT}}
-            rows = [[f"{DIM_13_GROUPS.get(g, g)}（{g}）", len(data.get(g) or []), level.get(g, "")]
-                    for g in (*DIM_13_HARD, *DIM_13_SOFT) if g in data]
+        elif metric == "#4":
+            level = {**{g: "error → fail" for g in DIM_PERM_HARD},
+                     **{g: "warning（人工复核）" for g in DIM_PERM_SOFT}}
+            rows = [[f"{DIM_PERM_GROUPS.get(g, g)}（{g}）", len(data.get(g) or []), level.get(g, "")]
+                    for g in (*DIM_PERM_HARD, *DIM_PERM_SOFT) if g in data]
             rows.append(["可移植性闸门（hardcoded）", len(data.get("hardcoded") or []),
                          "error → fail（ADR-0008）"])
             out.append(("六组静态规则 + 可移植性闸门（ADR-0013/0029）",
                         ["规则组", "命中数", "级别"], rows))
-            hits = [(g, h) for g in (*DIM_13_HARD, *DIM_13_SOFT, "hardcoded")
+            hits = [(g, h) for g in (*DIM_PERM_HARD, *DIM_PERM_SOFT, "hardcoded")
                     for h in (data.get(g) or []) if isinstance(h, dict)]
             if hits:
                 out.append((None, ["规则组", "文件", "行", "命中文本"],
@@ -1182,25 +1144,19 @@ def _tables(metric: str, data, allow_generic=True) -> list:
             if isinstance(pj, dict) and isinstance(pj.get("items"), list):
                 out.append((f"语义面 pii 评审 score {_fmt(pj.get('score'))}",
                             ["检查点", "结果", "原文引用"], _judge_rows(pj["items"])))
-        elif metric == "#14" and (data.get("changes") or data.get("versions")):
-            out.append(((f"{len(data.get('versions') or [])} 个版本" + (
-                "，评估器指纹一致（可比）" if data.get("comparable") else "，指纹不同（不可比）")),
-                        ["指标", "起始值", "最新值"],
-                        [[c.get("metric"), _cell(c.get("from")), _cell(c.get("to"))]
-                         for c in data.get("changes") or []]))
     if not out and allow_generic:
         out = _flatten_table(data)
     return out
 
 
 def _overview_html(report: dict) -> str:
-    """顶部 19 行总览（结果栏：✓/✗/⚠/–）——一眼扫完，不用十几个卡片里翻（ADR-0030）。"""
+    """顶部 16 行总览（结果栏：✓/✗/⚠/–）——一眼扫完，不用十几个卡片里翻（ADR-0030）。"""
     rows = []
     for k in ALL_KEYS:
         v = report["metrics"][k]
         rows.append(f"<tr><td>{k}</td><td>{_esc(DIM_NAMES.get(k, ''))}</td><td>{_glyph(v['verdict'])}</td>"
                     f"<td>{_esc(v['method'])}</td><td>{_esc(_cell(v.get('note') or ''))}</td></tr>")
-    return ("<div class='card'><h3 style='margin:0'>19 项指标总览</h3>"
+    return ("<div class='card'><h3 style='margin:0'>16 项指标总览</h3>"
             "<table id='overview'><tr><th>指标</th><th>名称</th><th>结果</th><th>手段</th><th>摘要</th></tr>"
             + "".join(rows) + "</table></div>")
 
@@ -1208,7 +1164,7 @@ def _overview_html(report: dict) -> str:
 def _advice_html(advice: list) -> str:
     """「优化建议」tab：按严重度排序的汇总表，每项带 #N 锚点跳回指标卡。"""
     if not advice:
-        return "<p class='hint'>19 项指标全部通过，无待办建议。</p>"
+        return "<p class='hint'>16 项指标全部通过，无待办建议。</p>"
     rank = {}
     for a in advice:
         rank.setdefault(a["severity"], 0)
@@ -1240,12 +1196,12 @@ def _judge_summary(data) -> str:
     return " · ".join(bits)
 
 
-#19 条指标的结论符号（ADR-0030）：网页用 ✓/✗，结论类名仍走原三档样式
+#16 条指标的结论符号（ADR-0030）：网页用 ✓/✗，结论类名仍走原三档样式
 CONCLUSION_CLS = {"all-pass": "pass", "with-warnings": "warn", "has-failures": "fail"}
 
 
 def render_html(report: dict, evalset_dir=None, skill_arg=None) -> str:
-    # #19/#20：按 ID 顺序 + 中文指标名；#43：SVG 流程图；ADR-0030：表格优先 + 建议内联 + ✓/✗ 结果栏
+    # 按 ID 顺序 + 中文指标名；#43：SVG 流程图；ADR-0030：表格优先 + 建议内联 + ✓/✗ 结果栏
     advice = report.get("advice") or []
     by_metric = {}
     for a in advice:
@@ -1307,13 +1263,12 @@ def render_md(report: dict) -> str:
     ev = report.get("evaluator") or {}
     head.append(f"**评估器指纹：{ev.get('version', 'unknown')}**（{ev.get('files', 0)} 个文件的内容 sha256）")
     lines = head + [""]
-    for k in ALL_KEYS:  # #19：严格按指标 ID 顺序
+    for k in ALL_KEYS:  # 严格按指标 ID 顺序（ADR-0032）
         v = report["metrics"][k]
         note = f" — {v['note']}" if v.get("note") else ""
         name = DIM_NAMES.get(k, "")
         method = {METHOD_STATIC: "静态检查", METHOD_RUN: "沙箱运行",
-                  METHOD_JUDGE: "LLM评审", METHOD_COMPARE: "对比",
-                  METHOD_DIFF: "历史对比"}.get(v["method"], v["method"])
+                  METHOD_JUDGE: "LLM评审", METHOD_COMPARE: "对比"}.get(v["method"], v["method"])
         # #20：中文指标名 + 中文测量手段；data 渲染：一律表格化（ADR-0030），report.json 仍是权威
         lines.append(f"### {k} · {name} [{v['verdict']}]（{method}）{note}")
         data = v.get("data")
@@ -1330,7 +1285,7 @@ def render_md(report: dict) -> str:
     lines += ["## 优化建议", ""]
     advice = report.get("advice") or []
     if not advice:
-        lines.append("- 19 项指标全部通过，无待办建议。")
+        lines.append("- 16 项指标全部通过，无待办建议。")
     for a in advice:
         lines.append(f"- **{a['metric']}**（{a['severity']}）{a['problem']} → {a['action']}")
         if a.get("evidence"):

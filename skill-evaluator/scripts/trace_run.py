@@ -1,4 +1,4 @@
-"""运行引擎（#1/#4/#5/#8/#12/#15 的数据源）。Seam: python trace_run.py <worktree> <prompt> [--skill <path>|--no-skill]
+"""运行引擎（#10/#13/#11/#12/#15/#16 的数据源）。Seam: python trace_run.py <worktree> <prompt> [--skill <path>|--no-skill]
 
 实跑模式调用 pi CLI --mode json --no-session 采集事件流，聚合为 trace JSON 输出。
 --events <jsonl>  : 离线解析已采集的事件流（测试/重算用），跳过实跑

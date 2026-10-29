@@ -1,4 +1,4 @@
-"""幂等性判定（#15）。Seam: python idem.py <trace1.json> <trace2.json> [--out <file>] -> stdout JSON
+"""幂等性判定（#16）。Seam: python idem.py <trace1.json> <trace2.json> [--out <file>] -> stdout JSON
 
 --out：脚本自写 UTF-8 文件（stdout 同步回显），见 static_check.py 说明。
 第二次运行重复第一次已完成步骤的比例高 = 不幂等（如重复下载已存在的文件）。

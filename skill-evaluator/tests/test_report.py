@@ -4,12 +4,12 @@
 - static.json（static_check.py stdout）
 - score.json（score.py stdout）
 - idem.json（{"ratio", "idempotent"}，多次 idem.py 的聚合）
-- compare.json（compare.py 输出，#9）
-- golden.json（golden trace，#8）
-- judges/<metric>.json（judge_runner 校验过的输出）：brevity(#3) redundancy(#6) fallback(#11)
-  precheck(#16) contract(#17,#18) side-effects(#19)
+- compare.json（compare.py 输出，#14）
+- golden.json（golden trace，#12）
+- judges/<metric>.json（judge_runner 校验过的输出）：brevity(#2) redundancy(#5) fallback(#6)
+  precheck(#7) contract(#8,#9)
 
-report.json 契约（ADR-0004）：19 个 key 全出现；值 = {"verdict": pass|warn|fail|skipped,
+report.json 契约（ADR-0004/0032）：16 个 key 全出现；值 = {"verdict": pass|warn|fail|skipped,
 "method": 静态/运行/LLM评审/对比, "data": {...}, "note"}；不合成总分；
 conclusion 三档：all-pass / with-warnings / has-failures（全 skipped 也算 with-warnings）。
 """
@@ -21,7 +21,7 @@ from pathlib import Path
 SCRIPT = Path(__file__).parent.parent / "scripts" / "report.py"
 
 ALL_KEYS = ["#1", "#2", "#3", "#4", "#5", "#6", "#7", "#8", "#9", "#10",
-            "#11", "#12", "#13", "#14", "#15", "#16", "#17", "#18", "#19"]
+            "#11", "#12", "#13", "#14", "#15", "#16"]
 
 
 def write_inputs(d: Path, files: dict):
@@ -45,7 +45,7 @@ def run_report(d: Path):
 def test_empty_inputs_all_skipped(tmp_path):
     tmp_path.mkdir(exist_ok=True)
     out = run_report(tmp_path)
-    assert len(out["metrics"]) == 19
+    assert len(out["metrics"]) == 16
     for k, v in out["metrics"].items():
         assert v["verdict"] == "skipped", f"{k} 应 skipped"
     assert out["conclusion"] == "with-warnings"  # 全 skipped 不是 all-pass
@@ -60,9 +60,9 @@ def test_static_inputs(tmp_path):
         "errors": [], "warnings": [], "dangerous": [], "passed": True}})
     out = run_report(tmp_path)
     m = out["metrics"]
-    assert m["#2"]["verdict"] == "pass"
-    assert m["#7"]["verdict"] == "pass"
-    assert m["#13"]["verdict"] == "pass"
+    assert m["#1"]["verdict"] == "pass"
+    assert m["#3"]["verdict"] == "pass"
+    assert m["#4"]["verdict"] == "pass"
     assert out["conclusion"] == "with-warnings"  # 其余仍 skipped
 
 
@@ -73,7 +73,7 @@ def test_static_dangerous_is_fail(tmp_path):
         "errors": ["发现 1 处危险命令模式"], "warnings": [],
         "dangerous": [{"pattern": "x"}], "passed": False}})
     out = run_report(tmp_path)
-    assert out["metrics"]["#13"]["verdict"] == "fail"
+    assert out["metrics"]["#4"]["verdict"] == "fail"
     assert out["conclusion"] == "has-failures"
 
 
@@ -92,8 +92,8 @@ def test_static_secrets_is_fail(tmp_path):
     write_inputs(tmp_path, {"static.json": _static(
         secrets=[{"pattern": "p"}], errors=["发现 1 处硬编码凭据（#13）"], passed=False)})
     out = run_report(tmp_path)
-    assert out["metrics"]["#13"]["verdict"] == "fail"
-    assert "凭据" in out["metrics"]["#13"]["note"]
+    assert out["metrics"]["#4"]["verdict"] == "fail"
+    assert "凭据" in out["metrics"]["#4"]["note"]
 
 
 def test_static_obfuscation_is_warn_not_fail(tmp_path):
@@ -101,7 +101,7 @@ def test_static_obfuscation_is_warn_not_fail(tmp_path):
         obfuscation=[{"pattern": "p"}],
         warnings=["发现 1 处混淆痕迹，需人工复核（#13，仅警告）"])})
     out = run_report(tmp_path)
-    assert out["metrics"]["#13"]["verdict"] == "warn"
+    assert out["metrics"]["#4"]["verdict"] == "warn"
     assert out["conclusion"] == "with-warnings"
 
 
@@ -113,9 +113,9 @@ def test_static_13_groups_do_not_leak_into_2_and_7(tmp_path):
         secrets=[{"pattern": "p"}], injection=[{"pattern": "p"}],
         exfil=[{"pattern": "p"}], errors=errs, passed=False)})
     out = run_report(tmp_path)
-    assert out["metrics"]["#2"]["verdict"] == "pass"
-    assert out["metrics"]["#7"]["verdict"] == "pass"
-    assert out["metrics"]["#13"]["verdict"] == "fail"
+    assert out["metrics"]["#1"]["verdict"] == "pass"
+    assert out["metrics"]["#3"]["verdict"] == "pass"
+    assert out["metrics"]["#4"]["verdict"] == "fail"
 
 
 def test_static_excluded_and_ignored_visible_in_note(tmp_path):
@@ -124,10 +124,10 @@ def test_static_excluded_and_ignored_visible_in_note(tmp_path):
         excluded=["tests", "evalsets", "scripts/static_check.py"],
         ignored=[{"pattern": "p", "line": 73, "file": "reference.md", "text": "x"}])})
     out = run_report(tmp_path)
-    note = out["metrics"]["#13"]["note"]
+    note = out["metrics"]["#4"]["note"]
     assert "未扫描 3 处" in note and "tests" in note
     assert "行内抑制 1 行" in note
-    assert out["metrics"]["#13"]["verdict"] == "pass"
+    assert out["metrics"]["#4"]["verdict"] == "pass"
 
 
 # --- Slice 17: 触发/成本/必要性/幂等/对比 ---
@@ -142,9 +142,9 @@ def test_score_inputs(tmp_path):
         "passed": True}})
     out = run_report(tmp_path)
     m = out["metrics"]
-    assert m["#1"]["verdict"] == "pass"   # f1 >= 0.7
-    assert m["#4"]["verdict"] == "pass"   # 有成本数据即 info-pass
-    assert m["#5"]["verdict"] == "pass"   # improvement > 0
+    assert m["#10"]["verdict"] == "pass"   # f1 >= 0.7
+    assert m["#13"]["verdict"] == "pass"   # 有成本数据即 info-pass
+    assert m["#11"]["verdict"] == "pass"   # improvement > 0
 
 
 def test_low_f1_is_fail(tmp_path):
@@ -152,7 +152,7 @@ def test_low_f1_is_fail(tmp_path):
         "trigger": {"precision": 0.5, "recall": 0.5, "f1": 0.5},
         "cost": "skipped", "necessity": "skipped", "passed": True}})
     out = run_report(tmp_path)
-    assert out["metrics"]["#1"]["verdict"] == "fail"
+    assert out["metrics"]["#10"]["verdict"] == "fail"
 
 
 def test_human_invoke_skill_skips_trigger_eval(tmp_path):
@@ -165,7 +165,7 @@ def test_human_invoke_skill_skips_trigger_eval(tmp_path):
         "score.json": {"trigger": {"precision": 0.5, "recall": 0.0, "f1": 0.0},
                        "cost": "skipped", "necessity": "skipped", "passed": True}})
     out = run_report(tmp_path)
-    m = out["metrics"]["#1"]
+    m = out["metrics"]["#10"]
     assert m["verdict"] == "skipped"
     assert "human" in m["note"]
     assert m["data"] == {"precision": 0.5, "recall": 0.0, "f1": 0.0}  # 证据不静默丢
@@ -179,7 +179,7 @@ def test_both_invoke_skill_still_scored(tmp_path):
                         "errors": [], "warnings": [], "passed": True},
         "score.json": {"trigger": {"precision": 0.5, "recall": 0.5, "f1": 0.5},
                        "cost": "skipped", "necessity": "skipped", "passed": True}})
-    assert run_report(tmp_path)["metrics"]["#1"]["verdict"] == "fail"
+    assert run_report(tmp_path)["metrics"]["#10"]["verdict"] == "fail"
 
 
 def test_idem_and_compare(tmp_path):
@@ -187,8 +187,8 @@ def test_idem_and_compare(tmp_path):
         "idem.json": {"ratio": 0.2, "idempotent": True},
         "compare.json": {"match": True, "score": 1, "reason": "ok"}})
     out = run_report(tmp_path)
-    assert out["metrics"]["#15"]["verdict"] == "pass"
-    assert out["metrics"]["#9"]["verdict"] == "pass"
+    assert out["metrics"]["#16"]["verdict"] == "pass"
+    assert out["metrics"]["#14"]["verdict"] == "pass"
 
 
 # --- Slice 18: LLM 评审映射 ---
@@ -198,8 +198,8 @@ def test_judge_inputs(tmp_path):
                             "judges/fallback.json": {"score": 0.0, "evidence": ["a"], "reason": "无 fallback"}})
     out = run_report(tmp_path)
     m = out["metrics"]
-    assert m["#6"]["verdict"] == "pass"   # ratio 1.0
-    assert m["#11"]["verdict"] == "fail"  # ratio 0.0
+    assert m["#5"]["verdict"] == "pass"   # ratio 1.0
+    assert m["#6"]["verdict"] == "fail"  # ratio 0.0
 
 
 # --- Slice 19: report.md 产出 ---
@@ -224,10 +224,10 @@ def test_idempotency_high_variance_warns(tmp_path):
         "necessity": "skipped", "passed": True}})
     out = run_report(tmp_path)
     # 变异系数 6/10 = 0.6 > 0.5 → 不稳定
-    assert out["metrics"]["#12"]["verdict"] == "warn"
+    assert out["metrics"]["#15"]["verdict"] == "warn"
     # 回归：note 必须与 verdict 一致（原实现 n>=2 时恒写"≤ 阈值，稳定"）
-    assert "不稳定" in out["metrics"]["#12"]["note"]
-    assert "≤" not in out["metrics"]["#12"]["note"]
+    assert "不稳定" in out["metrics"]["#15"]["note"]
+    assert "≤" not in out["metrics"]["#15"]["note"]
 
 
 def test_stability_note_matches_verdict_when_stable(tmp_path):
@@ -238,9 +238,9 @@ def test_stability_note_matches_verdict_when_stable(tmp_path):
                  "seconds": "skipped"},
         "necessity": "skipped", "passed": True}})
     out = run_report(tmp_path)
-    assert out["metrics"]["#12"]["verdict"] == "pass"
-    assert "≤" in out["metrics"]["#12"]["note"]
-    assert "稳定" in out["metrics"]["#12"]["note"]
+    assert out["metrics"]["#15"]["verdict"] == "pass"
+    assert "≤" in out["metrics"]["#15"]["note"]
+    assert "稳定" in out["metrics"]["#15"]["note"]
 
 
 def test_stability_uses_within_case_cv_not_pooled(tmp_path):
@@ -256,7 +256,7 @@ def test_stability_uses_within_case_cv_not_pooled(tmp_path):
         "cost": {"tool_calls": st(10.8, 6.99, 20), "tokens": "skipped", "seconds": "skipped"},
         "cost_by_case": per_case, "necessity": "skipped", "passed": True}})
     out = run_report(tmp_path)
-    m = out["metrics"]["#12"]
+    m = out["metrics"]["#15"]
     assert m["verdict"] == "pass"
     assert "组内（逐 case）" in m["note"] and "≤" in m["note"] and "稳定" in m["note"]
     assert m["data"]["cv_scope"] == "within-case"
@@ -274,7 +274,7 @@ def test_stability_within_case_unstable_warns(tmp_path):
                                        "seconds": "skipped"},
         "cost_by_case": per_case, "necessity": "skipped", "passed": True}})
     out = run_report(tmp_path)
-    m = out["metrics"]["#12"]
+    m = out["metrics"]["#15"]
     assert m["verdict"] == "warn"
     assert "不稳定" in m["note"] and "≤" not in m["note"]
     assert m["data"]["cv_median"] == 0.8
@@ -287,7 +287,7 @@ def test_stability_falls_back_to_pooled_without_case_data(tmp_path):
         "cost": {"tool_calls": {"mean": 10, "std": 6, "n": 3}, "tokens": "skipped",
                  "seconds": "skipped"},
         "necessity": "skipped", "passed": True}})
-    m = run_report(tmp_path)["metrics"]["#12"]
+    m = run_report(tmp_path)["metrics"]["#15"]
     assert m["verdict"] == "warn" and "pooled 口径" in m["note"] and m["data"]["cv_scope"] == "pooled"
 
 
@@ -299,7 +299,7 @@ def test_stability_single_run_per_case_uses_pooled_note(tmp_path):
                  "seconds": "skipped"},
         "cost_by_case": {"c1": {"tool_calls": {"mean": 10, "std": 0, "n": 1}}},
         "necessity": "skipped", "passed": True}})
-    m = run_report(tmp_path)["metrics"]["#12"]
+    m = run_report(tmp_path)["metrics"]["#15"]
     assert m["verdict"] == "warn" and "仅单次运行" in m["note"]
 
 
@@ -311,7 +311,7 @@ def test_deps_judge_semantic_fail(tmp_path):
                             "judges/deps.json": {"items": [{"name": "无未打包依赖", "pass": False, "quote": "q"}],
                                                  "score": 0.0, "evidence": ["e"], "reason": "缺"}})
     out = run_report(tmp_path)
-    assert out["metrics"]["#8"]["verdict"] == "fail"
+    assert out["metrics"]["#12"]["verdict"] == "fail"
 
 
 def test_deps_judge_partial_warn(tmp_path):
@@ -320,7 +320,7 @@ def test_deps_judge_partial_warn(tmp_path):
                                                            {"name": "b", "pass": False, "quote": "q"}],
                                                  "score": 0.5, "evidence": ["e"], "reason": "部分"}})
     out = run_report(tmp_path)
-    assert out["metrics"]["#8"]["verdict"] == "warn"
+    assert out["metrics"]["#12"]["verdict"] == "warn"
 
 
 def test_deps_trace_error_overrides_semantic_pass(tmp_path):
@@ -329,7 +329,7 @@ def test_deps_trace_error_overrides_semantic_pass(tmp_path):
                             "judges/deps.json": {"items": [{"name": "a", "pass": True, "quote": "q"}],
                                                  "score": 1.0, "evidence": [], "reason": "全过"}})
     out = run_report(tmp_path)
-    assert out["metrics"]["#8"]["verdict"] == "fail"
+    assert out["metrics"]["#12"]["verdict"] == "fail"
 
 
 # --- #19/#20：report.md 按指标 ID 排序 + 每处标注中文含义 ---
@@ -342,14 +342,14 @@ def test_report_md_ordered_with_chinese_labels(tmp_path):
                                             "errors": [], "warnings": [], "passed": True}})
     out = run_report(tmp_path)
     md = (tmp_path / "report.md").read_text(encoding="utf-8")
-    # 19 个指标全部出现，按 ID 顺序
-    ids = [f"#{i}" for i in range(1, 20)]
+    # 16 个指标全部出现，按 ID 顺序
+    ids = [f"#{i}" for i in range(1, 17)]
     pos = [md.index(f"### {k} · ") for k in ids]
     assert pos == sorted(pos)
     # 每处标注中文含义（不能只写 #N）
-    assert "#1 · 触发精准度" in md
-    assert "#17 · 输入契约" in md
-    assert "#18 · 输出契约" in md
+    assert "#10 · 触发精准度" in md
+    assert "#8 · 输入契约" in md
+    assert "#9 · 输出契约" in md
     # method 用中文标注
     assert "（沙箱运行）" in md and "（静态检查）" in md
 
@@ -393,7 +393,7 @@ def test_gbk_artifact_no_crash(tmp_path):
     assert r.returncode == 0, r.stderr
     out = json.loads((d / "report.json").read_text(encoding="utf-8"))
     # gbk 兼容读取成功：#2 有数据，不是 skipped
-    assert out["metrics"]["#2"]["data"] is not None
+    assert out["metrics"]["#1"]["data"] is not None
 
 
 def test_html_tab_script_balanced(tmp_path):
@@ -492,7 +492,7 @@ def _brevity(items=2):
 def test_brevity_body_lines_over_limit_is_warn(tmp_path):
     write_inputs(tmp_path, {"static.json": _static(skill_md_body_lines=200, skill_md_body_max_lines=150),
                             "judges/brevity.json": _brevity()})
-    m = run_report(tmp_path)["metrics"]["#3"]
+    m = run_report(tmp_path)["metrics"]["#2"]
     assert m["verdict"] == "warn" and m["method"] == "静态检查"
     assert m["data"]["skill_md_body_lines"] == 200
     assert len(m["data"]["items"]) == 2             # LLM 面结果保留，不被覆盖丢掉
@@ -503,7 +503,7 @@ def test_brevity_body_lines_over_fail_is_fail(tmp_path):
     write_inputs(tmp_path, {"static.json": _static(
         skill_md_body_lines=600, skill_md_body_warn_lines=150,
         skill_md_body_fail_lines=500, body_level="fail")})
-    m = run_report(tmp_path)["metrics"]["#3"]
+    m = run_report(tmp_path)["metrics"]["#2"]
     assert m["verdict"] == "fail" and m["method"] == "静态检查"
     assert m["data"]["body_level"] == "fail"
     assert "600 行" in m["note"] and "失败阈值" in m["note"]
@@ -513,7 +513,7 @@ def test_static_description_chars_warn_and_fail(tmp_path):
     write_inputs(tmp_path, {"static.json": _static(
         description_level="warn", description_chars=500,
         description_warn_chars=384, description_fail_chars=1024)})
-    m = run_report(tmp_path)["metrics"]["#2"]
+    m = run_report(tmp_path)["metrics"]["#1"]
     assert m["verdict"] == "warn"
     assert m["data"]["description_chars"] == 500
     assert "500 字符" in m["note"]
@@ -521,7 +521,7 @@ def test_static_description_chars_warn_and_fail(tmp_path):
     write_inputs(tmp_path, {"static.json": _static(
         description_level="fail", description_chars=1100,
         description_warn_chars=384, description_fail_chars=1024)})
-    m = run_report(tmp_path)["metrics"]["#2"]
+    m = run_report(tmp_path)["metrics"]["#1"]
     assert m["verdict"] == "fail"
 
 
@@ -529,7 +529,7 @@ def test_static_human_without_frontmatter_is_skipped(tmp_path):
     write_inputs(tmp_path, {"static.json": _static(
         human=True, description_level="skipped",
         invoke={"resolved": "human"})})
-    m = run_report(tmp_path)["metrics"]["#2"]
+    m = run_report(tmp_path)["metrics"]["#1"]
     assert m["verdict"] == "skipped"
     assert "human" in m["note"]
 
@@ -537,7 +537,7 @@ def test_static_human_without_frontmatter_is_skipped(tmp_path):
 def test_brevity_under_limit_keeps_judge_verdict(tmp_path):
     write_inputs(tmp_path, {"static.json": _static(skill_md_body_lines=70, skill_md_body_max_lines=150),
                             "judges/brevity.json": _brevity()})
-    m = run_report(tmp_path)["metrics"]["#3"]
+    m = run_report(tmp_path)["metrics"]["#2"]
     assert m["verdict"] == "pass" and m["method"] == "LLM评审"
     assert m["data"]["skill_md_body_lines"] == 70   # 行数仍作证据回显
     assert "70 行" in m["note"]
@@ -545,7 +545,7 @@ def test_brevity_under_limit_keeps_judge_verdict(tmp_path):
 
 def test_brevity_without_judge_still_reports_static_pass(tmp_path):
     write_inputs(tmp_path, {"static.json": _static(skill_md_body_lines=70, skill_md_body_max_lines=150)})
-    m = run_report(tmp_path)["metrics"]["#3"]
+    m = run_report(tmp_path)["metrics"]["#2"]
     assert m["verdict"] == "skipped"                # 语义面未测，不冒充 pass
     # ADR-0037：body_level 是新增的结构化裁决字段（旧 static.json 回退时补 ok）
     assert m["data"] == {"skill_md_body_lines": 70, "skill_md_body_max_lines": 150,
@@ -554,7 +554,7 @@ def test_brevity_without_judge_still_reports_static_pass(tmp_path):
 
 def test_brevity_old_static_json_without_lines_ignores_gate(tmp_path):
     write_inputs(tmp_path, {"static.json": _static(), "judges/brevity.json": _brevity()})
-    m = run_report(tmp_path)["metrics"]["#3"]
+    m = run_report(tmp_path)["metrics"]["#2"]
     assert m["verdict"] == "pass" and m["data"].get("skill_md_body_lines") is None
 
 
@@ -579,7 +579,7 @@ def test_necessity_majority_vote_passes_when_two_components_improve(tmp_path):
                       "tool_calls": {"golden": 20, "baseline": 30, "improvement": 0.33},
                       "seconds": {"golden": 95, "baseline": 100, "improvement": 0.05}},
         "passed": True}})
-    m = run_report(tmp_path)["metrics"]["#5"]
+    m = run_report(tmp_path)["metrics"]["#11"]
     assert m["verdict"] == "pass"          # 省步 + 省时，token 微涨 → 不再一票否决
     assert "2/3" in m["note"] and "-1.0%" in m["note"]
 
@@ -589,7 +589,7 @@ def test_necessity_all_components_regress_fails(tmp_path):
         "trigger": "skipped", "cost": "skipped",
         "necessity": {"tokens": {"improvement": -0.3}, "tool_calls": {"improvement": -0.1},
                       "seconds": {"improvement": -0.2}}, "passed": True}})
-    assert run_report(tmp_path)["metrics"]["#5"]["verdict"] == "fail"
+    assert run_report(tmp_path)["metrics"]["#11"]["verdict"] == "fail"
 
 
 # --- #8 依赖信号分类 + 多 trace 并集（ADR-0025）---
@@ -597,7 +597,7 @@ def test_necessity_all_components_regress_fails(tmp_path):
 def test_deps_ignores_agent_path_typo(tmp_path):
     write_inputs(tmp_path, {"golden.json": {"steps": [], "errors": [
         "工具错误 c1: cat: AGENTS.md: No such file or directory"]}})
-    m = run_report(tmp_path)["metrics"]["#8"]
+    m = run_report(tmp_path)["metrics"]["#12"]
     assert m["verdict"] == "pass"
     assert m["data"]["ignored_errors"] and not m["data"]["dependency_errors"]
 
@@ -606,33 +606,15 @@ def test_deps_union_over_golden_traces(tmp_path):
     write_inputs(tmp_path, {"traces/golden-c1-r1.json": {"steps": [], "errors": []},
                             "traces/golden-c1-r2.json": {"steps": [], "errors": [
                                 "工具错误 c2: bash: scripts/check-deps.sh: No such file or directory"]}})
-    m = run_report(tmp_path)["metrics"]["#8"]
+    m = run_report(tmp_path)["metrics"]["#12"]
     assert m["verdict"] == "fail"
     assert m["data"]["sources"] == 2
-
-
-# --- #14 读 evolution.json（ADR-0025）---
-
-def test_evolution_json_consumed(tmp_path):
-    write_inputs(tmp_path, {"evolution.json": {"versions": ["auto-a", "auto-b"], "comparable": True,
-                                               "changes": [{"metric": "#5", "from": "fail", "to": "pass"}]}})
-    m = run_report(tmp_path)["metrics"]["#14"]
-    assert m["verdict"] == "pass"
-    assert "2 个版本" in m["note"]
-
-
-def test_evolution_incomparable_is_warn(tmp_path):
-    write_inputs(tmp_path, {"evolution.json": {"versions": ["auto-a", "auto-b"], "comparable": False,
-                                               "changes": []}})
-    m = run_report(tmp_path)["metrics"]["#14"]
-    assert m["verdict"] == "warn"
-    assert "不构成回归证据" in m["note"]
 
 
 def test_deps_ignores_agent_wrong_artifact_path(tmp_path):
     # agent 自己猜错产物路径（带目录成分，但缺的不是包内入口）→ 不算依赖问题
     write_inputs(tmp_path, {"golden.json": {"steps": [], "errors": [
         "工具错误 c1: cat: evalsets/wrap-up/results/auto-b592/meta.json: No such file or directory"]}})
-    m = run_report(tmp_path)["metrics"]["#8"]
+    m = run_report(tmp_path)["metrics"]["#12"]
     assert m["verdict"] == "pass"
     assert m["data"]["ignored_errors"]

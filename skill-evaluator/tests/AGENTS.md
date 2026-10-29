@@ -4,7 +4,7 @@ Generated: 2026-09-22T13:43:08.578Z
 
 ## OVERVIEW
 
-21 个测试文件 / 321 个 test，全部走 subprocess seam：把脚本当 CLI 跑，不 import 被测脚本（`test_trace_run.py` 例外，它 import `EventAggregator` 做增量消费断言；`test_config.py` 直接 import 纯解析模块 `_config.py`）。
+18 个测试文件 / 293 个 test，全部走 subprocess seam：把脚本当 CLI 跑，不 import 被测脚本（`test_trace_run.py` 例外，它 import `EventAggregator` 做增量消费断言；`test_config.py` 直接 import 纯解析模块 `_config.py`）。
 
 ## WHERE TO LOOK
 
@@ -12,26 +12,24 @@ Generated: 2026-09-22T13:43:08.578Z
 |---|---|---|
 | `test_static_check.py` | `scripts/static_check.py`（六组规则 + PII + 依赖全面性 + 字符/行阈值） | 60 |
 | `test_config.py` | `scripts/_config.py`（YAML 子集解析/优先级/类型） | 7 |
-| `test_report.py` | `report.py` 19-key 契约基线 | 47 |
+| `test_report.py` | `report.py` 16-key 契约基线 | 45 |
 | `test_trace_run.py` | `scripts/trace_run.py` | 39 |
-| `test_report3.py` | `report.py` 元数据/指纹批次（ADR-0010/0011）+ data 渲染层 | 25 |
-| `test_report4.py` | `report.py` 报告可用性（表格化/折叠/闸门可见/建议/✓✗/依赖全面性/PII，ADR-0029/0030/0031） | 17 |
+| `test_report3.py` | `report.py` 元数据/指纹批次（ADR-0010/0011）+ data 渲染层 | 21 |
+| `test_report4.py` | `report.py` 报告可用性（表格化/折叠/闸门可见/建议/✓✗/依赖全面性/PII，ADR-0029/0030/0031） | 19 |
+| `test_report5.py` | 报告页徽章对比度回归 | 6 |
 | `test_score.py` | `scripts/score.py` | 15 |
 | `test_judge_runner.py` | `scripts/judge_runner.py` | 13 |
 | `test_evalset_check.py` | `scripts/evalset_check.py`（触发集质量） | 13 |
 | `test_model_robust.py` | `scripts/model_robust.py` | 12 |
 | `test_trigger_judge.py` | `scripts/trigger_judge.py` | 9 |
-| `test_evolution.py` | `scripts/evolution.py` | 9 |
-| `test_report2.py` | `report.py` 断链修复批次 | 8 |
+| `test_report2.py` | `report.py` 断链修复批次 | 5 |
 | `test_evalset_count.py` | `scripts/evalset_count.py`（条数闸门） | 8 |
 | `test_subprocess.py` | `scripts/_subprocess.py`（Windows 路径解析/进程树） | 7 |
 | `test_compare.py` | `scripts/compare.py` | 6 |
-| `test_process.py` | `scripts/process.py` | 5 |
-| `test_ablation.py` | `scripts/ablation.py` | 5 |
 | `test_idem.py` | `scripts/idem.py` | 4 |
 | `test_console.py` | `scripts/_console.py`（GBK 控制台降级） | 4 |
 
-`scripts/` 16 个 Python CLI + `_config.py` 全覆盖，无缺口。`report.py` 是唯一拆成 4 个文件覆盖的脚本。`check-deps.sh` 无 Python 测试（前置自检靠实跑验证）。
+`scripts/` 11 个 Python CLI + 3 个共享模块全覆盖，无缺口；T4 的 3 个测试已随脚本移入 `attic/tests/`。`report.py` 是唯一拆成 4 个文件覆盖的脚本。`check-deps.sh` 无 Python 测试（前置自检靠实跑验证）。
 
 ## CONVENTIONS
 
@@ -56,4 +54,4 @@ Generated: 2026-09-22T13:43:08.578Z
 
 - `tests/tmp-ev/triggers/should/s1.json`（内容仅 `{"prompt": "x"}`）已被 git 跟踪但全仓零引用，是误提交的 scratch 残渣。
 - `test_static_check.py::test_evaluator_self_check_passes` 是自检回归锁：保证 `python scripts/static_check.py skill-evaluator` 输出 `passed: true`（ADR-0012/0013）。
-- 该文件是最大测试文件（55 test），因 #13 扩为六组规则后每组都要正向+负向用例。加规则时必须同时加“不该误报”的负向用例（尤其 `secrets` 的占位符、`obfuscation`/`pii` 的 warn 分级与示例白名单）。
+- 该文件是最大测试文件（55 test），因 #4 扩为六组规则后每组都要正向+负向用例。加规则时必须同时加“不该误报”的负向用例（尤其 `secrets` 的占位符、`obfuscation`/`pii` 的 warn 分级与示例白名单）。

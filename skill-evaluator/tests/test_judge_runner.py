@@ -131,7 +131,7 @@ def test_every_rubric_has_machine_readable_contract():
     assert len(files) >= 6
     for f in files:
         text = f.read_text(encoding="utf-8")
-        assert "## 输出（#5 逐项计分契约）" in text, f"{f.name} 缺输出契约小节"
+        assert "## 输出（逐项计分契约）" in text, f"{f.name} 缺输出契约小节"
         assert "score = pass 项数 / 总项数" in text, f"{f.name} 缺 score 公式定义"
         blk = re.search(r"```json\n(.*?)\n```", text, re.S)
         assert blk, f"{f.name} 缺 json 输出模板"

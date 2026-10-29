@@ -1,4 +1,4 @@
-"""#9 结果可验证：expect vs actual 的 LLM 对比。Seam: python compare.py --expect <file> --actual <file>
+"""#14 结果可验证：expect vs actual 的 LLM 对比。Seam: python compare.py --expect <file> --actual <file>
 
 LLM 判定用 pi CLI（--mode json，prompt 走 stdin，见 _subprocess.ask_json）；
 --build-only 输出 prompt（离线测试），--events <jsonl> 离线解析回答。

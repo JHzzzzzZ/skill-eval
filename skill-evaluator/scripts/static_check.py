@@ -1,4 +1,4 @@
-"""静态检查（#2/#7/#13）。Seam: python static_check.py <skill目录> [--exclude <文件>] [--out <file>] -> stdout JSON
+"""静态检查（#1/#3/#4）。Seam: python static_check.py <skill目录> [--exclude <文件>] [--out <file>] -> stdout JSON
 
 --out：脚本自写 UTF-8 文件（stdout 同步回显）——Windows 控制台重定向会产 GBK，
 中间产物一律用 --out，禁止 shell 重定向（ADR-0009 同源原则）。
@@ -10,20 +10,20 @@ stdout 契约（字段恒输出）：
   "description_level": "ok"|"warn"|"fail"|"skipped", "human": bool,
   "invoke": {"allowed": [str...], "resolved": str, "note": str},   # resolved: both|human（映射 disable-model-invocation）
   "dangerous": [{"pattern": str, "line": int, "file": str, "text": str}],
-  "secrets": [...], "injection": [...], "exfil": [...],   # 同为 #13，命中即 error（ADR-0013）
-  "obfuscation": [...],                                # 同为 #13，命中仅 warning
+  "secrets": [...], "injection": [...], "exfil": [...],   # 同为 #4，命中即 error（ADR-0013）
+  "obfuscation": [...],                                # 同为 #4，命中仅 warning
   "pii": [{"pattern": str, "label": str, "line": int, "file": str, "text": str}],
-                                                        # 同为 #13 的第六组（ADR-0029），命中仅 warning
+                                                        # 同为 #4 的第六组（ADR-0029），命中仅 warning
   # 每行最多计一条（多规则同时命中取第一条）；ignored/errors 里的“处数”= 命中行数
   "hardcoded": [{"pattern": str, "line": int, "file": str, "text": str}],   # 可移植性闸门（ADR-0008）
   "deps_used": [str],     # 脚本实际用到的外部工具/包（shebang / import / subprocess argv[0]）
   "deps_declared": [str], # 其中已在 SKILL.md/reference.md/requirements.txt/check-deps.sh 出现过的
-  "deps_missing": [str],  # 差集 → report.py 把 #8 至少降到 warn（ADR-0031）；宿主基座不计
+  "deps_missing": [str],  # 差集 → report.py 把 #12 至少降到 warn（ADR-0031）；宿主基座不计
   "excluded": [str],     # 实际未扫描的路径（相对 skill 目录；ADR-0012）
   "ignored": [{"pattern": str, "line": int, "file": str, "text": str}],   # 行内标记抑制掉的命中
   "scan_excluded_dirs": [str],   # 默认豁免目录中实际存在者（ADR-0012：运行面之外）
   "stale_refs": [str],           # SKILL.md 声明但包内不存在的路径（依赖新鲜度，warning 级）
-  "skill_md_body_lines": int|null,       # #3 正文行数（frontmatter 之后全文；无 SKILL.md 时为 null）
+  "skill_md_body_lines": int|null,       # #2 正文行数（frontmatter 之后全文；无 SKILL.md 时为 null）
   "skill_md_body_warn_lines": int, "skill_md_body_fail_lines": int,
   "body_level": "ok"|"warn"|"fail",
   "skill_md_body_max_lines": int,        # 兼容旧字段 = warn 线（report.py 新代码读 body_level）
@@ -31,9 +31,9 @@ stdout 契约（字段恒输出）：
   "passed": bool          # errors 为空即 True（危险命令/缺 name 都算 error）
 }
 
-#13 = 六组规则（ADR-0013/0029）：dangerous/secrets/injection/exfil 命中 → error；
+#4 = 六组规则（ADR-0013/0029）：dangerous/secrets/injection/exfil 命中 → error；
 obfuscation/pii 命中 → warning。secrets 组带占位符过滤（your/xxx/example… 所在行不算硬编码凭据）。
-error 文案里不得出现 name/description/invoke 字样，否则 report.py 会误判成 #2/#7 的 fail 依据。
+error 文案里不得出现 name/description/invoke 字样，否则 report.py 会误判成 #1/#3 的 fail 依据。
 
 排除口径（ADR-0012：机制 + 作用域）：
 - 默认排除 tests/、evalsets/、uploads/、.sandbox/（测试夹具、历史 trace、只读存档都不随 skill 运行）
@@ -88,7 +88,7 @@ DANGEROUS_PATTERNS = [
     r"drop\s+table\b",
 ]
 
-# 硬编码凭据（#13，命中即 error）。纯静态正则只拦常见形态（云厂商前缀/PEM/JWT + 高熵赋值）；
+# 硬编码凭据（#4，命中即 error）。纯静态正则只拦常见形态（云厂商前缀/PEM/JWT + 高熵赋值）；
 # 自造格式的高熵 token 认不出——这个局限写在 reference.md § 权限边界，不在这里堆启发式。
 SECRETS_PATTERNS = [
     r"-----BEGIN [A-Z ]*PRIVATE KEY-----",
@@ -106,7 +106,7 @@ PLACEHOLDER_RE = re.compile(
     r"|x{6,}"
 )
 
-# 注入类指令（#13，命中即 error）：不需任何 shell 权限，正文就能让 agent 越权
+# 注入类指令（#4，命中即 error）：不需任何 shell 权限，正文就能让 agent 越权
 INJECTION_PATTERNS = [
     r"\bignore\s+(?:all\s+)?(?:the\s+)?(?:previous|prior|above|preceding)\s+(?:instruction|instructions|prompt|prompts|rules)",
     r"\bdisregard\s+(?:all\s+)?(?:the\s+)?(?:previous|prior|above)\b",
@@ -121,7 +121,7 @@ INJECTION_PATTERNS = [
     r"[\u202a-\u202e\u2066-\u2069\u200b-\u200d]",   # 双向控制/零宽字符：藏不可见指令的手法
 ]
 
-# 数据外发与凭据读取（#13，命中即 error）
+# 数据外发与凭据读取（#4，命中即 error）
 EXFIL_PATTERNS = [
     r"\bcurl\b.*(?:-d\s|--data|--data-binary|--data-raw|-F\s|--form|-T\s|--upload-file)",
     r"\bcurl\b.*\s-X\s*(?:POST|PUT|PATCH|DELETE)\b",
@@ -135,7 +135,7 @@ EXFIL_PATTERNS = [
     r"process\.env\b[^\n]{0,60}https?://",
 ]
 
-# 混淆（#13，命中仅 warning）：混淆本身不是铁证（可能只是内嵌数据），交人工复核
+# 混淆（#4，命中仅 warning）：混淆本身不是铁证（可能只是内嵌数据），交人工复核
 OBFUSCATION_PATTERNS = [
     r"\bb64decode\b|\bbase64\s+(?:-d|--decode)\b|\batob\b",
     r"\beval\s*\(|\bexec\s*\(",
@@ -143,7 +143,7 @@ OBFUSCATION_PATTERNS = [
     r"['\"][A-Za-z0-9+/]{120,}={0,2}['\"]",               # 120+ 字符疑似 base64 blob（sha256 hex=64 不触发）
 ]
 
-# 个人信息（#13，第六组，ADR-0029）：命中仅 warning——文档里写示例联系方式是合法的，
+# 个人信息（#4，第六组，ADR-0029）：命中仅 warning——文档里写示例联系方式是合法的，
 # 是不是真数据需人工判断。只认**可格式化**的个人标识；工号/客户名/内部系统地址这类
 # 公司特化信息没有可枚举格式，交给 judges/pii.md 语义面。
 PII_EMAIL = r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"
@@ -221,7 +221,7 @@ def _pii_accept(m, pattern) -> bool:
 
 
 # 可移植性闸门（ADR-0008）：宿主环境硬编码 → 整体 fail。
-# 只查硬编码，不查"声明给某 agent 用"（#7 调用方式与通用性无关）。
+# 只查硬编码，不查"声明给某 agent 用"（#3 调用方式与通用性无关）。
 # 排除：相对路径与环境变量引用本就不匹配这些模式。具体路径示例不写入本文件注释，
 # 免得模式表自匹配（ADR-0012：表是数据不是行为）。
 # 作用域（ADR-0012）：闸门只扫运行面——tests/ 内的夹具（tmp_path 运行时路径、
@@ -349,7 +349,7 @@ def token_estimate(text: str) -> int:
     return zh + max(0, rest) // 4
 
 # 依赖新鲜度（ADR-0009 延伸）：SKILL.md 声明的路径引用应能定位到包内文件。
-# 只查“声明了但不存在”（文档漂移），不查语义对错——那是 #8 语义面（judges/deps.md）的事。
+# 只查“声明了但不存在”（文档漂移），不查语义对错——那是 #12 语义面（judges/deps.md）的事。
 REF_EXTS = ".py .mjs .js .ts .md .json .sh .ps1 .cmd .bat .toml .yaml .yml".split()
 
 
@@ -548,7 +548,7 @@ def main():
     out["name"] = meta.get("name")
     out["description"] = meta.get("description")
 
-    # #7 调用方式：映射 pi 真实 frontmatter 字段 disable-model-invocation（ADR-0008）。
+    # #3 调用方式：映射 pi 真实 frontmatter 字段 disable-model-invocation（ADR-0008）。
     # human 只认这个显式字段（ADR-0037）：name/description 缺失可能是坏包，不能反推调用方式。
     raw = (meta.get("disable-model-invocation") or "").strip().strip('"').lower()
     invoke_human = raw in ("true", "yes", "1")
@@ -559,7 +559,7 @@ def main():
         if not human:
             out["errors"].append("frontmatter 缺 name")
     elif len(out["name"]) > name_max_chars:
-        out["warnings"].append(f"name {len(out['name'])} 字符，超过 {name_max_chars}（#2）")
+        out["warnings"].append(f"name {len(out['name'])} 字符，超过 {name_max_chars}（#1）")
 
     if not out["description"]:
         out["description_level"] = "skipped" if human else "fail"
@@ -571,25 +571,25 @@ def main():
         if out["description_chars"] > desc_fail:
             out["description_level"] = "fail"
             out["errors"].append(
-                f"description {out['description_chars']} 字符，超过失败阈值 {desc_fail}（#2）")
+                f"description {out['description_chars']} 字符，超过失败阈值 {desc_fail}（#1）")
         elif out["description_chars"] > desc_warn:
             out["description_level"] = "warn"
             out["warnings"].append(
-                f"description {out['description_chars']} 字符，超过警告阈值 {desc_warn}（#2）")
+                f"description {out['description_chars']} 字符，超过警告阈值 {desc_warn}（#1）")
         else:
             out["description_level"] = "ok"
 
-    # #3 正文精简（ADR-0017）：行数属可数事实 → 静态面出数，report.py 拿它当主源。
+    # #2 正文精简（ADR-0017）：行数属可数事实 → 静态面出数，report.py 拿它当主源。
     # 语义两项（无可下沉细节、有索引结构）仍由 judges/brevity.md 判，两边在报告里合成。
     out["skill_md_body_lines"] = len(body.splitlines())
     if out["skill_md_body_lines"] > body_fail:
         out["body_level"] = "fail"
         out["errors"].append(
-            f"SKILL.md 正文 {out['skill_md_body_lines']} 行，超过失败阈值 {body_fail}（#3）")
+            f"SKILL.md 正文 {out['skill_md_body_lines']} 行，超过失败阈值 {body_fail}（#2）")
     elif out["skill_md_body_lines"] > body_warn:
         out["body_level"] = "warn"
         out["warnings"].append(
-            f"SKILL.md 正文 {out['skill_md_body_lines']} 行，超过警告阈值 {body_warn}（#3）")
+            f"SKILL.md 正文 {out['skill_md_body_lines']} 行，超过警告阈值 {body_warn}（#2）")
 
     if invoke_human:
         out["invoke"]["resolved"] = "human"
@@ -599,48 +599,48 @@ def main():
         out["invoke"]["note"] = "缺省/false：模型按 description 触发，用户也可手动调用"
     else:
         out["warnings"].append(
-            f"disable-model-invocation 取值 '{raw}' 不是布尔（pi 将按未知字段忽略）（#7）")
+            f"disable-model-invocation 取值 '{raw}' 不是布尔（pi 将按未知字段忽略）（#3）")
 
     out["dangerous"] = scan_patterns(skill_dir, DANGEROUS_PATTERNS, exclude_paths, out["ignored"])
     if out["dangerous"]:
-        out["errors"].append(f"发现 {len(out['dangerous'])} 处危险命令模式（#13）")
+        out["errors"].append(f"发现 {len(out['dangerous'])} 处危险命令模式（#4）")
 
     # 默认豁免目录里实际存在者（ADR-0012：运行面之外），供报告与审计看见
     out["scan_excluded_dirs"] = sorted(
         d for d in DEFAULT_EXCLUDE_DIRS if (skill_dir / d).is_dir())
 
-    # #13 静态面其余四组（ADR-0013）。新 error 文案不得含 name/description/invoke 字样：
-    # report.py 的历史实现用子串匹配把 errors 分流到 #2/#7（见 from_static）。
+    # #4 静态面其余四组（ADR-0013）。新 error 文案不得含 name/description/invoke 字样：
+    # report.py 的历史实现用子串匹配把 errors 分流到 #1/#3（见 from_static）。
     out["secrets"] = scan_patterns(skill_dir, SECRETS_PATTERNS, exclude_paths, out["ignored"],
                                    skip_placeholders=True)
     if out["secrets"]:
-        out["errors"].append(f"发现 {len(out['secrets'])} 处硬编码凭据（#13）")
+        out["errors"].append(f"发现 {len(out['secrets'])} 处硬编码凭据（#4）")
 
     out["injection"] = scan_patterns(skill_dir, INJECTION_PATTERNS, exclude_paths, out["ignored"])
     if out["injection"]:
-        out["errors"].append(f"发现 {len(out['injection'])} 处注入类指令（#13）")
+        out["errors"].append(f"发现 {len(out['injection'])} 处注入类指令（#4）")
 
     out["exfil"] = scan_patterns(skill_dir, EXFIL_PATTERNS, exclude_paths, out["ignored"])
     if out["exfil"]:
-        out["errors"].append(f"发现 {len(out['exfil'])} 处数据外发或凭据读取（#13）")
+        out["errors"].append(f"发现 {len(out['exfil'])} 处数据外发或凭据读取（#4）")
 
     out["obfuscation"] = scan_patterns(skill_dir, OBFUSCATION_PATTERNS, exclude_paths, out["ignored"])
     if out["obfuscation"]:
-        out["warnings"].append(f"发现 {len(out['obfuscation'])} 处混淆痕迹，需人工复核（#13，仅警告）")
+        out["warnings"].append(f"发现 {len(out['obfuscation'])} 处混淆痕迹，需人工复核（#4，仅警告）")
 
-    # #13 第六组：个人信息（ADR-0029）。只判 warning；公司特化标识（工号/客户名/内部系统）
+    # #4 第六组：个人信息（ADR-0029）。只判 warning；公司特化标识（工号/客户名/内部系统）
     # 不在静态面能力范围内，走 judges/pii.md 语义面。
     out["pii"] = scan_patterns(skill_dir, PII_PATTERNS, exclude_paths, out["ignored"],
                                accept=_pii_accept)
     if out["pii"]:
         out["warnings"].append(
-            f"发现 {len(out['pii'])} 处疑似个人信息，需人工复核是否已脱敏（#13，仅警告）")
+            f"发现 {len(out['pii'])} 处疑似个人信息，需人工复核是否已脱敏（#4，仅警告）")
 
-    # 依赖全面性（ADR-0031）：用了什么 vs 声明了什么 → report.py 把 #8 至少降到 warn
+    # 依赖全面性（ADR-0031）：用了什么 vs 声明了什么 → report.py 把 #12 至少降到 warn
     out["deps_used"], out["deps_declared"], out["deps_missing"] = collect_deps(skill_dir, exclude_paths)
     if out["deps_missing"]:
         out["warnings"].append(
-            f"依赖未声明：{'、'.join(out['deps_missing'])}（#8 依赖全面性，ADR-0031，仅警告）")
+            f"依赖未声明：{'、'.join(out['deps_missing'])}（#12 依赖全面性，ADR-0031，仅警告）")
 
     # 依赖新鲜度（ADR-0009 延伸）：声明路径漂移 → warning（不 fail 闸门）
     out["stale_refs"] = find_stale_refs(skill_dir, body)

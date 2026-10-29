@@ -1,4 +1,4 @@
-"""评分计算（#1 P/R/F1，#4 均值方差，#5 必要性 A/B）。
+"""评分计算（#10 P/R/F1，#13 均值方差，#11 必要性 A/B）。
 Seam: python score.py <results目录> [--out <file>] -> stdout JSON（--out 另写 UTF-8，见 static_check.py 说明）
 
 输入（落盘在同一 results 目录，契约见 reference.md § 中间产物）:
@@ -50,7 +50,7 @@ def stats(runs: list, key: str):
     n = len(vals)
     mean = sum(vals) / n
     var = sum((v - mean) ** 2 for v in vals) / n
-    # #10/#28：std 替代 var（变异系数直接可读），并给出 min/max/n 支撑单次成本区间
+    # #13/#28：std 替代 var（变异系数直接可读），并给出 min/max/n 支撑单次成本区间
     return {"mean": mean, "std": var ** 0.5, "n": n, "min": min(vals), "max": max(vals)}
 
 
@@ -74,7 +74,7 @@ def by_case(runs: list):
 
 
 def necessity(runs: list, baseline: list):
-    """#5/#11：golden（有 skill）vs baseline（无 skill）三分量对比。
+    """#11：golden（有 skill）vs baseline（无 skill）三分量对比。
 
     #11：不只看 token，步数与耗时同时给出提升率，由 report.py 综合裁决。
     任一分量缺数据 → 该分量标 skipped，不拖累其他分量。"""
@@ -114,7 +114,7 @@ def main():
     baseline = load_json(d / "baseline.json") or []
     trigger = prf1(triggers) if triggers is not None else "skipped"
     cost = {k: stats(runs, k) for k in ("tool_calls", "tokens", "seconds")}
-    # ADR-0016：逐 case 统计（#12 稳定性用组内 cv，避免把 case 间的难度差算成抖动）
+    # ADR-0016：逐 case 统计（#15 稳定性用组内 cv，避免把 case 间的难度差算成抖动）
     groups = by_case(runs)
     cost_by_case = ({c: {k: stats(rs, k) for k in ("tool_calls", "tokens", "seconds")}
                      for c, rs in sorted(groups.items())} if groups else None)

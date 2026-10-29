@@ -15,7 +15,6 @@ from pathlib import Path
 
 SCRIPTS = Path(__file__).parent.parent / "scripts"
 SCRIPT = SCRIPTS / "report.py"
-EVO = SCRIPTS / "evolution.py"
 
 
 def write_inputs(d: Path, files: dict):
@@ -69,7 +68,7 @@ def run_html_md(d: Path):
             (d / "report.md").read_text(encoding="utf-8"))
 
 
-def base_inputs(idem=None, compare=None, process=None, brevity=1) -> dict:
+def base_inputs(idem=None, compare=None, brevity=1) -> dict:
     cost = {"tool_calls": {"mean": 10.8, "std": 6.99, "n": 20, "min": 3, "max": 33},
             "tokens": {"mean": 42195.1, "std": 12498.9, "n": 20, "min": 29848, "max": 83385},
             "seconds": {"mean": 96.3, "std": 67.5, "n": 20, "min": 36.4, "max": 315.6}}
@@ -90,8 +89,6 @@ def base_inputs(idem=None, compare=None, process=None, brevity=1) -> dict:
         files["compare.json"] = {"mean_score": 2.0, "match": True, "note": "5/5 case 匹配",
                                  "per_case": [{"name": f"c{i}", "match": True, "score": 2,
                                                "reason": f"case {i} 的理由" * 1} for i in range(1, 6)]}
-    if process is not None:
-        files["process.json"] = process
     return files
 
 
@@ -168,7 +165,7 @@ def test_meta_json_written_with_skill_and_evalset(tmp_path):
     assert meta["skill_fingerprint"]["path"] == str(skill)
     assert meta["evalset_source"] == {"name": "myskill", "version": "v1", "frozen": True,
                                       "frozen_at": "2026-09-22", "reviewed_by": "human"}
-    assert meta["metrics"] == {"total": 19, "measured": 0, "skipped": 19}
+    assert meta["metrics"] == {"total": 16, "measured": 0, "skipped": 16}
     assert meta["conclusion"] == load(tmp_path, "report.json")["conclusion"]
 
 
@@ -221,7 +218,7 @@ def test_evalset_quality_downgrades_pass_to_warn(tmp_path):
     write_inputs(tmp_path, {"score.json": {**stable_cost(), "trigger": {"precision": 1.0, "recall": 1.0, "f1": 0.95}},
                             "evalset.json": {"checked": 5, "clean": False, "note": "2 条 should prompt 与 description 高度重合"}})
     out = run_report(tmp_path)
-    m1 = out["metrics"]["#1"]
+    m1 = out["metrics"]["#10"]
     assert m1["verdict"] == "warn"
     assert m1["data"]["f1"] == 0.95  # 数字仍保留，别丢证据
     assert m1["data"]["evalset_quality"]["clean"] is False
@@ -232,22 +229,22 @@ def test_evalset_quality_keeps_fail(tmp_path):
     write_inputs(tmp_path, {"score.json": {**stable_cost(), "trigger": {"precision": 0.3, "recall": 0.4, "f1": 0.34}},
                             "evalset.json": {"checked": 5, "clean": False, "note": "照抄"}})
     out = run_report(tmp_path)
-    assert out["metrics"]["#1"]["verdict"] == "fail"  # 不因降级把 fail 洗成 warn
+    assert out["metrics"]["#10"]["verdict"] == "fail"  # 不因降级把 fail 洗成 warn
 
 
 def test_evalset_quality_ignored_when_trigger_skipped(tmp_path):
     write_inputs(tmp_path, {"evalset.json": {"checked": 5, "clean": False, "note": "照抄"}})
     out = run_report(tmp_path)
-    assert out["metrics"]["#1"]["verdict"] == "skipped"
-    assert out["metrics"]["#1"]["data"] is None
+    assert out["metrics"]["#10"]["verdict"] == "skipped"
+    assert out["metrics"]["#10"]["data"] is None
 
 
 def test_clean_evalset_does_not_touch_1(tmp_path):
     write_inputs(tmp_path, {"score.json": {**stable_cost(), "trigger": {"precision": 1.0, "recall": 1.0, "f1": 0.95}},
                             "evalset.json": {"checked": 5, "clean": True, "note": "ok"}})
     out = run_report(tmp_path)
-    assert out["metrics"]["#1"]["verdict"] == "pass"
-    assert out["metrics"]["#1"]["note"] == "F1 及格线 0.7"
+    assert out["metrics"]["#10"]["verdict"] == "pass"
+    assert out["metrics"]["#10"]["note"] == "F1 及格线 0.7"
 
 
 # --- #12 跨模型一致性折入（ADR-0011）---
@@ -257,7 +254,7 @@ def test_model_robust_downgrades_stable_cost(tmp_path):
                             "model_robust.json": {"skipped": False, "robust": False, "models": ["a", "b"],
                                                   "agreement_ratio": 0.25, "note": "2 个模型 × 4 个 case：一致 1/4"}})
     out = run_report(tmp_path)
-    m12 = out["metrics"]["#12"]
+    m12 = out["metrics"]["#15"]
     assert m12["verdict"] == "warn"
     assert m12["data"]["intra_model_cost"]["cost"]["tool_calls"]["n"] == 3  # 两信号分写
     assert m12["data"]["model_robust"]["agreement_ratio"] == 0.25
@@ -269,15 +266,15 @@ def test_model_robust_does_not_upgrade_single_run(tmp_path):
                             "model_robust.json": {"skipped": False, "robust": True, "models": ["a", "b"],
                                                   "agreement_ratio": 1.0, "note": "一致"}})
     out = run_report(tmp_path)
-    assert out["metrics"]["#12"]["verdict"] == "warn"  # 单次运行不能靠跨模型洗成 pass
+    assert out["metrics"]["#15"]["verdict"] == "warn"  # 单次运行不能靠跨模型洗成 pass
 
 
 def test_model_robust_gives_12_evidence_without_cost_data(tmp_path):
     write_inputs(tmp_path, {"model_robust.json": {"skipped": False, "robust": True, "models": ["a", "b"],
                                                   "agreement_ratio": 1.0, "note": "一致"}})
     out = run_report(tmp_path)
-    assert out["metrics"]["#12"]["verdict"] == "pass"
-    assert out["metrics"]["#12"]["data"]["intra_model_cost"] is None
+    assert out["metrics"]["#15"]["verdict"] == "pass"
+    assert out["metrics"]["#15"]["data"]["intra_model_cost"] is None
 
 
 def test_model_robust_skipped_is_not_folded(tmp_path):
@@ -285,68 +282,14 @@ def test_model_robust_skipped_is_not_folded(tmp_path):
                             "model_robust.json": {"skipped": True, "robust": None,
                                                   "note": "只有 1 个模型的 trace"}})
     out = run_report(tmp_path)
-    assert out["metrics"]["#12"]["verdict"] == "pass"  # 与未启用跨模型时一致
-    assert out["metrics"]["#12"]["data"]["cost"]["tool_calls"]["n"] == 3
-
-
-# --- #14 评估器指纹可比性（evolution）---
-
-def make_result(d: Path, version: str, evaluator=None, meta_only=False):
-    vdir = d / "results" / version
-    vdir.mkdir(parents=True)
-    report = {"metrics": {"#2": {"verdict": "pass", "method": "静态检查", "data": None, "note": ""}},
-              "conclusion": "with-warnings"}
-    if evaluator:
-        report["evaluator"] = {"version": evaluator}
-    (vdir / "report.json").write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
-    if meta_only:
-        (vdir / "meta.json").write_text(json.dumps({"evaluator": {"version": evaluator}}), encoding="utf-8")
-
-
-def run_evo(d: Path):
-    r = subprocess.run([sys.executable, str(EVO), str(d)], capture_output=True, text=True, encoding="utf-8", errors="replace")
-    assert r.returncode == 0, r.stderr
-    return json.loads(r.stdout)
-
-
-def test_same_fingerprint_is_comparable(tmp_path):
-    make_result(tmp_path, "v1", evaluator="auto-aaaa1111")
-    make_result(tmp_path, "v2", evaluator="auto-aaaa1111")
-    out = run_evo(tmp_path)
-    assert out["comparable"] is True
-    assert "auto-aaaa1111" in out["evaluator_note"]
-
-
-def test_different_fingerprint_not_comparable(tmp_path):
-    make_result(tmp_path, "v1", evaluator="auto-aaaa1111")
-    make_result(tmp_path, "v2", evaluator="auto-bbbb2222")
-    out = run_evo(tmp_path)
-    assert out["comparable"] is False
-    assert out["evaluator_versions"] == {"v1": "auto-aaaa1111", "v2": "auto-bbbb2222"}
-    assert "不构成" in out["evaluator_note"]
-
-
-def test_missing_fingerprint_is_unknown(tmp_path):
-    make_result(tmp_path, "v1")
-    make_result(tmp_path, "v2")
-    out = run_evo(tmp_path)
-    assert out["comparable"] is None
-    assert "可比性未知" in out["evaluator_note"]
-
-
-def test_fingerprint_read_from_meta_json_fallback(tmp_path):
-    # 旧报告可能没有 evaluator 字段，但 meta.json 有 → 仍要读出来
-    make_result(tmp_path, "v1")
-    make_result(tmp_path, "v2", evaluator="auto-cccc3333", meta_only=True)
-    out = run_evo(tmp_path)
-    assert out["evaluator_versions"]["v2"] == "auto-cccc3333"
-    assert out["comparable"] is None  # v1 缺失 → 未知
+    assert out["metrics"]["#15"]["verdict"] == "pass"  # 与未启用跨模型时一致
+    assert out["metrics"]["#15"]["data"]["cost"]["tool_calls"]["n"] == 3
 
 
 # --- data 渲染层回归（本地批次）---
 
 def test_long_data_not_truncated_in_html(tmp_path):
-    # 回归：旧实现 [:2000] 会把 2165 字符的 #15 data 切成非法 JSON（尾部的 TAIL-MARKER 丢失）
+    # 回归：旧实现 [:2000] 会把 2165 字符的 #16 data 切成非法 JSON（尾部的 TAIL-MARKER 丢失）
     write_inputs(tmp_path, base_inputs(idem=long_idem()))
     html, _md = run_html_md(tmp_path)
     assert "TAIL-MARKER" in html                      # 尾部内容活着（没被 2000 截断）
@@ -359,18 +302,13 @@ def test_long_data_not_truncated_in_html(tmp_path):
 def test_md_every_data_rendered_as_table(tmp_path):
     # ADR-0030 改写了本用例：**旧契约**是"无表可渲染的长 data 只留 report.json 指针"，
     # 新契约要求所有指标 data 一律表格化（需求 1）——指针分支因此不再可达。
-    write_inputs(tmp_path, base_inputs(idem=long_idem(),
-                                       process={"meaningless": ["越界步骤" * 200], "score": 0,
-                                                "reason": "过程与声明不符"}))
+    write_inputs(tmp_path, base_inputs(idem=long_idem()))
     html, md = run_html_md(tmp_path)
-    # #15：Markdown 表格 + 摘要行，不再重复整块 JSON
-    idem_sec = md.split("### #15")[1].split("### ")[0]
+    # #16：Markdown 表格 + 摘要行，不再重复整块 JSON
+    idem_sec = md.split("### #16")[1].split("### ")[0]
     assert "| case | pair | ratio |" in idem_sec and "ratio 0.148" in idem_sec  # _fmt 保留 3 位
-    # #10：无定制表也走通用兜底（@项目/内容），不再是一坨 JSON 或指针
-    proc_sec = md.split("### #10")[1].split("### ")[0]
-    assert "| 项目 | 内容 |" in proc_sec and "越界步骤" in proc_sec
-    # 短 data（#2 只有 description_tokens）同样是表
-    assert "| 字段 | 值 |" in md.split("### #2")[1].split("### ")[0]
+    # 短 data（#1 只有 description_tokens）同样是表
+    assert "| 字段 | 值 |" in md.split("### #1")[1].split("### ")[0]
     assert "```json" not in md                      # 全文本已无裸 JSON
     # HTML 侧：有表就折叠原始 JSON
     assert "<details" in html and "<table" in html

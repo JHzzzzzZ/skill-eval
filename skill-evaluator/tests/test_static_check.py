@@ -541,7 +541,7 @@ def test_body_lines_over_limit_warns_not_fails(tmp_path):
     out = run_check(d)
     assert out["skill_md_body_lines"] == 151
     assert out["passed"] is True                    # 仅 warning；不 fail 可移植性/结构闸门
-    assert any("#3" in w and "151" in w for w in out["warnings"])
+    assert any("#2" in w and "151" in w for w in out["warnings"])
 
 
 def test_body_lines_null_without_skill_md(tmp_path):

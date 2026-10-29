@@ -7,7 +7,7 @@
 2. 长 prompt 走 argv 在 Windows 会 CreateProcess 失败（rc=1 空输出）→ prompt 一律走
    stdin（pi 无位置消息时从 stdin 读，语义等价）。
 3. pi 的 LLM 裁决必须用 `--mode json` 事件流输出：compare.extract_answer 只认
-   agent_end 事件，text 模式（-p）的输出永远解析不出 JSON（#1/#9/#10 假阴性根因）。
+   agent_end 事件，text 模式（-p）的输出永远解析不出 JSON（#10/#14 假阴性根因）。
 
 ask_json() 是三个判定脚本的唯一实跑入口：调用侧只管给 prompt，拿回事件流全文。
 """
@@ -78,7 +78,7 @@ def run_pi(mode_args: list, prompt: str | None = None, timeout: int | None = Non
 
 def json_args(mode_args: list) -> list:
     """判定调用的完整参数：必须走 --mode json 事件流（extract_answer 只认事件流，
-    text 模式恒解析失败——#1/#9/#10 假阴性根因，勿改回 -p）。"""
+    text 模式恒解析失败——#10/#14 假阴性根因，勿改回 -p）。"""
     return ["--mode", "json", "--no-session", "--no-skills", *mode_args]
 
 

@@ -1,8 +1,8 @@
-"""ISS-2 产品化：LLM 按 judges/trigger.md rubric 精判 agent 是否"使用了该 skill"（#1 二级精判）。
+"""ISS-2 产品化：LLM 按 judges/trigger.md rubric 精判 agent 是否"使用了该 skill"（#10 二级精判）。
 Seam: python trigger_judge.py --skill <SKILL.md> --trace <trace.json> [--model m] [--thinking t]
                               [--events jsonl] [--out f] [--rubric f] [--threshold 0.5]
 
-输出：judge 契约（#5 逐项计分）+ 布尔化结果
+输出：judge 契约（逐项计分）+ 布尔化结果
 {"triggered": bool, "score": 0~1, "threshold": float, "items": [...], "evidence": [...], "reason": str}
 score 一律由 items 推导（pass 项数/总项数），judge_runner.validate 强制校验；
 triggered = score >= threshold（默认 0.5，可配 TRIGGER_PASS_SCORE / --threshold）。
@@ -22,7 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from compare import extract_answer  # 同一 JSON 提取逻辑（花括号配对，支持嵌套 items[]）
-from judge_runner import score_of_items, validate  # #5 同一计分/校验口径
+from judge_runner import score_of_items, validate  # 同一计分/校验口径
 from _subprocess import ask_json, build_mode_args
 import _config
 
@@ -47,7 +47,7 @@ def build_prompt(rubric: str, description: str, answer: str, steps, early_exit: 
 def normalize_payload(raw) -> tuple:
     """LLM 原始输出 → (judge 契约 | None, errors)。
 
-    score 一律由 items 推导（#5），不信任模型自报分值；score<1 时缺失的
+    score 一律由 items 推导，不信任模型自报分值；score<1 时缺失的
     evidence 用失败项自身的 quote 补齐（引用不凭空编造）。结构/契约不合法 → None。
     """
     if not isinstance(raw, dict):

@@ -16,8 +16,7 @@ import sys
 from pathlib import Path
 
 SCRIPT = Path(__file__).parent.parent / "scripts" / "report.py"
-JUDGES = ("brevity", "redundancy", "fallback", "precheck", "contract",
-          "side-effects", "deps", "pii")
+JUDGES = ("brevity", "redundancy", "fallback", "precheck", "contract", "deps", "pii")
 # 徽章四档的底色（与 _HTML_TMPL 的 .badge.vf-* 同源，仅用于测试断言）
 BADGE_BG = {"pass": "#0b7a3d", "warn": "#b7791f", "fail": "#b23b3b", "skipped": "#6b7280"}
 BODY_COLOR = "#1c2733"   # body{color:...}：徽章没自带颜色时的继承值
@@ -122,16 +121,13 @@ def mixed_inputs() -> dict:
         "golden.json": {"steps": [], "answer": "a", "errors": [], "tokens": 10, "seconds": 1},
         "compare.json": {"mean_score": 2.0, "match": True, "note": "2/2 匹配",
                          "per_case": [{"name": "c1", "match": True, "score": 2, "reason": "对"}]},
-        "process.json": {"score": 2, "meaningless": [], "reason": "过程与声明一致"},
         "idem.json": {"ratio": 0.1, "idempotent": True, "pairs": 3, "idempotent_pairs": 3,
                       "per_pair": [{"case": "c1", "pair": "a->b", "ratio": 0.1,
                                     "repeated_steps": 1, "total_steps": 10, "idempotent": True}]},
-        "evolution.json": {"versions": ["v1"], "changes": [], "comparable": True,
-                           "latest_conclusion": "all-pass"},
     }
     for name in JUDGES:
         files[f"judges/{name}.json"] = judge()
-    # 混合裁决：fail（#13 可移植性闸门）+ warn（#11 部分过）+ skipped（#8 无 golden）
+    # 混合裁决：fail（#4 可移植性闸门）+ warn（#6 fallback 部分过）+ skipped（#12 无 golden）
     files["static.json"]["hardcoded"] = [{"pattern": "posix", "line": 7, "file": "SKILL.md",
                                           "text": "python /Users/someone/x.py"}]
     files["judges/fallback.json"] = judge(0.5, [

@@ -1,35 +1,34 @@
 # skill-evaluator
 
-A skill that evaluates other skills — against 19 quality metrics, producing a machine-readable `report.json` and a human-readable `report.md`.
+A skill that evaluates other skills — against 16 quality metrics, producing a machine-readable `report.json` and a human-readable `report.md`.
 
 It is itself a skill (for [pi](https://github.com/earendil-works/pi-coding-agent)), not a web service: copy it into your skills directory, point it at any skill package, and run it.
 
 ## What it checks
 
-19 metrics are grouped by **measurement method**, not run one-by-one:
+16 metrics are grouped by **measurement method**, not run one-by-one:
 
 | Method | Metrics | Tooling |
 |---|---|---|
-| Static analysis | #2 name/description rules & character budget (384 warn / 1024 fail), #7 invocation mode, #13 dangerous-command scan, #3 body line count (primary source, 150 warn / 500 fail) | `scripts/static_check.py` |
-| Sandbox runs | #1 trigger precision/recall/F1, #4 cost stats, #5 necessity A/B, #8 minimal deps, #9 result verification, #10 process audit, #12 stability, #15 idempotency | `scripts/trace_run.py`, `score.py`, `trigger_judge.py`, `idem.py`, `compare.py`, `process.py` |
-| LLM review | #3 brevity (two semantic checkpoints, supporting evidence), #6 redundancy, #11 fallback, #16 pre-check, #17/18 I/O contract, #19 side-effect reversibility, #13 PII semantics (employees IDs / customer names / internal hosts), #8 dependency completeness | `judges/*.md` rubrics + `judge_runner.py` |
-| Historical diff | #14 version evolution | `scripts/evolution.py` |
-| Trustworthiness | #1 eval-set quality (description echo / duplicates / cross-group conflicts), #12 cross-model agreement | `scripts/evalset_check.py`, `model_robust.py` |
+| Static analysis | #1 name/description rules & character budget (384 warn / 1024 fail), #3 invocation mode, #4 dangerous-command scan, #2 body line count (150 warn / 500 fail), #12 dependency completeness | `scripts/static_check.py` |
+| Sandbox runs | #10 trigger P/R/F1, #13 cost, #11 necessity A/B, #12 minimal deps, #14 result verification, #15 stability, #16 idempotency | `scripts/trace_run.py`, `score.py`, `trigger_judge.py`, `idem.py`, `compare.py` |
+| LLM review | #2 brevity (semantic), #5 redundancy, #6 fallback, #7 pre-check, #8/#9 I/O contract, #4 PII semantics (employee IDs / customer names / internal hosts) | `judges/*.md` rubrics + `judge_runner.py` |
+| Trustworthiness | #10 eval-set quality (description echo / duplicates / cross-group conflicts), #15 cross-model agreement | `scripts/evalset_check.py`, `model_robust.py` |
 
-Several metrics share one sandbox run — the 6 scenarios are grouped into incremental tiers (T0–T4, default T2); see `skill-evaluator/reference.md` (§ Run Scenarios) and ADR-0014.
+Several metrics share one sandbox run — the 6 scenarios are grouped into incremental tiers (T0 / T1 / T2A / T2B / T3, default T2A); see `skill-evaluator/reference.md` (§ Run Scenarios) and ADR-0014.
 
 ## Layout
 
 ```
 skill-evaluator/
-├── SKILL.md            # orchestration: tiered flow (T0–T4, default T2), indexes only
+├── SKILL.md            # orchestration: tiered flow (T0 / T1 / T2A / T2B / T3, default T2A), indexes only
 ├── reference.md        # details: tier definitions, metric map, sandbox, versioning, contracts, fallbacks
 ├── config.yaml         # tunable thresholds (384/1024 chars, 150/500 lines, ...); part of the fingerprint
 ├── LICENSE             # MIT
 ├── requirements.txt    # zero runtime deps (stdlib); pytest for tests only
 ├── judges/             # LLM-judge rubrics (structured JSON output, fixed single-shot prompt)
-├── scripts/            # deterministic tooling; check-deps.sh = preflight (#16)
-└── tests/              # 321 tests, subprocess-seam based
+├── scripts/            # deterministic tooling; check-deps.sh = preflight (#7)
+└── tests/              # 293 tests, subprocess-seam based
 docs/adr/               # 37 architecture decisions
 ```
 
@@ -47,12 +46,12 @@ Optional:
 - `SKILL_EVAL_MODEL=<provider/id>`: pin the model used for sandbox runs and LLM judging (defaults to the pi default model).
 - `SKILL_EVAL_REVIEW_MODEL=<provider/id>`: model for AI review of eval sets (must differ from the generation model; if unset, picked interactively on first run).
 
-Tier entry: `--tier <static|review|trigger|core|full>` (default T2); higher tiers reuse lower-tier artifacts (validated against the evaluated skill's content hash).
+Tier entry: `--tier <t0|t1|t2a|t2b|t3>` (default T2A); higher tiers reuse lower-tier artifacts (validated against the evaluated skill's content hash).
 
 ## Key contracts
 
-- **Report**: all 19 keys always present; unmeasured metrics are `skipped` (never scored 0); no weighted total — three-tier conclusion only (`all-pass` / `with-warnings` / `has-failures`); a `tier` field records the highest tier reached.
-- **Eval sets**: human-provided preferred; auto-generated ones are frozen after AI review with a different model (`reviewed_by: "ai"`), upgradable to `"human"` after manual re-review; frozen sets are reused across versions (that's what makes #14 evolution comparable).
+- **Report**: all 16 keys always present; unmeasured metrics are `skipped` (never scored 0); no weighted total — three-tier conclusion only (`all-pass` / `with-warnings` / `has-failures`); a `tier` field records the highest tier reached.
+- **Eval sets**: human-provided preferred; auto-generated ones are frozen after AI review with a different model (`reviewed_by: "ai"`), upgradable to `"human"` after manual re-review; frozen sets are reused across versions (that's what makes cross-version comparison possible).
 - **Versioning**: git commit short hash; bare folders get `auto-<hash>` after an evaluator-side snapshot commit.
 - **LLM judge outputs**: must pass `judge_runner.py --validate` before entering a report.
 - **Evaluator fingerprint**: `report.json` and `results/meta.json` record the evaluator's own content hash; `evolution.py` flags `comparable=false` when two versions came from different evaluators, instead of reading the diff as a regression (ADR-0010).
@@ -61,7 +60,7 @@ Tier entry: `--tier <static|review|trigger|core|full>` (default T2); higher tier
 
 ```bash
 cd skill-evaluator
-python -m pytest tests        # 321 tests, all green
+python -m pytest tests        # 293 tests, all green
 ```
 
 Design decisions and their reasoning live in `docs/adr/`. See `README_CN.md` for the Chinese version.

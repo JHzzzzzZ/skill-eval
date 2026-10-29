@@ -2,7 +2,7 @@
 
 另提供 --merge：多次单发评审逐项多数票（JUDGE_SAMPLES=3 的落地，ADR-0028）。
 
-契约（judges/*.md 的输出节，#5 逐项计分）：
+契约（judges/*.md 的输出节，逐项计分）：
 {"items": [{"name": str, "pass": bool, "quote": str}], "score": 0~1, "evidence": [str...], "reason": str}
 - items 必须非空，每项带检查点名、布尔结果、原文引用
 - score 由 items 推导（可复现）：pass 项数 / 总项数（0~1，两位小数）；不一致即拒绝
@@ -18,7 +18,7 @@ from pathlib import Path
 
 
 def score_of_items(items: list) -> float:
-    """#5 归一化：pass 项数 / 总项数（0~1，两位小数）。唯一权威口径，rubric 与校验器共用。"""
+    """逐项计分归一化：pass 项数 / 总项数（0~1，两位小数）。唯一权威口径，rubric 与校验器共用。"""
     passed = sum(1 for it in items if it.get("pass") is True)
     return round(passed / len(items), 2)
 
@@ -29,7 +29,7 @@ def validate(payload) -> list:
         return ["顶层必须是 JSON 对象"]
     items = payload.get("items")
     if not isinstance(items, list) or not items:
-        errors.append("items 必须是非空数组（#5 逐项计分）")
+        errors.append("items 必须是非空数组（逐项计分）")
         items = None
     else:
         for i, it in enumerate(items):
@@ -44,7 +44,7 @@ def validate(payload) -> list:
     elif items:
         expected = score_of_items(items)
         if abs(score - expected) > 1e-9:
-            errors.append(f"score={score} 与 items 推导值 {expected} 不一致（#5：pass 项数/总项数）")
+            errors.append(f"score={score} 与 items 推导值 {expected} 不一致（pass 项数/总项数）")
     evidence = payload.get("evidence")
     if not isinstance(evidence, list) or not all(isinstance(e, str) for e in evidence):
         errors.append("evidence 必须是字符串数组")
@@ -59,7 +59,7 @@ def merge(payloads: list) -> dict:
     """多次单发评审逐项多数票（ADR-0028）。
 
     为什么是多数票而不是“取中位数”：item 的 pass 是布尔，三次投票的中位数就是多数票；
-    score 仍由合并后的 items 推导（#5 口径不变）。票型、分歧项与各次得分一并留在输出里，不静默丢。
+    score 仍由合并后的 items 推导（口径不变）。票型、分歧项与各次得分一并留在输出里，不静默丢。
     缺席项按“未投票”处理（只统计实际出现过的票），全缺席即拒绝。
     """
     if not payloads:
