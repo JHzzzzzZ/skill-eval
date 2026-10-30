@@ -70,7 +70,9 @@
   .hero .hintbox strong{display:block;font-size:12px;color:var(--muted);font-weight:600;margin-bottom:2px}
 
   .layout{display:grid;grid-template-columns:minmax(0,1.12fr) minmax(350px,.88fr);gap:18px;align-items:stretch}
-  .stack{display:grid;gap:18px}
+  .layout > .stack:last-child{display:flex;flex-direction:column;min-width:0}
+  .stack{display:grid;gap:18px;min-width:0;align-content:start}
+  #result{min-width:0}
   .card{
     background:color-mix(in srgb,var(--card) 94%,transparent);
     border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow-sm);
@@ -143,7 +145,7 @@
   .inline-note{font-size:11.5px;color:var(--muted);line-height:1.45}
   .inline-note code{font-family:var(--mono);font-size:11px;background:var(--card);padding:1px 5px;border-radius:5px;border:1px solid var(--line)}
 
-  .progress-card{position:sticky;top:18px;z-index:6;align-self:start}
+  .progress-card{position:sticky;top:18px;z-index:6;flex:0 0 auto}
   .progress-top{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}
   .progress-top strong{font-size:13px}
   .progress-top span{font-family:var(--mono);font-size:12px;color:var(--muted)}
@@ -175,7 +177,7 @@
   .stat small{display:block;color:var(--muted);font-size:11px;letter-spacing:.04em;text-transform:uppercase}
   .stat b{display:block;font-size:21px;letter-spacing:-.03em;margin-top:3px}
   .stat.pass b{color:var(--pass)} .stat.fail b{color:var(--fail)} .stat.warn b{color:var(--warn)}
-  .table-wrap{overflow:auto;border:1px solid var(--line);border-radius:14px}
+  .table-wrap{overflow:auto;max-width:100%;border:1px solid var(--line);border-radius:14px}
   table{border-collapse:separate;border-spacing:0;width:100%;font-size:12.5px;min-width:760px}
   th,td{padding:10px 12px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
   th{background:var(--card-soft);color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.06em;position:sticky;top:0;z-index:1}
@@ -204,11 +206,13 @@
   @keyframes slidein{from{transform:translateY(8px);opacity:0}to{transform:none;opacity:1}}
   .empty{padding:26px;text-align:center;color:var(--muted);font-size:13px}
   @media(max-width:1000px){
-    .layout{grid-template-columns:1fr}
-    .progress-card{position:static}
     .tier-grid{grid-template-columns:repeat(2,1fr)}
     .hero{flex-direction:column;align-items:flex-start}
     .stats{grid-template-columns:1fr 1fr}
+  }
+  @media(max-width:760px){
+    .layout{grid-template-columns:1fr}
+    .progress-card{position:sticky;top:8px;max-height:calc(100vh - 16px);overflow:auto}
   }
   @media(max-width:640px){
     .shell{padding:18px 14px 50px}
