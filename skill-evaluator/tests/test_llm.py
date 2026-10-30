@@ -67,6 +67,9 @@ def test_anthropic_request_and_response(monkeypatch):
     assert seen["body"]["messages"][-1]["content"] == "问题"
 
 
-def test_default_base_url_is_official():
+def test_default_base_url_is_official(monkeypatch):
+    monkeypatch.setattr(llm._config, "get_str", lambda key, default="": "" if key == "llm.base_url" else default)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
     assert llm.base_url("", "openai") == "https://api.openai.com/v1"
     assert llm.base_url("", "anthropic") == "https://api.anthropic.com/v1"

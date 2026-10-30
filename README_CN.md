@@ -51,7 +51,7 @@ docs/adr/               # 38 条架构决策记录
 可选：
 
 - `SKILL_EVAL_MODEL=<provider/id>`：固定 T2+ 沙箱运行用的模型（默认用 pi 当前模型）
-- T1 直连 LLM：页面字段 > `config.yaml`（`llm.base_url` / `llm.model` / `llm.api_key_env`）> 标准环境变量（`OPENAI_API_KEY` / `ANTHROPIC_API_KEY`、`OPENAI_BASE_URL` / `ANTHROPIC_BASE_URL`、`SKILL_EVAL_MODEL`）> 官方端点；页面 key 只用于本次运行，不落盘。`--backend pi` 回退旧路径
+- T1 直连 LLM：页面字段 > `config.yaml`（`llm.base_url` / `llm.model` / `llm.api_key_env`）> 标准环境变量（`OPENAI_API_KEY` / `ANTHROPIC_API_KEY`、`OPENAI_BASE_URL` / `ANTHROPIC_BASE_URL`、`SKILL_EVAL_MODEL`）> 官方端点；页面 key 只用于本次运行，不落盘；本机 pi 可用 `llm.api_key_file` + `llm.api_key_provider` 从 `~/.pi/agent/auth.json` 读 key，不复制到 config。`--backend pi` 回退旧路径
 - `SKILL_EVAL_REVIEW_MODEL=<provider/id>`：评测集 AI 审核用的模型（必须与生成阶段不同源；不设则首次运行交互选择）
 
 档位入口：`--tier <t0|t1|t2a|t2b|t3>`（默认 T2A），高档复用低档产物（按被测 skill 的 content_sha256 判定）。

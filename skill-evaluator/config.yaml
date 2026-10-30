@@ -66,11 +66,17 @@ llm:
   # T1 评审直连协议：openai（/v1/chat/completions）或 anthropic（后续）。默认 openai。
   protocol: openai
   # 端点；留空 = 先读 OPENAI_BASE_URL/ANTHROPIC_BASE_URL，再回退官方端点。单位：URL。
-  base_url: ""
+  # 本机取 pi 的默认 provider（settings.json: opencode-go）。
+  base_url: "https://opencode.ai/inference/go/v1"
   # 凭据来源：已存在的环境变量名；留空 = 标准 OPENAI_API_KEY/ANTHROPIC_API_KEY。单位：变量名。
   api_key_env: ""
+  # 可选：本地 JSON 凭据文件（pi 的 auth.json 格式），不把密钥写进本文件。
+  api_key_file: "~/.pi/agent/auth.json"
+  # 从 api_key_file 取哪个 provider 的 key（pi auth.json 的顶层键）。
+  api_key_provider: "opencode-go"
   # T1 默认模型；留空 = 页面 --model 或 SKILL_EVAL_MODEL。单位：provider/id。
-  model: ""
+  # 本机取 pi 的默认模型（settings.json: deepseek-v4.1-flash）。
+  model: "deepseek-v4.1-flash"
   # 单次评审 prompt 的被测文件总字符上限；超过截断并标注。单位：字符。默认 60000。
   max_input_chars: 60000
 

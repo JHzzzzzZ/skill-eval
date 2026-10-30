@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
+from pathlib import Path
 import urllib.error
 import urllib.request  # static-check:ignore
 
@@ -59,6 +61,23 @@ def default_model(override: str | None = None) -> str:
     return value
 
 
+def _file_key() -> str:
+    """可选：从 pi 的 auth.json 这类本地凭据文件取 key；不把密钥写进 config/报告。"""
+    path = _config.get_str("llm.api_key_file", "").strip()
+    provider = _config.get_str("llm.api_key_provider", "").strip()
+    if not path or not provider:
+        return ""
+    try:
+        data = json.loads(Path(os.path.expanduser(path)).read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return ""
+    entry = data.get(provider) if isinstance(data, dict) else None
+    if isinstance(entry, dict):
+        value = entry.get("key") or entry.get("apiKey") or ""
+        return str(value)
+    return ""
+
+
 def api_key(override: str | None = None, proto: str | None = None) -> str:
     if override:
         return override
@@ -67,6 +86,9 @@ def api_key(override: str | None = None, proto: str | None = None) -> str:
         value = os.environ.get(env_name, "")
         if value:
             return value
+    file_value = _file_key()
+    if file_value:
+        return file_value
     proto = proto or protocol()
     return os.environ.get("ANTHROPIC_API_KEY" if proto == "anthropic" else "OPENAI_API_KEY", "")
 
@@ -102,8 +124,12 @@ def _request_body(proto: str, model: str, prompt: str, system: str | None) -> di
     return body
 
 
-def _headers(proto: str, key: str) -> dict:
-    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+def _headers(proto: str, key: str, root: str = "") -> dict:
+    headers = {"Content-Type": "application/json", "Accept": "application/json",
+               "User-Agent": "skill-evaluator/2.0"}
+    if "opencode.ai" in root:
+        # opencode-go 的网关要求会话标识；每次评审独立，避免复用编排 agent 的会话
+        headers["x-opencode-session"] = uuid.uuid4().hex
     if key:
         if proto == "anthropic":
             headers["x-api-key"] = key
@@ -146,7 +172,7 @@ def chat(prompt: str, *, model: str | None = None, system: str | None = None,
     body = _request_body(proto, model_id, prompt, system)
     url = _endpoint(proto, root)
     req = urllib.request.Request(url, data=json.dumps(body, ensure_ascii=False).encode("utf-8"),  # static-check:ignore
-                                 headers=_headers(proto, key), method="POST")
+                                 headers=_headers(proto, key, root), method="POST")
     timeout = timeout or _config.get_int("run.timeout_s", 300)
     open_fn = opener or urllib.request.urlopen  # static-check:ignore
     try:
@@ -179,6 +205,7 @@ def status() -> dict:
         return {"protocol": proto, "base_url": base_url(proto=proto),
                 "model": _config.get_str("llm.model", "") or os.environ.get("SKILL_EVAL_MODEL", ""),
                 "api_key_env": _config.get_str("llm.api_key_env", ""),
+                "api_key_provider": _config.get_str("llm.api_key_provider", ""),
                 "configured": configured()}
     except LLMError as exc:
         return {"protocol": "openai", "base_url": "", "model": "",

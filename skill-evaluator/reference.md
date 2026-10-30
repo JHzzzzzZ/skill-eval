@@ -111,7 +111,7 @@ T2+ 执行载体（harness）的模型三层优先级：
 2. 环境变量 `SKILL_EVAL_MODEL=<provider/id>`（会话级默认，推荐在评估开始前设置）
 3. pi 自身的默认模型（兜底）
 
-T1 评审走 `llm` 接口层（ADR-0034）：模型 `--model` > `llm.model` > `SKILL_EVAL_MODEL`；端点 `--base-url` > `llm.base_url` > `OPENAI_BASE_URL`/`ANTHROPIC_BASE_URL` > 官方端点；凭据 `--api-key` > `llm.api_key_env` 指定的**已存在**变量 > 标准 `OPENAI_API_KEY`/`ANTHROPIC_API_KEY`。页面字段优先于 config，config 优先于环境变量；页面 key 只用于本次运行，不落盘。`--backend pi` 可回退旧路径。评测集 AI 审核是唯一例外，见 § 评测集 AI 审核。
+T1 评审走 `llm` 接口层（ADR-0034）：模型 `--model` > `llm.model` > `SKILL_EVAL_MODEL`；端点 `--base-url` > `llm.base_url` > `OPENAI_BASE_URL`/`ANTHROPIC_BASE_URL` > 官方端点；凭据 `--api-key` > `llm.api_key_env` 指定的**已存在**变量 > `llm.api_key_file` + `llm.api_key_provider`（如 pi 的 `auth.json`，密钥不写进 config）> 标准 `OPENAI_API_KEY`/`ANTHROPIC_API_KEY`。页面字段优先于 config，config 优先于环境变量；页面 key 只用于本次运行，不落盘。`--backend pi` 可回退旧路径。评测集 AI 审核是唯一例外，见 § 评测集 AI 审核。
 
 可选 `--thinking <off|minimal|low|medium|high|xhigh|max>` 控制思考档位。
 

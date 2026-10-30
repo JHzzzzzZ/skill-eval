@@ -51,7 +51,7 @@ The evaluator is **self-contained**: all scripts and tests live inside the skill
 Optional:
 
 - `SKILL_EVAL_MODEL=<provider/id>`: pin the model used for T2+ sandbox runs (defaults to the pi default model).
-- T1 direct LLM: UI fields > `config.yaml` (`llm.base_url` / `llm.model` / `llm.api_key_env`) > standard env (`OPENAI_API_KEY` / `ANTHROPIC_API_KEY`, `OPENAI_BASE_URL` / `ANTHROPIC_BASE_URL`, `SKILL_EVAL_MODEL`) > official endpoint. The UI key is used for this run only and is never written to disk. `--backend pi` falls back to the old path.
+- T1 direct LLM: UI fields > `config.yaml` (`llm.base_url` / `llm.model` / `llm.api_key_env`) > standard env (`OPENAI_API_KEY` / `ANTHROPIC_API_KEY`, `OPENAI_BASE_URL` / `ANTHROPIC_BASE_URL`, `SKILL_EVAL_MODEL`) > official endpoint. The UI key is used for this run only and is never written to disk. For a local pi install, `llm.api_key_file` + `llm.api_key_provider` can read the key from `~/.pi/agent/auth.json` without copying it into config. `--backend pi` falls back to the old path.
 - `SKILL_EVAL_REVIEW_MODEL=<provider/id>`: model for AI review of eval sets (must differ from the generation model; if unset, picked interactively on first run).
 
 Tier entry: `--tier <t0|t1|t2a|t2b|t3>` (default T2A); higher tiers reuse lower-tier artifacts (validated against the evaluated skill's content hash).
