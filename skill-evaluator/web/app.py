@@ -141,6 +141,25 @@ def _evalset_status(evalset: Path, skill: Path) -> dict:
             "frozen": bool(meta.get("frozen_at"))}
 
 
+def _copy_reuse(prev_results: Path, results: Path) -> bool:
+    """把上次的 T0/T1 产物复制到新 results；runner 会用指纹再校验一次。"""
+    if not prev_results.is_dir() or prev_results.resolve() == results.resolve():
+        return False
+    results.mkdir(parents=True, exist_ok=True)
+    copied = False
+    for name in ("static.json", "run-meta.json"):
+        src = prev_results / name
+        if src.is_file():
+            shutil.copy2(src, results / name)
+            copied = True
+    for rel in ("judges", "raw/llm-judge"):
+        src = prev_results / rel
+        if src.is_dir():
+            shutil.copytree(src, results / rel, dirs_exist_ok=True)
+            copied = True
+    return copied
+
+
 def _rerun_report(run) -> dict:
     meta = {}
     try:
@@ -388,6 +407,11 @@ class Handler(BaseHTTPRequestHandler):
         rdir.mkdir(parents=True, exist_ok=True)
         progress = rdir / "progress.ndjson"
         results = rdir / "results"
+        reuse_from = str(data.get("reuse_from") or "")
+        if reuse_from:
+            prev = ACTIVE.get(reuse_from)
+            if prev and prev["proc"].poll() is not None:
+                _copy_reuse(prev["results"], results)
         llm_cfg = data.get("llm") if isinstance(data.get("llm"), dict) else {}
         llm_model = str(llm_cfg.get("model") or data.get("model") or "")
         backend = str(data.get("backend") or ("llm" if llm_cfg else "auto"))
@@ -406,6 +430,10 @@ class Handler(BaseHTTPRequestHandler):
             cmd += ["--evalset", str(data["evalset"])]
         if data.get("harness"):
             cmd += ["--harness", str(data["harness"])]
+        if data.get("rerun_t0"):
+            cmd += ["--rerun-t0"]
+        if data.get("rerun_t1"):
+            cmd += ["--rerun-t1"]
         real = str(data.get("real_input") or "").strip()
         if real:
             rf = rdir / "real-input.json"

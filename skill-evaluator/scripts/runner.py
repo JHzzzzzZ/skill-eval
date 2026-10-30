@@ -20,13 +20,16 @@ import _console
 _console.fix()
 
 import _config
+import llm as llm_layer
+import report as report_mod
 
 SCRIPTS = Path(__file__).resolve().parent
 ROOT = SCRIPTS.parent
 TIERS = ("t0", "t1", "t2a", "t2b", "t3")
 TIER_RANK = {name: i for i, name in enumerate(TIERS)}
 EXCLUDE = {"tests", "evalsets", "uploads", "attic", ".git", "node_modules",
-           "__pycache__", ".sandbox", ".skillrepos", ".pytest_cache"}
+           "__pycache__", ".sandbox", ".skillrepos", ".pytest_cache", "runs"}
+RUBRICS = ("brevity", "redundancy", "fallback", "precheck", "contract", "deps", "pii")
 GUARD = [ROOT.parent] if (ROOT.parent / ".git").exists() else []
 
 
@@ -111,6 +114,47 @@ def _copy_skill(src: Path, dst: Path) -> Path:
     return dst
 
 
+def _skill_digest(skill: Path) -> str:
+    """与被复制进沙箱的内容一致：排除测试/评测集/运行产物，路径 + 内容参与哈希。"""
+    h = hashlib.sha256()
+    for p in sorted(skill.rglob("*")):
+        if not p.is_file():
+            continue
+        rel = p.relative_to(skill)
+        if any(part in EXCLUDE for part in rel.parts) or p.suffix == ".pyc":
+            continue
+        try:
+            h.update(rel.as_posix().encode("utf-8"))
+            h.update(b"\x00")
+            h.update(p.read_bytes())
+        except OSError:
+            continue
+    return h.hexdigest()
+
+
+def _judges_ready(jdir: Path) -> bool:
+    if not jdir.is_dir():
+        return False
+    for metric in RUBRICS:
+        data = _read_json(jdir / f"{metric}.json", {})
+        if not isinstance(data, dict) or not isinstance(data.get("items"), list):
+            return False
+        score = data.get("score")
+        if isinstance(score, bool) or not isinstance(score, (int, float)) or not 0 <= score <= 1:
+            return False
+    return True
+
+
+def _cache_match(old: dict, skill_sha: str, eval_sha, judge_key: dict | None = None) -> bool:
+    if not isinstance(old, dict) or not eval_sha:
+        return False
+    if old.get("skill_sha256") != skill_sha or old.get("evaluator_sha256") != eval_sha:
+        return False
+    if judge_key is not None and old.get("judge") != judge_key:
+        return False
+    return True
+
+
 def _find_evalset(name: str) -> Path | None:
     for base in (ROOT / "evalsets", ROOT.parent / "evalsets"):
         d = base / name
@@ -178,24 +222,40 @@ def run(args) -> int:
         ROOT / "evalsets" / skill.name / "results" / f"auto-{version}"
     results.mkdir(parents=True, exist_ok=True)
     static_path = results / "static.json"
+    old_meta = _read_json(results / "run-meta.json", {}) or {}
+    skill_sha = _skill_digest(skill)
+    eval_info = report_mod.evaluator_fingerprint(ROOT)
+    eval_sha = eval_info.get("content_sha256")
     progress.emit("stage", name="T0", status="start")
 
-    # T0 静态检查
-    _run("static_check.py", [skill, "--out", static_path])
+    # T0 静态检查：同 skill + 同评估器才复用，否则重跑
     static = _read_json(static_path, {}) or {}
+    reuse_static = (not args.rerun_t0 and bool(static)
+                    and isinstance(static.get("passed"), bool)
+                    and _cache_match(old_meta, skill_sha, eval_sha))
+    if not reuse_static:
+        _run("static_check.py", [skill, "--out", static_path])
+        static = _read_json(static_path, {}) or {}
     name = static.get("name") or skill.name
     human = bool(static.get("human")) or (static.get("invoke") or {}).get("resolved") == "human"
-    progress.emit("stage", name="T0", status="done", passed=static.get("passed"))
+    progress.emit("stage", name="T0", status="done", passed=static.get("passed"),
+                  cached=reuse_static)
 
     evalset = Path(args.evalset).resolve() if args.evalset else _find_evalset(name)
     if evalset and not evalset.is_dir():
         raise RunnerError(f"评测集不存在: {evalset}")
     model = args.model or os.environ.get("SKILL_EVAL_MODEL") or None
     judge_backend = ("llm" if (args.base_url or args.api_key or args.llm_protocol) else args.backend)
+    if judge_backend == "auto":
+        judge_backend = "llm" if llm_layer.configured() else "pi"
+    judge_key = {"backend": judge_backend, "model": model or "",
+                 "protocol": args.llm_protocol or "", "base_url": args.base_url or ""}
     _write_json(results / "run-meta.json", {
         "skill": str(skill), "tier": tier, "evalset": str(evalset) if evalset else None,
         "model": model, "harness": args.harness, "llm_protocol": args.llm_protocol,
         "base_url": args.base_url, "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "skill_sha256": skill_sha, "evaluator_sha256": eval_sha,
+        "evaluator_version": eval_info.get("version"), "judge": judge_key,
     })
 
     # T1 评审（默认 llm；未配置时 auto 回落 pi）
@@ -203,29 +263,33 @@ def run(args) -> int:
         progress.emit("stage", name="T1", status="start")
         jdir = results / "judges"
         jdir.mkdir(parents=True, exist_ok=True)
-        rubrics = ("brevity", "redundancy", "fallback", "precheck", "contract", "deps", "pii")
-        workers = max(1, _config.get_int("run.judge_concurrency", 4))
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            futs = {}
-            judge_started = {}
-            for metric in rubrics:
-                judge_started[metric] = time.monotonic()
-                futs[pool.submit(_run, "judge_run.py",
-                                 ["--metric", metric, "--skill", skill,
-                                  "--out", jdir / f"{metric}.json", "--backend", judge_backend,
-                                  "--raw-dir", results / "raw" / "llm-judge",
-                                  "--model", model or "", "--protocol", args.llm_protocol or "",
-                                  "--base-url", args.base_url or "", "--api-key", args.api_key or ""])] = metric
-            for fut in as_completed(futs):
-                metric = futs[fut]
-                elapsed = round(time.monotonic() - judge_started.get(metric, time.monotonic()), 2)
-                try:
-                    fut.result()
-                    progress.emit("judge", metric=metric, status="done", elapsed_s=elapsed)
-                except Exception as exc:
-                    progress.emit("judge", metric=metric, status="skipped", elapsed_s=elapsed,
-                                  error=str(exc))
-        progress.emit("stage", name="T1", status="done")
+        reuse_judges = (not args.rerun_t1 and _judges_ready(jdir)
+                        and _cache_match(old_meta, skill_sha, eval_sha, judge_key))
+        if reuse_judges:
+            progress.emit("stage", name="T1", status="done", cached=True)
+        else:
+            workers = max(1, _config.get_int("run.judge_concurrency", 4))
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futs = {}
+                judge_started = {}
+                for metric in RUBRICS:
+                    judge_started[metric] = time.monotonic()
+                    futs[pool.submit(_run, "judge_run.py",
+                                     ["--metric", metric, "--skill", skill,
+                                      "--out", jdir / f"{metric}.json", "--backend", judge_backend,
+                                      "--raw-dir", results / "raw" / "llm-judge",
+                                      "--model", model or "", "--protocol", args.llm_protocol or "",
+                                      "--base-url", args.base_url or "", "--api-key", args.api_key or ""])] = metric
+                for fut in as_completed(futs):
+                    metric = futs[fut]
+                    elapsed = round(time.monotonic() - judge_started.get(metric, time.monotonic()), 2)
+                    try:
+                        fut.result()
+                        progress.emit("judge", metric=metric, status="done", elapsed_s=elapsed)
+                    except Exception as exc:
+                        progress.emit("judge", metric=metric, status="skipped", elapsed_s=elapsed,
+                                      error=str(exc))
+            progress.emit("stage", name="T1", status="done")
 
     # T2+ 沙箱
     sandbox = None
@@ -408,6 +472,7 @@ def main():
         model = None; backend = "auto"; progress = None; version = None
         dry_run = False; sandbox = None; harness = None
         llm_protocol = None; base_url = None; api_key = None
+        rerun_t0 = False; rerun_t1 = False
     i = 0
     while i < len(args):
         key = args[i]
@@ -419,12 +484,16 @@ def main():
             setattr(A, key[2:].replace("-", "_"), args[i + 1]); i += 2
         elif key == "--dry-run":
             A.dry_run = True; i += 1
+        elif key == "--rerun-t0":
+            A.rerun_t0 = True; i += 1
+        elif key == "--rerun-t1":
+            A.rerun_t1 = True; i += 1
         else:
             print(f"未知参数: {key}", file=sys.stderr); return 2
     if not A.skill:
         print("usage: runner.py --skill <dir> [--tier t0|t1|t2a|t2b|t3] "
               "[--evalset <dir>] [--real-input <file>] [--results <dir>] [--model m] "
-              "[--backend auto|llm|pi] [--harness pi] [--progress <file>] [--dry-run]", file=sys.stderr)
+              "[--backend auto|llm|pi] [--harness pi] [--progress <file>] [--rerun-t0] [--rerun-t1] [--dry-run]", file=sys.stderr)
         return 2
     try:
         return run(A)

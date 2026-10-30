@@ -27,6 +27,7 @@ def test_ui_has_no_internal_adr_or_tier_jargon():
     assert "ADR" not in html
     assert "T2B" not in html
     assert 'id="stop"' in html
+    assert 'id="reuse"' in html and 'id="rerunT0"' in html and 'id="rerunT1"' in html
 
 
 def test_stop_process_terminates():
@@ -38,6 +39,23 @@ def test_stop_process_terminates():
     finally:
         if proc.poll() is None:
             proc.kill()
+
+
+def test_copy_reuse_only_copies_t0_t1_artifacts(tmp_path):
+    prev = tmp_path / "prev"
+    (prev / "judges").mkdir(parents=True)
+    (prev / "raw" / "llm-judge").mkdir(parents=True)
+    (prev / "static.json").write_text("{}", encoding="utf-8")
+    (prev / "run-meta.json").write_text("{}", encoding="utf-8")
+    (prev / "judges" / "brevity.json").write_text("{}", encoding="utf-8")
+    (prev / "raw" / "llm-judge" / "x.json").write_text("{}", encoding="utf-8")
+    (prev / "report.json").write_text("{}", encoding="utf-8")
+    dest = tmp_path / "dest"
+    assert web._copy_reuse(prev, dest) is True
+    assert (dest / "static.json").is_file()
+    assert (dest / "judges" / "brevity.json").is_file()
+    assert (dest / "raw" / "llm-judge" / "x.json").is_file()
+    assert not (dest / "report.json").exists()
 
 
 def test_valid_zip_finds_skill_root(tmp_path):

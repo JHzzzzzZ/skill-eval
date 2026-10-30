@@ -94,6 +94,9 @@
   input:focus,select:focus,textarea:focus{border-color:var(--brand);box-shadow:0 0 0 3px color-mix(in srgb,var(--brand) 16%,transparent);background:var(--card)}
   textarea{min-height:86px;resize:vertical}
   .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .check-row{display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin-top:12px}
+  .check{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;color:var(--ink-2);cursor:pointer}
+  .check input{width:auto;padding:0;margin:0;accent-color:var(--brand)}
   .grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
   .btn{
     display:inline-flex;align-items:center;justify-content:center;gap:8px;border:1px solid transparent;
@@ -309,6 +312,13 @@
           </div>
         </div>
 
+        <div class="check-row">
+          <label class="check"><input type="checkbox" id="reuse" checked> 复用上次结果</label>
+          <label class="check"><input type="checkbox" id="rerunT0"> 重跑基础检查</label>
+          <label class="check"><input type="checkbox" id="rerunT1"> 重跑文档评审</label>
+        </div>
+        <div class="inline-note" style="margin-top:6px">同一 skill、同一评估器与模型时复用；勾选重跑会强制重算。</div>
+
         <details class="advanced" style="margin-top:12px">
           <summary>LLM 连接设置 <span class="muted" style="font-weight:400">（可选；留空用服务端配置 / 环境变量）</span></summary>
           <div class="adv-body">
@@ -435,6 +445,16 @@ let es = null, runId = null, report = null, selectedMetric = null, stageStarted 
 
 function label(name){ return STAGE_LABELS[name] || name; }
 function tierValue(){ const el = document.querySelector('input[name="tier"]:checked'); return el ? el.value : "t2a"; }
+function syncRerun(){
+  const tier = tierValue();
+  const t0 = $("rerunT0"), t1 = $("rerunT1");
+  t0.disabled = tier === "t0";
+  t1.disabled = tier === "t0" || tier === "t1";
+  if(t0.disabled) t0.checked = false;
+  if(t1.disabled) t1.checked = false;
+}
+document.querySelectorAll('input[name="tier"]').forEach(el=>el.addEventListener("change", syncRerun));
+syncRerun();
 function toast(msg, kind="info"){
   const el = document.createElement("div"); el.className = "toast " + (kind==="ok"?"ok":kind==="err"?"err":"");
   el.textContent = publicText(msg); $("toasts").appendChild(el);
@@ -601,7 +621,9 @@ $("run").onclick = async () => {
     const r = await fetch("/api/run", {method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify({skill, tier:tierValue(), harness:$("harness").value,
         model:llm.model, evalset:$("evalOut").value.trim(), backend:$("backend").value,
-        real_input:$("real").value.trim(), llm})});
+        real_input:$("real").value.trim(), llm,
+        reuse_from: $("reuse").checked ? (localStorage.getItem("se-last-run") || "") : "",
+        rerun_t0: $("rerunT0").checked, rerun_t1: $("rerunT1").checked})});
     const data = await r.json();
     if(!r.ok) throw new Error(data.error||"启动失败");
     runId = data.id; listen(data.id);
@@ -638,9 +660,10 @@ function listen(id){
       if(ev.status==="done"){
         const started = stageStarted[ev.name] || performance.now();
         const dur = fmtDur(ev.elapsed_s != null ? ev.elapsed_s : (performance.now()-started)/1000);
-        markStep(ev.name, "ok", "完成" + (dur? " · "+dur : ""));
+        const verb = ev.cached ? "复用" : "完成";
+        markStep(ev.name, "ok", verb + (!ev.cached && dur? " · "+dur : ""));
         setProgress(WEIGHT[ev.name]||0);
-        log(`[${label(ev.name)}] 完成` + (dur? " · "+dur : ""), at);
+        log(`[${label(ev.name)}] ${verb}` + (!ev.cached && dur? " · "+dur : ""), at);
       }
       if(ev.status==="skipped"){
         markStep(ev.name, "skip", "未运行" + (ev.reason? " · "+ev.reason : ""));
@@ -664,6 +687,7 @@ function listen(id){
     } else if(ev.type==="done"){
       const total = fmtDur(ev.elapsed_s);
       log("✓ 完成" + (total? " · "+total : ""), at);
+      localStorage.setItem("se-last-run", id);
       setBusy(false); setProgress(100); finish(); showReport(id);
     }
   };

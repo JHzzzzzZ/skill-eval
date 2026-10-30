@@ -56,6 +56,54 @@ def test_progress_has_clock_and_elapsed(tmp_path):
     assert overall["elapsed_s"] >= done["elapsed_s"]
 
 
+def test_t0_reuses_artifacts_and_can_force_rerun(tmp_path):
+    skill = make_skill(tmp_path)
+    results = tmp_path / "results"
+    first = tmp_path / "first.ndjson"
+    second = tmp_path / "second.ndjson"
+    third = tmp_path / "third.ndjson"
+    base = [sys.executable, str(SCRIPT), "--skill", str(skill), "--tier", "t0",
+            "--results", str(results)]
+    for prog in (first, second, third):
+        extra = ["--rerun-t0"] if prog == third else []
+        r = subprocess.run(base + ["--progress", str(prog)] + extra,
+                           capture_output=True, text=True, encoding="utf-8", errors="replace")
+        assert r.returncode == 0, r.stderr
+    def t0(prog):
+        events = [json.loads(x) for x in prog.read_text(encoding="utf-8").splitlines()]
+        return next(e for e in events if e["type"] == "stage" and e.get("name") == "T0"
+                    and e.get("status") == "done")
+    assert t0(second)["cached"] is True
+    assert t0(third)["cached"] is False
+
+
+def test_t1_reuses_valid_judges_without_llm(tmp_path):
+    skill = make_skill(tmp_path)
+    results = tmp_path / "results"
+    first = tmp_path / "t0.ndjson"
+    r = subprocess.run([sys.executable, str(SCRIPT), "--skill", str(skill), "--tier", "t0",
+                        "--results", str(results), "--backend", "pi",
+                        "--progress", str(first)],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
+    assert r.returncode == 0, r.stderr
+    jdir = results / "judges"
+    jdir.mkdir()
+    for metric in ("brevity", "redundancy", "fallback", "precheck", "contract", "deps", "pii"):
+        (jdir / f"{metric}.json").write_text(json.dumps({
+            "items": [{"name": "x", "pass": True, "quote": "x"}],
+            "score": 1.0, "evidence": [], "reason": ""}), encoding="utf-8")
+    second = tmp_path / "t1.ndjson"
+    r = subprocess.run([sys.executable, str(SCRIPT), "--skill", str(skill), "--tier", "t1",
+                        "--results", str(results), "--backend", "pi",
+                        "--progress", str(second)],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
+    assert r.returncode == 0, r.stderr
+    events = [json.loads(x) for x in second.read_text(encoding="utf-8").splitlines()]
+    t1 = next(e for e in events if e["type"] == "stage" and e.get("name") == "T1"
+              and e.get("status") == "done")
+    assert t1["cached"] is True
+
+
 def test_missing_skill_is_error(tmp_path):
     r = subprocess.run([sys.executable, str(SCRIPT), "--skill", str(tmp_path),
                         "--tier", "t0", "--dry-run"],
