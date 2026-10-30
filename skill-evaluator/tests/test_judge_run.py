@@ -33,6 +33,20 @@ def test_build_prompt_contains_rubric_and_files(tmp_path):
     assert "RUBRIC" in prompt and "### SKILL.md" in prompt and "print(1)" in prompt
 
 
+def test_skill_md_is_always_first_even_with_tiny_budget(tmp_path):
+    d = make_skill(tmp_path)
+    (d / "big.md").write_text("x" * 5000, encoding="utf-8")
+    files = judge_run.collect_files(d, max_chars=120)
+    assert files[0]["path"] == "SKILL.md"
+    assert any(f["path"] == "SKILL.md" for f in files)
+
+
+def test_missing_skill_md_is_an_error(tmp_path):
+    import pytest
+    with pytest.raises(ValueError):
+        judge_run.collect_files(tmp_path, max_chars=100)
+
+
 def test_collect_files_truncates_at_limit(tmp_path):
     d = make_skill(tmp_path)
     (d / "big.md").write_text("x" * 5000, encoding="utf-8")

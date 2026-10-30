@@ -30,28 +30,40 @@ RUBRICS = ("brevity", "redundancy", "fallback", "precheck", "contract", "deps", 
 
 
 def collect_files(skill_dir: Path, max_chars: int | None = None) -> list:
-    """按路径排序收集被测包文本；SKILL.md 置首，超限截断并标注。"""
+    """收集被测包文本；SKILL.md 无条件置首，其余文件按预算追加。
+
+    旧实现先遍历、后排序，大文件会先吃满 max_chars，导致 SKILL.md 被截掉——
+    判官只能看到附属文件，误报“SKILL.md 缺失”。SKILL.md 是评审主体，必须先进预算。
+    """
     max_chars = default_max_chars() if max_chars is None else max_chars
-    files = []
-    total = 0
+    skill_md = skill_dir / "SKILL.md"
+    if not skill_md.is_file():
+        raise ValueError(f"缺 SKILL.md：{skill_dir}")
+    try:
+        text = skill_md.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        raise ValueError(f"读不到 SKILL.md：{exc}") from exc
+    files = [{"path": "SKILL.md", "text": text[:max_chars]}]
+    total = len(files[0]["text"])
     for p in sorted(skill_dir.rglob("*")):
         if not p.is_file() or p.suffix.lower() not in SUFFIXES:
+            continue
+        if p.resolve() == skill_md.resolve():
             continue
         rel = p.relative_to(skill_dir).as_posix()
         if any(part in EXCLUDE_DIRS for part in Path(rel).parts):
             continue
+        if total >= max_chars:
+            break
         try:
             text = p.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
-        if total + len(text) > max_chars:
-            left = max(0, max_chars - total)
+        left = max(0, max_chars - total)
+        if len(text) > left:
             text = text[:left] + "\n…（截断：达到评审输入上限）"
         files.append({"path": rel, "text": text})
         total += len(text)
-        if total >= max_chars:
-            break
-    files.sort(key=lambda x: (x["path"] != "SKILL.md", x["path"]))
     return files
 
 
