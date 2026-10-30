@@ -255,7 +255,6 @@ def from_static(static, m: dict):
                         "description_chars": chars,
                         "description_warn_chars": warn,
                         "description_fail_chars": fail,
-                        "description_tokens": static.get("description_tokens"),
                         "human": static.get("human")},
                "note": note}
     m["#3"] = {"verdict": "warn" if invoke_warn

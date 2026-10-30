@@ -307,7 +307,7 @@ def test_md_every_data_rendered_as_table(tmp_path):
     # #16：Markdown 表格 + 摘要行，不再重复整块 JSON
     idem_sec = md.split("### #16")[1].split("### ")[0]
     assert "| case | pair | ratio |" in idem_sec and "ratio 0.148" in idem_sec  # _fmt 保留 3 位
-    # 短 data（#1 只有 description_tokens）同样是表
+    # 短 data（#1 的 name/description 字符数）同样是表
     assert "| 字段 | 值 |" in md.split("### #1")[1].split("### ")[0]
     assert "```json" not in md                      # 全文本已无裸 JSON
     # HTML 侧：有表就折叠原始 JSON

@@ -5,7 +5,7 @@
 
 stdout 契约（字段恒输出）：
 {
-  "name": str|null, "description": str|null, "description_tokens": int,
+  "name": str|null, "description": str|null,
   "name_chars": int, "name_max_chars": int,
   "description_chars": int, "description_warn_chars": int, "description_fail_chars": int,
   "description_level": "ok"|"warn"|"fail"|"skipped", "human": bool,
@@ -385,12 +385,6 @@ def parse_frontmatter(text: str):
     return meta, text[m.end():]
 
 
-def token_estimate(text: str) -> int:
-    # 粗估：中文按 1 字 ~1 token，英文按 4 字符 ~1 token
-    zh = len(re.findall(r"[\u4e00-\u9fff]", text))
-    rest = len(text) - zh
-    return zh + max(0, rest) // 4
-
 # 依赖新鲜度（ADR-0009 延伸）：SKILL.md 声明的路径引用应能定位到包内文件。
 # 只查“声明了但不存在”（文档漂移），不查语义对错——那是 #12 语义面（judges/deps.md）的事。
 REF_EXTS = ".py .mjs .js .ts .md .json .sh .ps1 .cmd .bat .toml .yaml .yml".split()
@@ -568,7 +562,7 @@ def main():
     if body_warn > body_fail:
         raise _config.ConfigError("static.body_warn_lines 不能大于 body_fail_lines")
     exclude_paths = ([] if no_defaults else default_excludes(skill_dir)) + resolve_excludes(skill_dir, excludes)
-    out = {"name": None, "description": None, "description_tokens": 0,
+    out = {"name": None, "description": None,
            "name_chars": 0, "name_max_chars": name_max_chars,
            "description_chars": 0, "description_warn_chars": desc_warn,
            "description_fail_chars": desc_fail, "description_level": "skipped",
@@ -620,7 +614,6 @@ def main():
             out["errors"].append("frontmatter 缺 description")
     else:
         out["description_chars"] = len(out["description"].strip())
-        out["description_tokens"] = token_estimate(out["description"])
         if out["description_chars"] > desc_fail:
             out["description_level"] = "fail"
             out["errors"].append(

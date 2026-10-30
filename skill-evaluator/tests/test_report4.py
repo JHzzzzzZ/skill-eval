@@ -108,7 +108,7 @@ def test_raw_json_folded_when_table_present(tmp_path):
     _rep, html, _md = run_all(d)
     c2 = card(html, "#1")
     assert "<table" in c2 and "<details" in c2
-    assert "description_tokens" in c2   # 全文仍在折叠块里（信息不比 json 少）
+    assert "name_chars" in c2   # 全文仍在折叠块里（信息不比 json 少）
 
 
 def test_generic_fallback_flattens_unknown_shape(tmp_path):
