@@ -38,6 +38,24 @@ def test_t0_end_to_end_writes_schema2(tmp_path):
     assert len(report["metrics"]) == 16
 
 
+def test_progress_has_clock_and_elapsed(tmp_path):
+    skill = make_skill(tmp_path)
+    results = tmp_path / "results"
+    progress = tmp_path / "progress.ndjson"
+    r = subprocess.run([sys.executable, str(SCRIPT), "--skill", str(skill),
+                        "--tier", "t0", "--results", str(results),
+                        "--progress", str(progress)],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
+    assert r.returncode == 0, r.stderr
+    events = [json.loads(line) for line in progress.read_text(encoding="utf-8").splitlines()]
+    start = next(e for e in events if e["type"] == "stage" and e.get("status") == "start")
+    done = next(e for e in events if e["type"] == "stage" and e.get("status") == "done")
+    assert start["clock"]
+    assert done["elapsed_s"] >= 0
+    overall = next(e for e in events if e["type"] == "done")
+    assert overall["elapsed_s"] >= done["elapsed_s"]
+
+
 def test_missing_skill_is_error(tmp_path):
     r = subprocess.run([sys.executable, str(SCRIPT), "--skill", str(tmp_path),
                         "--tier", "t0", "--dry-run"],

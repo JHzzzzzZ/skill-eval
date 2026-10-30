@@ -356,6 +356,7 @@
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M8 5v14l11-7L8 5Z" fill="currentColor"/></svg>
             开始评估
           </button>
+          <button class="btn btn-danger" id="stop" type="button" disabled>停止评估</button>
           <span class="inline-note" id="runHint">会先做基础检查，再按所选深度继续。</span>
         </div>
       </section>
@@ -430,24 +431,43 @@ const STAGE_LABELS = {T0:"基础检查", T1:"文档语义评审", [K2A]:"触发�
 const TIER_LABELS = {T0:"基础检查", T1:"文档语义评审", [K2A]:"触发评测", [K2B]:"真实输入对比", T3:"完整任务运行"};
 const WEIGHT = {T0:5,T1:25,sandbox:30,[K2A]:40,[K2B]:50,T3:80,report:100};
 const STAGE_ORDER = ["T0","T1","sandbox",K2A,K2B,"T3","report"];
-let es = null, runId = null, report = null, selectedMetric = null;
+let es = null, runId = null, report = null, selectedMetric = null, stageStarted = {};
 
 function label(name){ return STAGE_LABELS[name] || name; }
 function tierValue(){ const el = document.querySelector('input[name="tier"]:checked'); return el ? el.value : "t2a"; }
 function toast(msg, kind="info"){
   const el = document.createElement("div"); el.className = "toast " + (kind==="ok"?"ok":kind==="err"?"err":"");
-  el.textContent = msg; $("toasts").appendChild(el);
+  el.textContent = publicText(msg); $("toasts").appendChild(el);
   setTimeout(()=>{ el.style.opacity="0"; el.style.transform="translateY(6px)"; setTimeout(()=>el.remove(),200); }, 4200);
 }
 function setBusy(on){
   $("run").disabled = on;
+  $("stop").disabled = !on;
   $("liveDot").className = "dot" + (on ? " live" : "");
   $("state").textContent = on ? "运行中" : "待机";
 }
 function setProgress(p){ p=Math.max(0,Math.min(100,p)); $("bar").style.width=p+"%"; $("pct").textContent=Math.round(p)+"%"; }
-function log(line){
+function publicText(value){
+  return String(value == null ? "" : value)
+    .replace(/[（(]?\s*A[D]R(?:[-\s]?\d{2,4})?(?:\/\d{2,4})*\s*[）)]?/gi, " ")
+    .replace(/\s{2,}/g, " ").trim();
+}
+function fmtDur(sec){
+  if(sec == null || !isFinite(sec)) return "";
+  if(sec < 1) return Math.round(sec*1000)+"ms";
+  if(sec < 60) return sec.toFixed(1)+"s";
+  const m=Math.floor(sec/60), s=Math.round(sec%60);
+  return `${m}m${String(s).padStart(2,"0")}s`;
+}
+function clockOf(ts){
+  const d = ts ? new Date(ts*1000) : new Date();
+  return d.toLocaleTimeString("zh-CN",{hour12:false});
+}
+function log(line, at){
   const el=$("log");
-  el.textContent += (el.textContent==="等待开始…"?"": "\n") + line;
+  const prefix = at || clockOf();
+  const text = publicText(line);
+  el.textContent += (el.textContent==="等待开始…"?"": "\n") + `${prefix}  ${text}`;
   el.scrollTop = el.scrollHeight;
 }
 function stepEl(name){
@@ -574,7 +594,7 @@ $("run").onclick = async () => {
   const skill = $("skill").value.trim();
   if(!skill){ toast("先上传压缩包或填 skill 路径", "err"); return; }
   setBusy(true); $("state").textContent = "运行中…"; $("log").textContent = "";
-  $("stages").innerHTML = ""; setProgress(0); $("result").style.display = "none";
+  runId = null; $("stages").innerHTML = ""; stageStarted = {}; setProgress(0); $("result").style.display = "none";
   const llm = {protocol:$("provider").value, base_url:$("base_url").value.trim(),
                model:$("model").value.trim(), api_key:$("api_key").value};
   try{
@@ -588,27 +608,63 @@ $("run").onclick = async () => {
   }catch(e){ log("✗ "+e.message); setBusy(false); toast(e.message, "err"); }
 };
 
+$("stop").onclick = async () => {
+  if(!runId){ toast("当前没有运行中的评估", "err"); return; }
+  if(!confirm("终止当前评估？已完成的阶段会保留，但不会生成完整报告。")) return;
+  $("stop").disabled = true;
+  try{
+    const r = await fetch("/api/stop", {method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({id:runId})});
+    const d = await r.json();
+    if(!r.ok) throw new Error(d.error||"终止失败");
+    log("⏹ 已请求终止");
+    setBusy(false); $("state").textContent = "已终止"; finish();
+    toast("评估已终止", "err");
+  }catch(e){ $("stop").disabled = false; toast(e.message, "err"); }
+};
+
 function listen(id){
   es = new EventSource("/api/events?id="+id);
   es.onmessage = (msg) => {
     let ev; try{ ev = JSON.parse(msg.data); }catch{ return; }
+    const at = ev.clock || clockOf(ev.ts);
     if(ev.type==="stage"){
-      if(ev.status==="start"){ markStep(ev.name, "on", "进行中"); setProgress(Math.max(0,(WEIGHT[ev.name]||0)-8)); }
-      if(ev.status==="done"){ markStep(ev.name, "ok", "完成"); setProgress(WEIGHT[ev.name]||0); }
-      if(ev.status==="skipped"){ markStep(ev.name, "skip", ev.reason || "未运行"); }
-      log(`[${label(ev.name)}] ${ev.status}${ev.reason? " · "+ev.reason:""}`);
+      if(ev.status==="start"){
+        stageStarted[ev.name] = performance.now();
+        markStep(ev.name, "on", "进行中");
+        setProgress(Math.max(0,(WEIGHT[ev.name]||0)-8));
+        log(`[${label(ev.name)}] 开始`, at);
+      }
+      if(ev.status==="done"){
+        const started = stageStarted[ev.name] || performance.now();
+        const dur = fmtDur(ev.elapsed_s != null ? ev.elapsed_s : (performance.now()-started)/1000);
+        markStep(ev.name, "ok", "完成" + (dur? " · "+dur : ""));
+        setProgress(WEIGHT[ev.name]||0);
+        log(`[${label(ev.name)}] 完成` + (dur? " · "+dur : ""), at);
+      }
+      if(ev.status==="skipped"){
+        markStep(ev.name, "skip", "未运行" + (ev.reason? " · "+ev.reason : ""));
+        log(`[${label(ev.name)}] 跳过` + (ev.reason? " · "+ev.reason : ""), at);
+      }
     } else if(ev.type==="case"){
-      log(`[${label(ev.stage)}] ${ev.index}/${ev.total} ${ev.label||""}`);
+      log(`[${label(ev.stage)}] ${ev.index}/${ev.total} ${ev.label||""}`, at);
       const base = ev.stage===K2A ? 25 : 50, span = ev.stage===K2A ? 15 : 30;
       setProgress(base + span * (ev.index/Math.max(1,ev.total)));
     } else if(ev.type==="judge"){
-      log(`[文档语义评审] ${ev.metric} ${ev.status}${ev.error? " · "+ev.error:""}`);
+      const st = ev.status === "done" ? "完成" : "跳过";
+      const dur = fmtDur(ev.elapsed_s);
+      log(`[文档语义评审] ${ev.metric} ${st}` + (dur? " · "+dur : "") + (ev.error? " · "+ev.error:""), at);
     } else if(ev.type==="warn"){
-      log(`⚠ ${label(ev.stage||"")} ${ev.label||""} ${ev.error||""}`);
+      log(`⚠ ${label(ev.stage||"")} ${ev.label||""} ${ev.error||""}`, at);
     } else if(ev.type==="error"){
-      log("✗ "+ev.error); setBusy(false); toast(ev.error, "err"); finish();
+      log("✗ "+ev.error, at); setBusy(false); toast(ev.error, "err"); finish();
+    } else if(ev.type==="stopped"){
+      log("⏹ 已终止", at); setBusy(false); $("state").textContent="已终止"; finish();
+      toast("评估已终止", "err");
     } else if(ev.type==="done"){
-      log("✓ 完成"); setBusy(false); setProgress(100); finish(); showReport(id);
+      const total = fmtDur(ev.elapsed_s);
+      log("✓ 完成" + (total? " · "+total : ""), at);
+      setBusy(false); setProgress(100); finish(); showReport(id);
     }
   };
   es.onerror = () => { log("连接中断（runner 可能已结束）"); setBusy(false); finish(); };
@@ -642,7 +698,7 @@ async function showReport(id){
       for(const [k,v] of groups[t]){
         const can = v.verdict === "fail";
         rows += `<tr><td><code>${k}</code></td><td><span class="badge ${v.verdict}">${v.verdict}</span></td>
-          <td class="metric-note">${(v.note||"").replace(/</g,"&lt;")}</td>
+          <td class="metric-note">${publicText(v.note||"").replace(/</g,"&lt;")}</td>
           <td>${can?`<button class="btn btn-danger btn-sm" onclick="pick('${k}')">选中调整</button>`:""}</td></tr>`;
       }
     }

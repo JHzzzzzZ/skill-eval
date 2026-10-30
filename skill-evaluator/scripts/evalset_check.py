@@ -178,7 +178,7 @@ def check(evalset_dir: Path, skill_dir: Path) -> dict:
         if conflicts:
             problems.append(f"{len(conflicts)} 组同句同时出现在 should 与 should-not")
         if oos:
-            problems.append(f"{len(oos)} 条 prompt 引用沙箱外路径（agent 会走出 worktree 改真实仓库，ADR-0027）")
+            problems.append(f"{len(oos)} 条 prompt 引用沙箱外路径（agent 会走出 worktree 改真实仓库）")
         clean = not problems
         note = (f"检查 {checked} 条 prompt：无照抄/重复/冲突" if clean
                 else f"检查 {checked} 条 prompt：" + "；".join(problems) + "——#10 指标可能虚高，建议改写触发集")

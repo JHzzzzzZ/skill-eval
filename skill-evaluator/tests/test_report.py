@@ -357,7 +357,7 @@ def test_ui_hides_adr_and_orders_metrics_by_id(tmp_path):
     out = json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))
     md = (tmp_path / "report.md").read_text(encoding="utf-8")
     html = (tmp_path / "report.html").read_text(encoding="utf-8")
-    assert "ADR-" not in md and "ADR-" not in html
+    assert "ADR" not in md and "ADR" not in html
     assert list(out["metrics"]) == ALL_KEYS
     assert out["metric_tiers"]["#1"] == "T0" and out["metric_tiers"]["#10"] == "T2A"
 

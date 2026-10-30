@@ -57,8 +57,19 @@ def _public_text(text):
     """用户界面不展示内部 ADR 编号；只清洗展示文本，不改 data。"""
     if not isinstance(text, str):
         return text
-    text = re.sub(r"[（(]?\s*ADR-\d{4}(?:/\d{4})*\s*[）)]?", "", text)
+    text = re.sub(r"[（(]?\s*A[D]R(?:[-\s]?\d{2,4})?(?:/\d{2,4})*\s*[）)]?", " ", text, flags=re.IGNORECASE)
     return re.sub(r"\s{2,}", " ", text).strip()
+
+
+def _public_obj(value):
+    """递归清洗用户可见报告里的内部编号（含 data/evidence）。"""
+    if isinstance(value, str):
+        return _public_text(value)
+    if isinstance(value, list):
+        return [_public_obj(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _public_obj(v) for k, v in value.items()}
+    return value
 
 
 def _public_tables(tables):
@@ -280,7 +291,7 @@ def from_static(static, m: dict):
         note += ("；另有" if (hit or gate) else "；仅") + "、".join(
             f"{DIM_PERM_GROUPS[k]}×{len(groups[k])}（警告）" for k in soft_hit)
     if gate:
-        note += f"；可移植性闸门命中×{len(gate)}（宿主环境硬编码，ADR-0008，命中即 fail）"
+        note += f"；可移植性闸门命中×{len(gate)}（宿主环境硬编码，命中即 fail）"
     # 排除/抑制/闸门旁证必须可见（ADR-0012/0030）：不静默丢指标
     excluded, ignored = static.get("excluded") or [], static.get("ignored") or []
     if excluded:
@@ -400,10 +411,10 @@ def build(d: Path, evalset_dir: Path | None = None) -> dict:
             if sample_n is not None and sample_n < 3 and verdict == "pass":
                 verdict = "warn"
             detail = "、".join(f"{k} {v['improvement']*100:+.1f}%" for k, v in comps.items())
-            caveat = (f"；样本 n={sample_n}，少于 3 例，结论最高 warn（ADR-0033）"
+            caveat = (f"；样本 n={sample_n}，少于 3 例，结论最高 warn"
                       if sample_n is not None and sample_n < 3 else "")
             m["#11"] = {"verdict": verdict, "method": METHOD_RUN, "data": n,
-                       "note": f"三分量多数票（{up}/{len(comps)} 改善）：{detail}{caveat}（ADR-0026）"}
+                       "note": f"三分量多数票（{up}/{len(comps)} 改善）：{detail}{caveat}"}
     # #10 人调用型（#3 resolved=human）不适用触发评测：pi 的 formatSkillsForPrompt 会把
     # disable-model-invocation=true 的 skill 从提示中滤除（实测：--skill 加载后模型答
     # “无 available_skills 段”）——“按 description 触发”在该载体上结构上不可能，照跑只是把
@@ -458,7 +469,7 @@ def build(d: Path, evalset_dir: Path | None = None) -> dict:
                      "deps_missing": miss},
             "note": ((cur.get("note") or "") + "；" if cur.get("note") else "")
                     + f"静态面：{len(miss)} 项依赖未在文档/requirements.txt/check-deps.sh 声明"
-                      f"（{'、'.join(miss[:5])}）（ADR-0031）"}
+                      f"（{'、'.join(miss[:5])}）"}
     if isinstance(score, dict) and isinstance(score.get("cost"), dict) \
             and isinstance(score["cost"].get("tool_calls"), dict):
         # #15（ADR-0016）：裁决用**组内（逐 case）** 变异系数中位数——
@@ -582,11 +593,11 @@ def build(d: Path, evalset_dir: Path | None = None) -> dict:
                 merged.update(cur["data"])
             if level == "fail":
                 m["#2"] = {"verdict": "fail", "method": METHOD_STATIC, "data": merged,
-                           "note": f"正文 {lines} 行 > 失败阈值 {fail} 行（静态面主源，ADR-0037）；"
+                           "note": f"正文 {lines} 行 > 失败阈值 {fail} 行（静态面主源）；"
                                    + (cur.get("note") or "无语义评审输出")}
             elif level == "warn":
                 m["#2"] = {"verdict": "warn", "method": METHOD_STATIC, "data": merged,
-                           "note": f"正文 {lines} 行 > 警告阈值 {warn} 行（静态面主源，ADR-0037）；"
+                           "note": f"正文 {lines} 行 > 警告阈值 {warn} 行（静态面主源）；"
                                    + (cur.get("note") or "无语义评审输出")}
             elif isinstance(cur.get("data"), dict):
                 m["#2"] = {**cur, "data": merged,
@@ -637,7 +648,7 @@ def build(d: Path, evalset_dir: Path | None = None) -> dict:
               "reviewed_by": reviewed_by,
               "evaluator": evaluator_fingerprint(),
               "generated_at": datetime.now().isoformat(timespec="seconds")}
-    return report
+    return _public_obj(report)
 
 
 def _evalset_reviewed_by(d: Path, evalset_dir: Path | None = None):
@@ -1112,7 +1123,7 @@ def _advice(m: dict) -> list:
                         "problem": f"可移植性闸门命中：宿主环境硬编码 ×{len(gate)}",
                         "evidence": "；".join(f"{h.get('file')}:{h.get('line')} {h.get('text')}"
                                                for h in gate[:3]),
-                        "action": "把绝对路径/宿主目录改成相对路径或环境变量（ADR-0008）"})
+                        "action": "把绝对路径/宿主目录改成相对路径或环境变量"})
     out.sort(key=lambda a: (ADV_SEV_RANK.get(a["severity"], 3),
                              int(a["metric"][1:]) if a["metric"][1:].isdigit() else 999))
     return out
@@ -1172,7 +1183,7 @@ def _tables(metric: str, data, allow_generic=True) -> list:
                             ["检查点", "结果", "原文引用"], _judge_rows(dj["items"])))
             miss = data.get("deps_missing") or []
             if miss:
-                out.append((f"依赖全面性（ADR-0031）：已用 {len(data.get('deps_used') or [])} 项、"
+                out.append((f"依赖全面性：已用 {len(data.get('deps_used') or [])} 项、"
                             f"已声明 {len(data.get('deps_declared') or [])} 项",
                             ["未声明的依赖", "说明"],
                             [[m, "未在文档/requirements.txt/check-deps.sh 声明"] for m in miss]))
@@ -1182,7 +1193,7 @@ def _tables(metric: str, data, allow_generic=True) -> list:
             rows = [[f"{DIM_PERM_GROUPS.get(g, g)}（{g}）", len(data.get(g) or []), level.get(g, "")]
                     for g in (*DIM_PERM_HARD, *DIM_PERM_SOFT) if g in data]
             rows.append(["可移植性闸门（hardcoded）", len(data.get("hardcoded") or []),
-                         "error → fail（ADR-0008）"])
+                         "error → fail"])
             out.append(("六组规则 + 出站网络 + 可移植性闸门",
                         ["规则组", "命中数", "级别"], rows))
             hits = [(g, h) for g in (*DIM_PERM_HARD, *DIM_PERM_SOFT, "hardcoded")
@@ -1190,7 +1201,7 @@ def _tables(metric: str, data, allow_generic=True) -> list:
             if hits:
                 out.append((None, ["规则组", "文件", "行", "命中文本"],
                             [[g, h.get("file"), h.get("line"), _cell(h.get("text"))] for g, h in hits]))
-            out.append(("扫描范围与旁证（信息行，不改裁决，ADR-0012/0030）", ["项目", "值"],
+            out.append(("扫描范围与旁证（信息行，不改裁决）", ["项目", "值"],
                         [["声明但包内不存在的引用", "、".join(data.get("stale_refs") or []) or "无"],
                          ["未扫描", "、".join(data.get("excluded") or []) or "无"],
                          ["行内抑制", f"{len(data.get('ignored') or [])} 行"],

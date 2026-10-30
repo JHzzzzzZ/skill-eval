@@ -1,5 +1,8 @@
 """web/app.py 的上传安全边界（不启动 HTTP 服务）。"""
 import importlib.util
+import os
+import subprocess
+import sys
 import zipfile
 from pathlib import Path
 
@@ -21,8 +24,20 @@ def test_zip_slip_is_rejected(tmp_path):
 
 def test_ui_has_no_internal_adr_or_tier_jargon():
     html = (WEB_APP.parent / "index.html").read_text(encoding="utf-8")
-    assert "ADR-" not in html
+    assert "ADR" not in html
     assert "T2B" not in html
+    assert 'id="stop"' in html
+
+
+def test_stop_process_terminates():
+    kwargs = {} if os.name == "nt" else {"start_new_session": True}
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"], **kwargs)
+    try:
+        web._stop_process(proc)
+        assert proc.poll() is not None
+    finally:
+        if proc.poll() is None:
+            proc.kill()
 
 
 def test_valid_zip_finds_skill_root(tmp_path):

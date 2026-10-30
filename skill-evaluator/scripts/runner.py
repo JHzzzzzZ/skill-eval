@@ -37,12 +37,26 @@ class RunnerError(RuntimeError):
 class Progress:
     def __init__(self, path: str | None = None):
         self.path = Path(path) if path else None
+        self.started: dict[str, float] = {}
+        self.t0 = time.monotonic()
         if self.path:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             self.path.write_text("", encoding="utf-8")
 
     def emit(self, kind: str, **fields):
-        event = {"type": kind, "ts": time.time(), **fields}
+        now = time.time()
+        fields.setdefault("clock", time.strftime("%H:%M:%S", time.localtime(now)))
+        if kind == "stage":
+            name = str(fields.get("name") or "")
+            status = fields.get("status")
+            if status == "start":
+                self.started[name] = time.monotonic()
+            elif status in ("done", "skipped"):
+                begin = self.started.pop(name, None)
+                fields.setdefault("elapsed_s", round(time.monotonic() - begin, 2) if begin else 0.0)
+        if kind in ("done", "error"):
+            fields.setdefault("elapsed_s", round(time.monotonic() - self.t0, 2))
+        event = {"type": kind, "ts": now, **fields}
         line = json.dumps(event, ensure_ascii=False)
         print(line, flush=True)
         if self.path:
@@ -193,7 +207,9 @@ def run(args) -> int:
         workers = max(1, _config.get_int("run.judge_concurrency", 4))
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futs = {}
+            judge_started = {}
             for metric in rubrics:
+                judge_started[metric] = time.monotonic()
                 futs[pool.submit(_run, "judge_run.py",
                                  ["--metric", metric, "--skill", skill,
                                   "--out", jdir / f"{metric}.json", "--backend", judge_backend,
@@ -202,11 +218,13 @@ def run(args) -> int:
                                   "--base-url", args.base_url or "", "--api-key", args.api_key or ""])] = metric
             for fut in as_completed(futs):
                 metric = futs[fut]
+                elapsed = round(time.monotonic() - judge_started.get(metric, time.monotonic()), 2)
                 try:
                     fut.result()
-                    progress.emit("judge", metric=metric, status="done")
+                    progress.emit("judge", metric=metric, status="done", elapsed_s=elapsed)
                 except Exception as exc:
-                    progress.emit("judge", metric=metric, status="skipped", error=str(exc))
+                    progress.emit("judge", metric=metric, status="skipped", elapsed_s=elapsed,
+                                  error=str(exc))
         progress.emit("stage", name="T1", status="done")
 
     # T2+ 沙箱
@@ -222,7 +240,7 @@ def run(args) -> int:
         progress.emit("stage", name="T2A", status="start")
         if human:
             progress.emit("stage", name="T2A", status="skipped",
-                          reason="human 型：不跑触发评测（ADR-0018）")
+                          reason="human 型：不跑触发评测")
         elif not evalset:
             progress.emit("stage", name="T2A", status="skipped", reason="无评测集")
         else:
@@ -377,6 +395,7 @@ def run(args) -> int:
     _run("report.py", [results, "--skill", skill, "--tier", tier, "--html"] +
          (["--evalset", evalset] if evalset else []))
     report = _read_json(results / "report.json", {}) or {}
+    progress.emit("stage", name="report", status="done")
     progress.emit("done", results=str(results), report=str(results / "report.html"),
                   conclusion=report.get("conclusion"), metrics=len(report.get("metrics") or {}))
     return 0

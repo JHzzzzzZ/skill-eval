@@ -60,12 +60,12 @@ import _config
 INVOKE_VALUES = {"human", "both"}  # pi 真实三态归约：缺省/false=both（模型+用户）；disable-model-invocation:true=human
 
 # 默认排除的目录名（ADR-0012：机制 + 作用域）：闸门只扫运行面。
-# tests/ 是测试夹具（tmp_path 运行时路径、危险命令用例）；evalsets/uploads/.sandbox 是评估
-# 产物与只读存档（trace、报告，含评估时机器路径）——都不随 skill 运行，扫它们只是自噪声。
+# tests/ 是测试夹具（tmp_path 运行时路径、危险命令用例）；evalsets/uploads/.sandbox/runs 是评估
+# 产物与只读存档（trace、报告、前端运行目录，含评估时机器路径）——都不随 skill 运行，扫它们只是自噪声。
 # .skillrepos/ 是沙箱副本 repo（每个被测 skill 一份完整拷贝，含 scripts/static_check.py）：
 # 不排除它，自检就会在自己副本的正则表定义行上自命中（实测 4 处 exfil → 237 个测试里
 # test_evaluator_self_check_passes 挂）。副本是运行面痕迹，不是被测内容。
-DEFAULT_EXCLUDE_DIRS = ("tests", "evalsets", "uploads", ".sandbox", ".skillrepos")
+DEFAULT_EXCLUDE_DIRS = ("tests", "evalsets", "uploads", ".sandbox", ".skillrepos", "runs")
 
 # 行内抑制标记：合法文档里引用危险模式（如本仓 reference.md 的硬编码说明行）时用
 IGNORE_MARKER = "static-check:ignore"
@@ -703,7 +703,7 @@ def main():
     out["hardcoded"] = scan_patterns(skill_dir, HOST_HARDCODE_PATTERNS, exclude_paths, out["ignored"])
     if out["hardcoded"]:
         out["errors"].append(
-            f"发现 {len(out['hardcoded'])} 处宿主环境硬编码（可移植性闸门，ADR-0008）")
+            f"发现 {len(out['hardcoded'])} 处宿主环境硬编码（可移植性闸门）")
 
     out["passed"] = not out["errors"]
     out["issues"] = out["errors"] + out["warnings"]

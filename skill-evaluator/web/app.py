@@ -1,4 +1,4 @@
-"""前端入口（ADR-0036）：stdlib HTTP 服务 + 原生 JS，只绑 127.0.0.1。
+"""前端入口：stdlib HTTP 服务 + 原生 JS，只绑 127.0.0.1。
 
 用法：python web/app.py [--port 8765]
 页面选档位/执行载体/模型/评测集/真实输入 → 后台跑 scripts/runner.py → SSE 推进度。
@@ -8,8 +8,10 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -76,6 +78,44 @@ def _skill_root(dest: Path) -> Path:
     if len(found) == 1:
         return found[0]
     raise ValueError("压缩包里找不到唯一的 SKILL.md（根目录或单一顶层目录）")
+
+
+def _stop_process(proc) -> None:
+    """终止 runner 及其子进程（Windows 用 taskkill /T，POSIX 用进程组）。"""
+    if proc.poll() is not None:
+        return
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                           capture_output=True, text=True, timeout=10)
+        else:
+            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        try:
+            proc.kill()
+        except OSError:
+            pass
+        try:
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            pass
+
+
+def _stop_run(run) -> None:
+    """停止一次运行，并写一条 stopped 事件让 SSE 立刻收尾。"""
+    _stop_process(run["proc"])
+    run["stopped"] = True
+    event = {"type": "stopped", "ts": time.time(),
+             "clock": time.strftime("%H:%M:%S"), "error": "用户终止评估"}
+    try:
+        with run["progress"].open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(event, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
 
 
 def _evalset_status(evalset: Path, skill: Path) -> dict:
@@ -183,8 +223,8 @@ class Handler(BaseHTTPRequestHandler):
                 return _send_json(self, 404, {"error": "run not found"})
             return _send_json(self, 200, {
                 "id": rid, "running": run["proc"].poll() is None,
-                "returncode": run["proc"].poll(), "results": str(run["results"]),
-                "report": str(run["results"] / "report.html")})
+                "returncode": run["proc"].poll(), "stopped": bool(run.get("stopped")),
+                "results": str(run["results"]), "report": str(run["results"] / "report.html")})
         if path == "/api/report":
             q = parse_qs(urlparse(self.path).query)
             rid = (q.get("id") or [""])[0]
@@ -215,6 +255,17 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = self.path.split("?", 1)[0]
+        if path == "/api/stop":
+            data = _json_body(self)
+            rid = str(data.get("id") or "")
+            run = ACTIVE.get(rid)
+            if not run:
+                return _send_json(self, 404, {"error": "run not found"})
+            if run["proc"].poll() is None:
+                _stop_run(run)
+            return _send_json(self, 200, {"ok": True, "id": rid,
+                                          "running": run["proc"].poll() is None,
+                                          "stopped": bool(run.get("stopped"))})
         if path == "/api/upload":
             data = _json_body(self)
             raw = str(data.get("data_base64") or "")
@@ -366,8 +417,13 @@ class Handler(BaseHTTPRequestHandler):
                                          ensure_ascii=False), encoding="utf-8")
             cmd += ["--real-input", str(rf)]
         log = (rdir / "run.log").open("w", encoding="utf-8")
-        proc = subprocess.Popen(cmd, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT,
-                                text=True, encoding="utf-8", errors="replace")
+        popen_kwargs = {"cwd": ROOT, "stdout": log, "stderr": subprocess.STDOUT,
+                        "text": True, "encoding": "utf-8", "errors": "replace"}
+        if os.name == "nt":
+            popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        else:
+            popen_kwargs["start_new_session"] = True
+        proc = subprocess.Popen(cmd, **popen_kwargs)
         ACTIVE[rid] = {"proc": proc, "dir": rdir, "results": results,
                        "progress": progress, "log": log}
         return _send_json(self, 200, {"id": rid, "results": str(results)})
@@ -399,10 +455,15 @@ class Handler(BaseHTTPRequestHandler):
                             continue
                         self.wfile.write(("data: " + line + "\n\n").encode("utf-8"))
                         self.wfile.flush()
-                        if ev.get("type") in ("done", "error"):
+                        if ev.get("type") in ("done", "error", "stopped"):
                             return
             if run["proc"].poll() is not None:
-                self.wfile.write(b'data: {"type":"error","error":"runner exited"}\n\n')
+                if run.get("stopped"):
+                    ev = {"type": "stopped", "ts": time.time(),
+                          "clock": time.strftime("%H:%M:%S"), "error": "用户终止评估"}
+                    self.wfile.write(("data: " + json.dumps(ev, ensure_ascii=False) + "\n\n").encode("utf-8"))
+                else:
+                    self.wfile.write(b'data: {"type":"error","error":"runner exited"}\n\n')
                 self.wfile.flush()
                 return
             try:
