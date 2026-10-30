@@ -4,18 +4,20 @@ Generated: 2026-09-22T13:43:08.578Z
 
 ## OVERVIEW
 
-21 个测试文件 / 306 个 test，全部走 subprocess seam：把脚本当 CLI 跑，不 import 被测脚本（`test_trace_run.py` 例外，它 import `EventAggregator` 做增量消费断言；`test_config.py` 直接 import 纯解析模块 `_config.py`）。
+23 个测试文件 / 316 个 test，全部走 subprocess seam：把脚本当 CLI 跑，不 import 被测脚本（`test_trace_run.py` 例外，它 import `EventAggregator` 做增量消费断言；`test_config.py` 直接 import 纯解析模块 `_config.py`）。
 
 ## WHERE TO LOOK
 
 | 测试文件 | 覆盖 | test 数 |
 |---|---|---|
-| `test_static_check.py` | `scripts/static_check.py`（六组规则 + PII + 依赖全面性 + 字符/行阈值） | 61 |
+| `test_static_check.py` | `scripts/static_check.py`（六组规则 + PII + 依赖全面性 + 字符/行阈值） | 63 |
 | `test_config.py` | `scripts/_config.py`（YAML 子集解析/优先级/类型） | 7 |
+| `test_evalset_gen.py` | `scripts/evalset_gen.py`（prompt/条目归一化） | 2 |
+| `test_web.py` | `web/app.py`（zip 上传安全边界 / UI 术语） | 3 |
 | `test_llm.py` | `scripts/llm.py`（协议/无 tools/JSON 提取） | 5 |
 | `test_judge_run.py` | `scripts/judge_run.py`（文件收集/prompt） | 3 |
 | `test_runner.py` | `scripts/runner.py`（dry-run/T0 端到端） | 3 |
-| `test_report.py` | `report.py` 16-key 契约基线 | 46 |
+| `test_report.py` | `report.py` 16-key 契约基线 | 49 |
 | `test_trace_run.py` | `scripts/trace_run.py` | 39 |
 | `test_report3.py` | `report.py` 元数据/指纹批次（ADR-0010/0011）+ data 渲染层 | 21 |
 | `test_report4.py` | `report.py` 报告可用性（表格化/折叠/闸门可见/建议/✓✗/依赖全面性/PII，ADR-0029/0030/0031） | 19 |

@@ -91,7 +91,7 @@ def parse_threshold(cli_value=None) -> float:
 def main():
     args = sys.argv[1:]
     skill_file = trace_file = model = thinking = events_file = out_path = None
-    rubric_file = threshold_arg = None
+    rubric_file = threshold_arg = base_url = api_key = protocol = None
     build_only = False
     i = 0
     while i < len(args):
@@ -111,6 +111,12 @@ def main():
             rubric_file = args[i + 1]; i += 2
         elif args[i] == "--threshold":
             threshold_arg = args[i + 1]; i += 2
+        elif args[i] == "--base-url":
+            base_url = args[i + 1]; i += 2
+        elif args[i] == "--api-key":
+            api_key = args[i + 1]; i += 2
+        elif args[i] == "--llm-protocol":
+            protocol = args[i + 1]; i += 2
         elif args[i] == "--build-only":
             build_only = True; i += 1
         else:
@@ -146,9 +152,10 @@ def main():
 
     if events_file:
         raw = extract_answer(Path(events_file).read_text(encoding="utf-8", errors="replace"))
-    elif llm_layer.configured():
+    elif llm_layer.configured() or base_url or api_key:
         try:
-            text = llm_layer.ask(prompt, model=model or None)
+            text = llm_layer.ask(prompt, model=model or None, base_url_override=base_url,
+                                 api_key_override=api_key, protocol_override=protocol)
             raw = extract_json_object(text) or {"triggered": False,
                                                 "reason": "LLM 未输出合法 JSON"}
         except Exception as exc:

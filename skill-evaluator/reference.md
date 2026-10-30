@@ -87,6 +87,8 @@ evalsets/<name>/v1/
 
 冻结前跑质量自检（ADR-0011）：`python scripts/evalset_check.py <evalset目录> --skill <skill目录>`，查 should prompt 照抄 description、组内近似重复、同句跨组冲突；命中则先改写再冻结，裁决落 `evalset.json`（clean=false → report.py 把 #10 降级为 warn）。
 
+草稿生成：`python scripts/evalset_gen.py --skill <skill目录> --out <evalset目录> --count 10`（默认走 `llm`；只写草稿，不写 `meta.json`）。前端「评测集」面板可生成草稿、加载逐条审核并写 `reviews/review.json`；`report.html` 的「评测集审核」tab 保留。
+
 ## 运行场景
 
 档位（tier）定义增量递进的评估深度（ADR-0033），入口参数 `--tier <t0|t1|t2a|t2b|t3>`（也接受 `T0`–`T3`），**默认 T2A**。高档复用低档产物：结果目录里各中间产物记录生成时的 skill content_sha256，一致则复用，不一致则作废重跑。低档先行、后续增量补跑（staged）不重做已完成档。T4 不开放（ADR-0032）。
@@ -109,7 +111,7 @@ T2+ 执行载体（harness）的模型三层优先级：
 2. 环境变量 `SKILL_EVAL_MODEL=<provider/id>`（会话级默认，推荐在评估开始前设置）
 3. pi 自身的默认模型（兜底）
 
-T1 评审走 `llm` 接口层（ADR-0034）：`--model` > `llm.model` > `SKILL_EVAL_MODEL`；端点 `llm.base_url`，凭据从 `llm.api_key_env` 指定的**已存在**变量读，或由 `--api-key` 一次性传入。`--backend pi` 可回退旧路径。评测集 AI 审核是唯一例外，见 § 评测集 AI 审核。
+T1 评审走 `llm` 接口层（ADR-0034）：模型 `--model` > `llm.model` > `SKILL_EVAL_MODEL`；端点 `--base-url` > `llm.base_url` > `OPENAI_BASE_URL`/`ANTHROPIC_BASE_URL` > 官方端点；凭据 `--api-key` > `llm.api_key_env` 指定的**已存在**变量 > 标准 `OPENAI_API_KEY`/`ANTHROPIC_API_KEY`。页面字段优先于 config，config 优先于环境变量；页面 key 只用于本次运行，不落盘。`--backend pi` 可回退旧路径。评测集 AI 审核是唯一例外，见 § 评测集 AI 审核。
 
 可选 `--thinking <off|minimal|low|medium|high|xhigh|max>` 控制思考档位。
 
@@ -127,7 +129,17 @@ T1 评审走 `llm` 接口层（ADR-0034）：`--model` > `llm.model` > `SKILL_EV
 
 ## 前端与 runner（ADR-0036）
 
-`scripts/runner.py` 是确定性编排：按 `--tier` 调 T0→T1→T2A→T2B→T3，最后 `report.py`；进度以 NDJSON 输出，`--results` 指定产物目录，`--real-input` 给 T2B。`web/app.py` 是 stdlib HTTP 入口（只绑 `127.0.0.1`）：`POST /api/run` 启动 runner，`GET /api/events?id=` SSE 推进度，`GET /api/report?id=` 取报告 JSON，`GET /report?id=` 直接开报告页。前端不重算指标。
+`scripts/runner.py` 是确定性编排：按 `--tier` 调 T0→T1→T2A→T2B→T3，最后 `report.py`；进度以 NDJSON 输出，`--results` 指定产物目录，`--real-input` 给真实输入对比。
+
+`web/app.py` 是 stdlib HTTP 入口（只绑 `127.0.0.1`）：
+- `POST /api/upload`：接收 zip（base64），安全解压到 `web/runs/uploads/`，返回 skill 路径；拒绝 `..`/绝对路径/符号链接，限制 70MB 压缩包与 200MB 解压体积。
+- `GET /api/llm/config`、`POST /api/llm/test`：返回非敏感默认配置 / 测试连接。
+- `POST /api/run`：启动 runner；可带 `llm`（protocol/base_url/model/api_key）与 `real_input`。
+- `GET /api/events?id=`：SSE 进度；`GET /api/report?id=`：报告 JSON；`GET /report?id=`：报告页。
+- `GET /api/evalset/status|items`、`POST /api/evalset/generate|review`：评测集检查、生成草稿、逐条审核（写 `reviews/review.json` + `audit.jsonl`）。
+- `POST /api/override`：只允许 fail→warn，写 `overrides.json` + `manual-overrides.jsonl`，重出报告。
+
+前端不重算指标。
 
 被测 skill 出现宿主环境硬编码（绝对路径、特定用户目录、.claude/.cursor 等他方生态路径）→ 可移植性闸门整体 fail（ADR-0008，static_check 的 `hardcoded` 字段）。<!-- static-check:ignore -->
 
@@ -146,7 +158,7 @@ T1 评审走 `llm` 接口层（ADR-0034）：`--model` > `llm.model` > `SKILL_EV
 - `t2b/runs.json` + `t2b/baseline.json`：T2B 两臂的原始统计；`t2b/score.json` 的 `necessity` 由 runner 合并进根 `score.json`
 - `real-input.meta.json`：`{"sha256", "label"}`；正文存评估器 `uploads/real-input/<sha>.json`（gitignore，报告不回显）
 - `trace-<序号>.json`：`{"steps": [{"tool", "args", "args_hash"}, ...], "answer", "tokens", "seconds", "triggered", "errors", "host": {"model", "pi", "platform"}}`（trace_run.py 落盘，--out；host 为宿主 pin，事后归因/复现用；离线 --events 重算时仅记 model 意图）
-- `static.json`：static_check.py --out（脚本自写 UTF-8；stdout 同步回显。禁 shell 重定向——GBK 控制台会产 GBK 文件）。全部脚本入口接 `scripts/_console.py::fix()`：GBK 控制台下回显不可编码字符降级为替换符，不崩、退出码 0；`--out` 文件不受影响。含 #4 的六组（`dangerous`/`secrets`/`injection`/`exfil`/`obfuscation`/`pii`）、`hardcoded`、`excluded`/`ignored`（ADR-0012）、`scan_excluded_dirs`（ADR-0012：运行面之外）、`stale_refs`（依赖新鲜度，ADR-0009 延伸：SKILL.md 声明但包内不存在的路径引用，warning 级）、`deps_used`/`deps_declared`/`deps_missing`（依赖全面性，ADR-0031，warning 级）、`skill_md_body_lines`/`skill_md_body_max_lines`（#2 行数主源与自描述阈值，ADR-0017：口径 = frontmatter 之后全文行数，含空行与代码块）
+- `static.json`：static_check.py --out（脚本自写 UTF-8；stdout 同步回显。禁 shell 重定向——GBK 控制台会产 GBK 文件）。全部脚本入口接 `scripts/_console.py::fix()`：GBK 控制台下回显不可编码字符降级为替换符，不崩、退出码 0；`--out` 文件不受影响。含 #4 的六组（`dangerous`/`secrets`/`injection`/`exfil`/`obfuscation`/`pii`）+ 出站网络 `egress`（GET/内网/socket/ssh 都算，仅警告）、`hardcoded`、`excluded`/`ignored`（ADR-0012）、`scan_excluded_dirs`（ADR-0012：运行面之外）、`stale_refs`（依赖新鲜度，ADR-0009 延伸：SKILL.md 声明但包内不存在的路径引用，warning 级）、`deps_used`/`deps_declared`/`deps_missing`（依赖全面性，ADR-0031，warning 级）、`skill_md_body_lines`/`skill_md_body_warn_lines`/`skill_md_body_fail_lines`（#2 行数主源与两档阈值，ADR-0017：口径 = frontmatter 之后全文行数，含空行与代码块；旧 `skill_md_body_max_lines` 只作历史产物兼容读取，新产物不再输出）<!-- static-check:ignore -->
 - `score.json`：score.py --out（同上）；含 `cost`（多次运行汇总）+ `cost_by_case`（逐 case，仅全条目带 case 时出现）+ `necessity`（T2B 合并进来；每分量带 `n`）
 - `idem.json`：多次 idem.py --out 结果的聚合 `{"ratio", "idempotent", "pairs", "idempotent_pairs", "per_pair"}`
 - `golden.json`：主运行的 golden trace（#12 的数据源之一）；同时存在 `traces/golden-*.json` 时，
@@ -154,6 +166,8 @@ T1 评审走 `llm` 接口层（ADR-0034）：`--model` > `llm.model` > `SKILL_EV
 - `traces/`：逐 run 的原始 trace；`--guard-repo` 时另带 `guard.escaped_writes`（越界写入，ADR-0027）
 - `compare.json`：compare.py --aggregate 裁决（#14）；逐 case 文件在 `compare/`
 - `actual/` + `expected/`：T3 每 case 的实际回答与期望（compare.py 输入）
+- `overrides.json`：人工复核 `{metric: {from:"fail", to:"warn", reason, reviewer, at}}`；只允许 fail→warn
+- `manual-overrides.jsonl`：人工调整的追加审计日志（前端 `/api/override` 写入）
 - `evalset.json`：evalset_check.py stdout（触发集质量，#10 降级依据）
 - `model_robust.json`：model_robust.py stdout（#15 跨模型一致率）
 - `models/<模型名>/trace-<序号>.json`：跨模型运行的逐 case trace（序号 = 评测集顺序，各模型必须一致）
@@ -206,9 +220,11 @@ evalsets/<name>/results/<version>/
 ```
 
 规则：
-- `tier` 记录本次跑到的最高档位；跨档位的指标值不直接比较
+- `tier` 记录本次跑到的最高档位；`tier_label` 是给人看的名称；`metric_tiers` 给出 #N→T0/T1/T2A/T2B/T3 分组
+- 跨档位的指标值不直接比较
 - 各中间产物记录生成时的 skill content_sha256；高档复用低档产物时校验一致，不一致则该产物作废重跑
-- 16 条指标全部出现；未测的标 `skipped` 并注明原因，不打 0 分
+- 16 条指标全部出现，`metrics` 按 #1–#16 排序；未测的标 `skipped` 并注明原因，不打 0 分
+- `manual_overrides` 列出本次人工 fail→warn 的指标、原因、审核人与时间；报告 note 同步标注
 - **data 渲染**（report.md / report.html 共用一套，ADR-0030）：**所有指标一律表格化**——已知形状走定制表（#16 `per_pair`、#15 `cost_by_case`+`cv_by_case`、#13 `cost`、#14 `per_case`、#10 三率、#11 三分量、#12 报错与评审项、#4 六组与闸门），其余走**通用兜底**（dict/list 递归压平成 key-value 表）；judge 面（`items`）另加 score/reason 摘要行。原始 JSON 一律保留：**有表就折叠**（`<details>`，不管多短），无表且 ≤400 字符才内联；单元格 >800 字符截断并标注。**不得静默截断**（旧实现 `[:2000]` 会把 2165 字符的 #16 data 切成非法 JSON）。渲染层不得反向改 `report.json` 的形状
 - **结果符号**：卡片徽章、表格结果列与顶部 16 行总览表（`id="overview"`）统一 pass=✓ / fail=✗ / warn=⚠ / skipped=–
 - **优化建议**（ADR-0030）：`report.json.advice` = `[{metric, severity, problem, evidence, action}]`，由 `build()` 从裁决确定性派生（`severity` = fail/warn/info，排序 fail→warn→info）；每个指标卡下方内联该指标建议，`report.html` 另有「优化建议」tab（`#N` 锚点跳回指标卡），report.md 有 `## 优化建议` 段。问题与建议同源，不存在“建议里说了、指标里没有”

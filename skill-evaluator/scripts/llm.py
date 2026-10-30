@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import os
 import urllib.error
-import urllib.request
+import urllib.request  # static-check:ignore
 
 import _console
 
@@ -26,17 +26,27 @@ class LLMError(RuntimeError):
     """配置缺失、网络错误、协议/响应不合法。"""
 
 
-def protocol() -> str:
-    value = _config.get_str("llm.protocol", "openai").strip().lower()
+def protocol(override: str | None = None) -> str:
+    value = (override or _config.get_str("llm.protocol", "openai")).strip().lower()
     if value not in ("openai", "anthropic"):
         raise LLMError(f"llm.protocol 只支持 openai/anthropic，实际是 {value!r}")
     return value
 
 
-def base_url(override: str | None = None) -> str:
-    value = (override if override is not None else _config.get_str("llm.base_url", "")).strip()
+def _env_base_url(proto: str) -> str:
+    return os.environ.get("ANTHROPIC_BASE_URL" if proto == "anthropic" else "OPENAI_BASE_URL", "").strip()
+
+
+def base_url(override: str | None = None, proto: str | None = None) -> str:
+    """UI/CLI > config.yaml > 标准环境变量 > 官方端点。"""
+    proto = proto or protocol()
+    value = (override or "").strip()
     if not value:
-        raise LLMError("llm.base_url 未配置：请在 config.yaml 填端点，或给 --base-url")
+        value = _config.get_str("llm.base_url", "").strip()
+    if not value:
+        value = _env_base_url(proto)
+    if not value:
+        value = "https://api.anthropic.com/v1" if proto == "anthropic" else "https://api.openai.com/v1"
     return value.rstrip("/")
 
 
@@ -49,21 +59,28 @@ def default_model(override: str | None = None) -> str:
     return value
 
 
-def api_key(override: str | None = None) -> str:
+def api_key(override: str | None = None, proto: str | None = None) -> str:
     if override:
         return override
     env_name = _config.get_str("llm.api_key_env", "").strip()
-    return os.environ.get(env_name, "") if env_name else ""
+    if env_name:
+        value = os.environ.get(env_name, "")
+        if value:
+            return value
+    proto = proto or protocol()
+    return os.environ.get("ANTHROPIC_API_KEY" if proto == "anthropic" else "OPENAI_API_KEY", "")
 
 
 def configured() -> bool:
-    """T1 是否具备直连条件（端点 + 模型）；缺一不可。"""
+    """T1 是否具备直连条件：有模型；且端点显式配置或存在标准 API key。"""
     try:
-        base_url()
         default_model()
-        return True
     except LLMError:
         return False
+    proto = protocol()
+    if _config.get_str("llm.base_url", "").strip() or _env_base_url(proto):
+        return True
+    return bool(api_key(proto=proto))
 
 
 def _endpoint(proto: str, root: str) -> str:
@@ -120,12 +137,12 @@ def _extract_text(proto: str, payload) -> str:
 
 def chat(prompt: str, *, model: str | None = None, system: str | None = None,
          api_key_override: str | None = None, base_url_override: str | None = None,
-         timeout: int | None = None, opener=None) -> dict:
+         timeout: int | None = None, opener=None, protocol_override: str | None = None) -> dict:
     """单次无工具对话，返回 {text, model, protocol, request, response}。"""
-    proto = protocol()
-    root = base_url(base_url_override)
+    proto = protocol(protocol_override)
+    root = base_url(base_url_override, proto)
     model_id = default_model(model)
-    key = api_key(api_key_override)
+    key = api_key(api_key_override, proto)
     body = _request_body(proto, model_id, prompt, system)
     url = _endpoint(proto, root)
     req = urllib.request.Request(url, data=json.dumps(body, ensure_ascii=False).encode("utf-8"),  # static-check:ignore
@@ -153,6 +170,19 @@ def chat(prompt: str, *, model: str | None = None, system: str | None = None,
 
 def ask(prompt: str, **kwargs) -> str:
     return chat(prompt, **kwargs)["text"]
+
+
+def status() -> dict:
+    """前端初始化用：只返回非敏感配置。"""
+    try:
+        proto = protocol()
+        return {"protocol": proto, "base_url": base_url(proto=proto),
+                "model": _config.get_str("llm.model", "") or os.environ.get("SKILL_EVAL_MODEL", ""),
+                "api_key_env": _config.get_str("llm.api_key_env", ""),
+                "configured": configured()}
+    except LLMError as exc:
+        return {"protocol": "openai", "base_url": "", "model": "",
+                "api_key_env": "", "configured": False, "error": str(exc)}
 
 
 def extract_json(text: str):

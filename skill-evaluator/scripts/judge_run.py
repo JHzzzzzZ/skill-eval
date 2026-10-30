@@ -84,12 +84,12 @@ def _pi_text(events_text: str) -> str:
 
 
 def ask(prompt: str, backend: str, model: str | None, base_url: str | None,
-        api_key: str | None) -> tuple[str, str]:
+        api_key: str | None, protocol: str | None = None) -> tuple[str, str]:
     if backend == "auto":
         backend = "llm" if llm_layer.configured() else "pi"
     if backend == "llm":
         text = llm_layer.ask(prompt, model=model, base_url_override=base_url,
-                             api_key_override=api_key)
+                             api_key_override=api_key, protocol_override=protocol)
         return text, "llm"
     events = _subprocess.ask_json(_subprocess.build_mode_args(
         model or _config.get_str("llm.model", "") or None), prompt)
@@ -97,7 +97,7 @@ def ask(prompt: str, backend: str, model: str | None, base_url: str | None,
 
 
 def run(metric: str, skill_dir: Path, out: Path, *, model=None, backend="auto",
-        base_url=None, api_key=None, max_chars: int | None = None,
+        base_url=None, api_key=None, protocol=None, max_chars: int | None = None,
         raw_dir: Path | None = None) -> dict:
     rubric_path = JUDGES / f"{metric}.md"
     if not rubric_path.is_file():
@@ -105,12 +105,12 @@ def run(metric: str, skill_dir: Path, out: Path, *, model=None, backend="auto",
     rubric = rubric_path.read_text(encoding="utf-8")
     files = collect_files(skill_dir, max_chars)
     prompt = build_prompt(rubric, files)
-    text, used = ask(prompt, backend, model, base_url, api_key)
+    text, used = ask(prompt, backend, model, base_url, api_key, protocol)
     payload = llm_layer.extract_json(text)
     errors = judge_runner.validate(payload) if payload is not None else ["模型输出里没有 JSON 对象"]
     if errors:
         retry = prompt + "\n\n上一次输出不合法：\n- " + "\n- ".join(errors) + "\n请只输出修正后的 JSON。"
-        text2, used = ask(retry, backend, model, base_url, api_key)
+        text2, used = ask(retry, backend, model, base_url, api_key, protocol)
         payload = llm_layer.extract_json(text2)
         errors = judge_runner.validate(payload) if payload is not None else ["模型输出里没有 JSON 对象"]
         text = text2
@@ -129,12 +129,12 @@ def run(metric: str, skill_dir: Path, out: Path, *, model=None, backend="auto",
 
 def main():
     args = sys.argv[1:]
-    metric = skill = out = model = backend = base_url = api_key = raw_dir = None
+    metric = skill = out = model = backend = base_url = api_key = raw_dir = protocol = None
     max_chars = None
     i = 0
     while i < len(args):
         if args[i] in ("--metric", "--skill", "--out", "--model", "--backend",
-                       "--base-url", "--api-key", "--raw-dir"):
+                       "--base-url", "--api-key", "--raw-dir", "--protocol"):
             key = args[i]
             val = args[i + 1]; i += 2
             if key == "--metric": metric = val
@@ -145,6 +145,7 @@ def main():
             elif key == "--base-url": base_url = val
             elif key == "--api-key": api_key = val
             elif key == "--raw-dir": raw_dir = val
+            elif key == "--protocol": protocol = val
         elif args[i] == "--max-chars":
             max_chars = int(args[i + 1]); i += 2
         else:
@@ -159,8 +160,8 @@ def main():
         sys.exit(2)
     try:
         payload = run(metric, Path(skill), Path(out), model=model, backend=backend or "auto",
-                      base_url=base_url, api_key=api_key, max_chars=max_chars,
-                      raw_dir=Path(raw_dir) if raw_dir else None)
+                      base_url=base_url, api_key=api_key, protocol=protocol,
+                      max_chars=max_chars, raw_dir=Path(raw_dir) if raw_dir else None)
     except Exception as exc:
         print(json.dumps({"ok": False, "metric": metric, "error": str(exc)}, ensure_ascii=False))
         sys.exit(2)

@@ -500,8 +500,8 @@ def test_tests_dir_exempt_from_gate(tmp_path):
     (d / "scripts" / "real.py").write_text(bad, encoding="utf-8")
     out = run_check(d)
     assert out["scan_excluded_dirs"] == ["tests"]
-    assert out["dangerous"] and all(h["file"] == "real.py" for h in out["dangerous"])
-    assert out["hardcoded"] and all(h["file"] == "real.py" for h in out["hardcoded"])
+    assert out["dangerous"] and all(h["file"] == "scripts/real.py" for h in out["dangerous"])
+    assert out["hardcoded"] and all(h["file"] == "scripts/real.py" for h in out["hardcoded"])
 
 
 def test_no_tests_dir_field_empty(tmp_path):
@@ -529,11 +529,36 @@ def test_stale_ref_detected(tmp_path):
 
 # --- #3 正文精简：行数由静态面确定性测量（ADR-0017）---
 
+def test_multiline_description_and_name_chars(tmp_path):
+    d = make_skill(tmp_path, """---
+name: sample-skill
+description: |
+  第一行描述
+  第二行描述
+  第三行描述
+---
+body
+""")
+    out = run_check(d)
+    assert "第一行描述" in out["description"] and "第三行描述" in out["description"]
+    assert out["description_chars"] == len(out["description"].strip())
+    assert out["description_chars"] > 10
+    assert out["name_chars"] == len("sample-skill")
+
+
+def test_egress_get_and_internal_ip_is_warning(tmp_path):
+    d = make_skill(tmp_path, "---\nname: s\ndescription: d\n---\nbody\n")
+    (d / "client.py").write_text('import requests\nrequests.get("http://10.0.0.7/data")\n', encoding="utf-8")
+    out = run_check(d)
+    assert out["egress"] and out["passed"] is True
+    assert any("出站网络" in w for w in out["warnings"])
+
+
 def test_body_lines_excludes_frontmatter_counts_blanks(tmp_path):
     d = make_skill(tmp_path, "---\nname: s\ndescription: d\n---\n" + "a\nb\n\nc\n")
     out = run_check(d)
     assert out["skill_md_body_lines"] == 4          # a/b/空行/c —— 空行计入
-    assert out["skill_md_body_max_lines"] == 150
+    assert out["skill_md_body_warn_lines"] == 150
 
 
 def test_body_lines_over_limit_warns_not_fails(tmp_path):

@@ -6,12 +6,14 @@
 stdout 契约（字段恒输出）：
 {
   "name": str|null, "description": str|null, "description_tokens": int,
+  "name_chars": int, "name_max_chars": int,
   "description_chars": int, "description_warn_chars": int, "description_fail_chars": int,
   "description_level": "ok"|"warn"|"fail"|"skipped", "human": bool,
   "invoke": {"allowed": [str...], "resolved": str, "note": str},   # resolved: both|human（映射 disable-model-invocation）
   "dangerous": [{"pattern": str, "line": int, "file": str, "text": str}],
   "secrets": [...], "injection": [...], "exfil": [...],   # 同为 #4，命中即 error（ADR-0013）
   "obfuscation": [...],                                # 同为 #4，命中仅 warning
+  "egress": [...],                                     # 出站网络（GET/内网/ssh 等），仅 warning
   "pii": [{"pattern": str, "label": str, "line": int, "file": str, "text": str}],
                                                         # 同为 #4 的第六组（ADR-0029），命中仅 warning
   # 每行最多计一条（多规则同时命中取第一条）；ignored/errors 里的“处数”= 命中行数
@@ -26,13 +28,12 @@ stdout 契约（字段恒输出）：
   "skill_md_body_lines": int|null,       # #2 正文行数（frontmatter 之后全文；无 SKILL.md 时为 null）
   "skill_md_body_warn_lines": int, "skill_md_body_fail_lines": int,
   "body_level": "ok"|"warn"|"fail",
-  "skill_md_body_max_lines": int,        # 兼容旧字段 = warn 线（report.py 新代码读 body_level）
   "errors": [str], "warnings": [str], "issues": [str],   # issues = errors + warnings
   "passed": bool          # errors 为空即 True（危险命令/缺 name 都算 error）
 }
 
-#4 = 六组规则（ADR-0013/0029）：dangerous/secrets/injection/exfil 命中 → error；
-obfuscation/pii 命中 → warning。secrets 组带占位符过滤（your/xxx/example… 所在行不算硬编码凭据）。
+#4 = 六组规则 + 出站网络（ADR-0013/0029）：dangerous/secrets/injection/exfil 命中 → error；
+obfuscation/pii/egress 命中 → warning。secrets 组带占位符过滤（your/xxx/example… 所在行不算硬编码凭据）。
 error 文案里不得出现 name/description/invoke 字样，否则 report.py 会误判成 #1/#3 的 fail 依据。
 
 排除口径（ADR-0012：机制 + 作用域）：
@@ -133,6 +134,17 @@ EXFIL_PATTERNS = [
     r"(?:cat|less|more|source|read_text|readlines|open)\s*\(?[^\n]{0,40}\.env\b",
     r"\.env\b[^\n]{0,40}\|\s*(?:curl|nc|mail|wget)",
     r"process\.env\b[^\n]{0,60}https?://",
+]
+
+# 出站网络调用（#4，命中仅 warning）：POST 只是其中一种；GET 查询串、内网、socket、ssh 都算。
+# 与 EXFIL 的区别：这里只证明“会发网络请求”，不证明“发了敏感数据”，所以不 fail。
+EGRESS_PATTERNS = [
+    r"\bcurl\b", r"\bwget\b",
+    r"\b(?:requests|httpx)\.(?:get|post|put|patch|delete|head|options|request)\s*\(",
+    r"\burllib\.request\b", r"\bhttp\.client\b", r"\bfetch\s*\(",
+    r"\bsocket\.", r"\b(?:nc|ncat|netcat)\b", r"\bssh\b", r"\bscp\b",
+    r"\brsync\b", r"\bftp\b", r"\bInvoke-WebRequest\b", r"\bInvoke-RestMethod\b",
+    r"\bwebhook\b",
 ]
 
 # 混淆（#4，命中仅 warning）：混淆本身不是铁证（可能只是内嵌数据），交人工复核
@@ -331,14 +343,45 @@ def collect_deps(skill_dir: Path, exclude_paths):
 
 
 def parse_frontmatter(text: str):
+    """解析单行 key: value + YAML 块标量（| / >），支持多行 description。
+
+    不引入 PyYAML：只覆盖 frontmatter 常见写法。块标量要求缩进 2 空格或 1 tab。
+    """
     m = re.match(r"\A---\s*\n(.*?)\n---\s*\n", text, re.DOTALL)
     if not m:
         return {}, text
     meta = {}
-    for line in m.group(1).splitlines():
-        if ":" in line:
-            k, _, v = line.partition(":")
-            meta[k.strip()] = v.strip().strip('"')
+    lines = m.group(1).splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if not line.strip() or line.lstrip().startswith("#"):
+            i += 1
+            continue
+        if ":" not in line:
+            i += 1
+            continue
+        key, _, value = line.partition(":")
+        key, value = key.strip(), value.strip()
+        if value in ("|", "|-", ">", ">-"):
+            block = []
+            i += 1
+            while i < len(lines) and (lines[i].startswith("  ") or lines[i].startswith("\t")):
+                block.append(lines[i][2:] if lines[i].startswith("  ") else lines[i][1:])
+                i += 1
+            meta[key] = "\n".join(block) if value.startswith("|") else " ".join(x.strip() for x in block)
+            continue
+        if value[:1] in ("'", '"'):
+            quote = value[0]
+            val = value[1:]
+            while not val.endswith(quote) and i + 1 < len(lines):
+                i += 1
+                val += "\n" + lines[i]
+            val = val.rstrip(quote).replace("\n", "\n")
+            meta[key] = val.strip()
+        else:
+            meta[key] = value.strip().strip('"')
+        i += 1
     return meta, text[m.end():]
 
 
@@ -427,7 +470,11 @@ def scan_patterns(skill_dir: Path, patterns, exclude_paths=None, ignored=None, s
                         continue
                     if accept is not None and not accept(m, regex):
                         continue
-                    entry = {"pattern": regex, "line": i, "file": f.name, "text": line.strip()}
+                    try:
+                        rel = f.relative_to(skill_dir).as_posix()
+                    except ValueError:
+                        rel = f.name
+                    entry = {"pattern": regex, "line": i, "file": rel, "text": line.strip()}
                     if label:
                         entry["label"] = label
                     if silenced:
@@ -522,16 +569,18 @@ def main():
         raise _config.ConfigError("static.body_warn_lines 不能大于 body_fail_lines")
     exclude_paths = ([] if no_defaults else default_excludes(skill_dir)) + resolve_excludes(skill_dir, excludes)
     out = {"name": None, "description": None, "description_tokens": 0,
+           "name_chars": 0, "name_max_chars": name_max_chars,
            "description_chars": 0, "description_warn_chars": desc_warn,
            "description_fail_chars": desc_fail, "description_level": "skipped",
            "human": False,
            "invoke": {"allowed": sorted(INVOKE_VALUES), "resolved": "both", "note": ""},
            "dangerous": [], "secrets": [], "injection": [], "exfil": [], "obfuscation": [], "pii": [],
+           "egress": [],
            "hardcoded": [], "excluded": rel_paths(exclude_paths, skill_dir),
            "ignored": [], "scan_excluded_dirs": [], "stale_refs": [],
            "deps_used": [], "deps_declared": [], "deps_missing": [],
            "skill_md_body_lines": None, "skill_md_body_warn_lines": body_warn,
-           "skill_md_body_fail_lines": body_fail, "skill_md_body_max_lines": body_warn,
+           "skill_md_body_fail_lines": body_fail,
            "body_level": "ok",
            "errors": [], "warnings": [], "issues": [], "passed": True}
     skill_md = skill_dir / "SKILL.md"
@@ -560,8 +609,10 @@ def main():
     if not out["name"]:
         if not human:
             out["errors"].append("frontmatter 缺 name")
-    elif len(out["name"]) > name_max_chars:
-        out["warnings"].append(f"name {len(out['name'])} 字符，超过 {name_max_chars}（#1）")
+    else:
+        out["name_chars"] = len(out["name"])
+        if out["name_chars"] > name_max_chars:
+            out["warnings"].append(f"name {out['name_chars']} 字符，超过 {name_max_chars}（#1）")
 
     if not out["description"]:
         out["description_level"] = "skipped" if human else "fail"
@@ -625,6 +676,12 @@ def main():
     out["exfil"] = scan_patterns(skill_dir, EXFIL_PATTERNS, exclude_paths, out["ignored"])
     if out["exfil"]:
         out["errors"].append(f"发现 {len(out['exfil'])} 处数据外发或凭据读取（#4）")
+
+    # 出站网络调用：不区分公网/内网，GET/查询串也算；只 warning，交人工判断是否传敏感数据
+    out["egress"] = scan_patterns(skill_dir, EGRESS_PATTERNS, exclude_paths, out["ignored"])
+    if out["egress"]:
+        out["warnings"].append(
+            f"发现 {len(out['egress'])} 处出站网络调用（#4，仅警告：可能访问内网/外部服务）")
 
     out["obfuscation"] = scan_patterns(skill_dir, OBFUSCATION_PATTERNS, exclude_paths, out["ignored"])
     if out["obfuscation"]:

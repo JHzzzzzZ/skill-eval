@@ -4,7 +4,7 @@ Generated: 2026-09-22T13:43:08.578Z
 
 ## OVERVIEW
 
-13 个确定性 Python CLI + 5 个共享模块（`_config`/`_console`/`_subprocess`/`llm`/`harness`）+ `check-deps.sh` 前置自检，扁平单层。另有 3 个 T4 脚本在 `attic/scripts/`（不进包、不跑测试）。每个脚本 = 一个有文档的 CLI seam：输出 stdout JSON 或落盘中间产物。测量脚本之间无 subprocess 调用；runner/harness 是编排层例外。
+14 个确定性 Python CLI + 5 个共享模块（`_config`/`_console`/`_subprocess`/`llm`/`harness`）+ `check-deps.sh` 前置自检，扁平单层。另有 3 个 T4 脚本在 `attic/scripts/`（不进包、不跑测试）。每个脚本 = 一个有文档的 CLI seam：输出 stdout JSON 或落盘中间产物。测量脚本之间无 subprocess 调用；runner/harness 是编排层例外。
 
 ## WHERE TO LOOK
 
@@ -14,6 +14,7 @@ Generated: 2026-09-22T13:43:08.578Z
 | `llm.py` | 184 | 无 CLI；`chat/ask/configured/extract_json` | T1 直连 LLM（ADR-0034） |
 | `harness.py` | 75 | 无 CLI；`run_case/available` | 执行载体适配（当前 pi） |
 | `judge_run.py` | 172 | `--metric --skill --out [--backend]` | T1 评审执行器 |
+| `evalset_gen.py` | 115 | `--skill --out [--count]` | 生成 T2A 评测集草稿 |
 | `runner.py` | 403 | `--skill --tier [--evalset] [--real-input]` | 确定性编排 + NDJSON 进度 |
 | `report.py` | 1342 | `<results目录> [--html] [--evalset <vN>] [--skill <dir>] [--tier <t>]` | 汇总 16 条 + 优化建议 + 报告页 |
 | `static_check.py` | 621 | `<skill目录> [--exclude <p>]... [--no-default-excludes]` | #1/#3/#4 六组 + 可移植性闸门 + #12 依赖全面性 |

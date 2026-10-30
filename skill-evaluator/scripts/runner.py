@@ -177,6 +177,12 @@ def run(args) -> int:
     if evalset and not evalset.is_dir():
         raise RunnerError(f"评测集不存在: {evalset}")
     model = args.model or os.environ.get("SKILL_EVAL_MODEL") or None
+    judge_backend = ("llm" if (args.base_url or args.api_key or args.llm_protocol) else args.backend)
+    _write_json(results / "run-meta.json", {
+        "skill": str(skill), "tier": tier, "evalset": str(evalset) if evalset else None,
+        "model": model, "harness": args.harness, "llm_protocol": args.llm_protocol,
+        "base_url": args.base_url, "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+    })
 
     # T1 评审（默认 llm；未配置时 auto 回落 pi）
     if TIER_RANK[tier] >= TIER_RANK["t1"]:
@@ -190,9 +196,10 @@ def run(args) -> int:
             for metric in rubrics:
                 futs[pool.submit(_run, "judge_run.py",
                                  ["--metric", metric, "--skill", skill,
-                                  "--out", jdir / f"{metric}.json", "--backend", args.backend,
+                                  "--out", jdir / f"{metric}.json", "--backend", judge_backend,
                                   "--raw-dir", results / "raw" / "llm-judge",
-                                  "--model", model or ""])] = metric
+                                  "--model", model or "", "--protocol", args.llm_protocol or "",
+                                  "--base-url", args.base_url or "", "--api-key", args.api_key or ""])] = metric
             for fut in as_completed(futs):
                 metric = futs[fut]
                 try:
@@ -235,7 +242,10 @@ def run(args) -> int:
                         jout = results / "trigger-judge" / f"{key}-{idx}.json"
                         _run("trigger_judge.py", ["--skill", sandbox / "SKILL.md",
                                                   "--trace", trace_path, "--out", jout,
-                                                  "--model", model or ""])
+                                                  "--model", model or "",
+                                                  "--base-url", args.base_url or "",
+                                                  "--api-key", args.api_key or "",
+                                                  "--llm-protocol", args.llm_protocol or ""])
                         judged[key].append(bool((_read_json(jout, {}) or {}).get("triggered")))
                     except Exception as exc:
                         judged[key].append(False)
@@ -325,7 +335,9 @@ def run(args) -> int:
                     expect.write_text(case["expect"], encoding="utf-8")
                     _run("compare.py", ["--expect", expect, "--actual", actual,
                                         "--out", results / "compare" / f"{case['name']}.json",
-                                        "--model", model or ""], check=False)
+                                        "--model", model or "", "--base-url", args.base_url or "",
+                                        "--api-key", args.api_key or "",
+                                        "--llm-protocol", args.llm_protocol or ""], check=False)
             _write_json(results / "runs.json", runs)
             # T2B 的 baseline 不参与 T3 成本；necessity 单独从 t2b/score.json 合并
             if (results / "baseline.json").exists():
@@ -376,11 +388,13 @@ def main():
         skill = None; tier = "t2a"; results = None; evalset = None; real_input = None
         model = None; backend = "auto"; progress = None; version = None
         dry_run = False; sandbox = None; harness = None
+        llm_protocol = None; base_url = None; api_key = None
     i = 0
     while i < len(args):
         key = args[i]
         if key in ("--skill", "--tier", "--results", "--evalset", "--real-input", "--model",
-                   "--backend", "--progress", "--version", "--sandbox", "--harness"):
+                   "--backend", "--progress", "--version", "--sandbox", "--harness",
+                   "--llm-protocol", "--base-url", "--api-key"):
             if i + 1 >= len(args):
                 print(f"{key} 缺值", file=sys.stderr); return 2
             setattr(A, key[2:].replace("-", "_"), args[i + 1]); i += 2

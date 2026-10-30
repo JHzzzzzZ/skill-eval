@@ -88,6 +88,7 @@ def extract_answer(events_text: str) -> dict:
 def main():
     args = sys.argv[1:]
     expect_file = actual_file = model = thinking = events_file = out_path = None
+    base_url = api_key = protocol = None
     build_only = False
     i = 0
     while i < len(args):
@@ -101,6 +102,12 @@ def main():
             thinking = args[i + 1]; i += 2
         elif args[i] == "--events":
             events_file = args[i + 1]; i += 2
+        elif args[i] == "--base-url":
+            base_url = args[i + 1]; i += 2
+        elif args[i] == "--api-key":
+            api_key = args[i + 1]; i += 2
+        elif args[i] == "--llm-protocol":
+            protocol = args[i + 1]; i += 2
         elif args[i] == "--out":
             out_path = args[i + 1]; i += 2
         elif args[i] == "--build-only":
@@ -151,9 +158,11 @@ def main():
 
     if events_file:
         answer = extract_answer(Path(events_file).read_text(encoding="utf-8", errors="replace"))
-    elif llm_layer.configured():
+    elif llm_layer.configured() or base_url or api_key:
         try:
-            answer = extract_json_object(llm_layer.ask(prompt, model=model or None)) or {}
+            answer = extract_json_object(llm_layer.ask(
+                prompt, model=model or None, base_url_override=base_url,
+                api_key_override=api_key, protocol_override=protocol)) or {}
         except Exception as exc:
             answer = {"match": False, "score": 0, "reason": f"LLM 调用失败：{exc}"}
     else:

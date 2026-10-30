@@ -61,7 +61,7 @@ fi
 REQUIRED="SKILL.md reference.md requirements.txt LICENSE config.yaml scripts/_config.py scripts/_console.py scripts/_subprocess.py scripts/check-deps.sh
 scripts/static_check.py scripts/evalset_count.py scripts/evalset_check.py scripts/trace_run.py
 scripts/trigger_judge.py scripts/judge_runner.py scripts/score.py scripts/idem.py scripts/compare.py
-scripts/report.py scripts/model_robust.py scripts/runner.py scripts/judge_run.py scripts/llm.py scripts/harness.py
+scripts/report.py scripts/model_robust.py scripts/runner.py scripts/judge_run.py scripts/llm.py scripts/harness.py scripts/evalset_gen.py
 judges/brevity.md judges/redundancy.md judges/fallback.md judges/precheck.md judges/contract.md
 judges/deps.md judges/trigger.md
 web/app.py web/index.html"

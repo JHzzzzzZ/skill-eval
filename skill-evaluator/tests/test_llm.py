@@ -52,7 +52,7 @@ def test_openai_request_has_no_tools_and_extracts_text():
 
 
 def test_anthropic_request_and_response(monkeypatch):
-    monkeypatch.setattr(llm, "protocol", lambda: "anthropic")
+    monkeypatch.setattr(llm, "protocol", lambda override=None: "anthropic")
     seen = {}
 
     def opener(req, timeout):
@@ -67,6 +67,6 @@ def test_anthropic_request_and_response(monkeypatch):
     assert seen["body"]["messages"][-1]["content"] == "问题"
 
 
-def test_missing_base_url_raises():
-    with pytest.raises(llm.LLMError):
-        llm.base_url("")
+def test_default_base_url_is_official():
+    assert llm.base_url("", "openai") == "https://api.openai.com/v1"
+    assert llm.base_url("", "anthropic") == "https://api.anthropic.com/v1"

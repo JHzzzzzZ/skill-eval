@@ -18,6 +18,7 @@ import sys
 from pathlib import Path
 
 import _config
+import static_check
 META_SCHEMA = "skill-eval/results-meta/1"  # 与 uploads/、evalsets/ 下的同名 meta.json 靠此字段区分
 EVALUATOR_ROOT = Path(__file__).resolve().parent.parent  # 评估器自身目录（指纹范围）
 
@@ -35,11 +36,38 @@ DIM_NAMES = {
 # #4 的六个静态规则组（ADR-0013/0029）：用于 note 与表格里的命中摘要
 DIM_PERM_GROUPS = {"dangerous": "危险命令", "secrets": "硬编码凭据",
                    "injection": "注入指令", "exfil": "数据外发", "obfuscation": "混淆",
-                   "pii": "个人信息"}
+                   "pii": "个人信息", "egress": "出站网络"}
 # 命中即 fail 的四组；其余两组（混淆/个人信息）仅 warn，待人工复核（ADR-0013/0029）
 DIM_PERM_HARD = ("dangerous", "secrets", "injection", "exfil")
-DIM_PERM_SOFT = ("obfuscation", "pii")
+DIM_PERM_SOFT = ("obfuscation", "pii", "egress")
 VERDICT_RANK = {"skipped": 0, "pass": 1, "warn": 2, "fail": 3}
+TIER_LABELS = {"t0": "基础检查", "t1": "语义评审", "t2a": "触发评测",
+               "t2b": "真实输入对比", "t3": "完整运行"}
+TIER_OF = {**{f"#{i}": "T0" for i in range(1, 5)},
+           **{f"#{i}": "T1" for i in range(5, 10)},
+           "#10": "T2A", "#11": "T2B", "#12": "T2B",
+           **{f"#{i}": "T3" for i in range(13, 17)}}
+
+
+def tier_label(value) -> str:
+    return TIER_LABELS.get(str(value or "").lower(), str(value or ""))
+
+
+def _public_text(text):
+    """用户界面不展示内部 ADR 编号；只清洗展示文本，不改 data。"""
+    if not isinstance(text, str):
+        return text
+    text = re.sub(r"[（(]?\s*ADR-\d{4}(?:/\d{4})*\s*[）)]?", "", text)
+    return re.sub(r"\s{2,}", " ", text).strip()
+
+
+def _public_tables(tables):
+    out = []
+    for summary, cols, rows in tables:
+        out.append((_public_text(summary) if isinstance(summary, str) else summary,
+                    [_public_text(c) if isinstance(c, str) else c for c in cols],
+                    [[_public_text(c) if isinstance(c, str) else c for c in row] for row in rows]))
+    return out
 
 
 def worse(a: str, b: str) -> str:
@@ -214,14 +242,17 @@ def from_static(static, m: dict):
     chars = static.get("description_chars")
     warn = static.get("description_warn_chars")
     fail = static.get("description_fail_chars")
+    name_chars = static.get("name_chars")
+    name_max = static.get("name_max_chars")
     if level == "skipped":
-        note = "human 型：name/description 可省略（静态面 skipped，ADR-0037）"
+        note = "human 型：name/description 可省略（静态面 skipped）"
     elif isinstance(chars, int) and isinstance(warn, int) and isinstance(fail, int):
-        note = f"description {chars} 字符（警告线 {warn} / 失败线 {fail}，ADR-0037）"
+        note = f"name {name_chars} 字符 / description {chars} 字符（警告线 {warn} / 失败线 {fail}）"
     else:
         note = "name/description 规范与字符阈值"
     m["#1"] = {"verdict": verdict, "method": METHOD_STATIC,
-               "data": {"description_chars": chars,
+               "data": {"name_chars": name_chars, "name_max_chars": name_max,
+                        "description_chars": chars,
                         "description_warn_chars": warn,
                         "description_fail_chars": fail,
                         "description_tokens": static.get("description_tokens"),
@@ -242,7 +273,7 @@ def from_static(static, m: dict):
     gate = static.get("hardcoded") or []
     hit = [k for k in DIM_PERM_HARD if groups[k]]
     soft_hit = [k for k in DIM_PERM_SOFT if groups[k]]
-    note = "六组静态规则（危险命令/凭据/注入/外发/混淆/个人信息）"
+    note = "六组静态规则 + 出站网络（危险命令/凭据/注入/外发/混淆/个人信息/egress）"
     if hit:
         note += "；命中：" + "、".join(f"{DIM_PERM_GROUPS[k]}×{len(groups[k])}" for k in hit)
     if soft_hit:
@@ -537,14 +568,15 @@ def build(d: Path, evalset_dir: Path | None = None) -> dict:
             level = static.get("body_level")
             warn = static.get("skill_md_body_warn_lines")
             fail = static.get("skill_md_body_fail_lines")
-            limit = static.get("skill_md_body_max_lines")  # 旧字段 = warn 线，兼容旧 static.json
+            limit = static.get("skill_md_body_max_lines")  # 旧 static.json 兼容；新产物不再输出
+            if not isinstance(warn, int):
+                warn = limit
             if level not in ("ok", "warn", "fail"):
-                level = "warn" if isinstance(limit, int) and lines > limit else "ok"
+                level = "warn" if isinstance(warn, int) and lines > warn else "ok"
             cur = m["#2"]
             merged = {"skill_md_body_lines": lines, "body_level": level}
             for key, value in (("skill_md_body_warn_lines", warn),
-                               ("skill_md_body_fail_lines", fail),
-                               ("skill_md_body_max_lines", limit)):
+                               ("skill_md_body_fail_lines", fail)):
                 if isinstance(value, int):
                     merged[key] = value
             if isinstance(cur.get("data"), dict):
@@ -575,10 +607,34 @@ def build(d: Path, evalset_dir: Path | None = None) -> dict:
             if m[k]["verdict"] != "skipped":
                 m[k]["note"] = f"{m[k]['note']}（{ai_note}）"
 
+    # 人工复核：只允许 fail → warn；必须留原因，报告与 audit 文件同时记录（需求 9）
+    overrides = load(d, "overrides.json") or {}
+    manual = []
+    if isinstance(overrides, dict):
+        for metric, info in overrides.items():
+            if not isinstance(info, dict) or metric not in m:
+                continue
+            if info.get("from") != "fail" or info.get("to") != "warn" or m[metric]["verdict"] != "fail":
+                continue
+            m[metric]["verdict"] = "warn"
+            reason = str(info.get("reason") or "人工复核").strip()
+            m[metric]["note"] = (m[metric].get("note") or "") + f"；人工复核：fail → warn（{reason}）"
+            m[metric]["data"] = {**(m[metric].get("data") or {}), "manual_override": info}
+            manual.append({"metric": metric, **info})
+    for value in m.values():
+        if isinstance(value.get("note"), str):
+            value["note"] = _public_text(value["note"])
+    advice = _advice(m)
+    for item in advice:
+        for key in ("problem", "evidence", "action"):
+            if isinstance(item.get(key), str):
+                item[key] = _public_text(item[key])
     from datetime import datetime
     report = {"schema": 2, "legacy_id_map": LEGACY_ID_MAP,
-              "metrics": m, "conclusion": conclusion(m),
-              "advice": _advice(m),
+              "metrics": {k: m[k] for k in ALL_KEYS}, "conclusion": conclusion(m),
+              "metric_tiers": TIER_OF,
+              "manual_overrides": manual,
+              "advice": advice,
               "reviewed_by": reviewed_by,
               "evaluator": evaluator_fingerprint(),
               "generated_at": datetime.now().isoformat(timespec="seconds")}
@@ -619,7 +675,7 @@ FLOW_STEPS = [  # SKILL.md 的 8 步流程（#43 流程图数据源）
     ("2 存档与定版", "只读存档 uploads/，副本 git init+commit，版本号 = 短 hash"),
     ("3 静态检查", "static_check.py：#1 规范、#3 调用方式、#4 六组规则、可移植性闸门"),
     ("4 评测集", "检查冻结的 evalsets/<name>/vN/；未冻结则生成 → 条数闸门 + 触发集质量自检 → LLM 自动审核（换模型）即冻结（reviewed_by=ai）"),
-    ("5 沙箱运行", "按档增量跑 pi CLI：T2A 触发（early-exit）→ T2B 真实场景 A/B → T3 主运行+重复（可选跨模型 model_robust.py）"),
+    ("5 沙箱运行", "按档增量运行：触发评测（early-exit）→ 真实输入对比 → 完整任务运行+重复（可选跨模型）"),
     ("6 LLM 评审", "judge_run.py（默认 llm 直连）逐项计分，judge_runner.py --validate 通过才进报告"),
     ("7 计算", "score.py（P/R/F1、成本、三分量必要性）+ idem.py（幂等）"),
     ("8 报告", "report.py：report.json + report.md（--html 加静态页），16 指标恒出现"),
@@ -663,14 +719,8 @@ def _skill_meta(skill_arg=None, evalset_dir=None):
         text = p.read_text(encoding="utf-8")
     except OSError:
         return None
-    m = re.match(r"\s*---\s*\n(.*?)\n\s*---", text, re.S)
-    fm = m.group(1) if m else ""
-
-    def field(k):
-        mm = re.search(rf"^{k}:\s*(.+)$", fm, re.M)
-        return mm.group(1).strip().strip("\"'") if mm else ""
-
-    name, desc = field("name"), field("description")
+    meta, _ = static_check.parse_frontmatter(text)
+    name, desc = (meta.get("name") or "").strip(), (meta.get("description") or "").strip()
     if not name and not desc:
         return None
     return {"name": name, "description": desc, "source": str(p)}
@@ -765,7 +815,7 @@ code,pre{background:#eef1f4;border-radius:4px;font-size:13px}
 pre{overflow:auto;padding:8px}.stepbox{fill:#fff;stroke:#94a3b8}
 .stepname{font-weight:700;font-size:14px}.stepdesc{font-size:12px;fill:#475569}
 .arrow{stroke:#64748b;stroke-width:1.5}.arrowhead{fill:#64748b}
-h4{margin:14px 0 4px}.hint{color:#6b7280}
+h4{margin:14px 0 4px}.hint{color:#6b7280}.tier td{background:#f1f5f9;font-weight:700;color:#334155}
 #rv-bar{position:sticky;top:0;background:#fff;border:1px solid #e2e6ea;border-radius:8px;padding:8px 12px;z-index:2;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 #rv-bar button{border:1px solid #1f2937;background:#1f2937;color:#fff;border-radius:6px;padding:4px 12px;cursor:pointer;font-size:13px}
 .rv-item .rv-ctrl{margin-top:6px;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
@@ -1134,7 +1184,7 @@ def _tables(metric: str, data, allow_generic=True) -> list:
                     for g in (*DIM_PERM_HARD, *DIM_PERM_SOFT) if g in data]
             rows.append(["可移植性闸门（hardcoded）", len(data.get("hardcoded") or []),
                          "error → fail（ADR-0008）"])
-            out.append(("六组静态规则 + 可移植性闸门（ADR-0013/0029）",
+            out.append(("六组规则 + 出站网络 + 可移植性闸门",
                         ["规则组", "命中数", "级别"], rows))
             hits = [(g, h) for g in (*DIM_PERM_HARD, *DIM_PERM_SOFT, "hardcoded")
                     for h in (data.get(g) or []) if isinstance(h, dict)]
@@ -1153,14 +1203,19 @@ def _tables(metric: str, data, allow_generic=True) -> list:
                             ["检查点", "结果", "原文引用"], _judge_rows(pj["items"])))
     if not out and allow_generic:
         out = _flatten_table(data)
-    return out
+    return _public_tables(out) if out else out
 
 
 def _overview_html(report: dict) -> str:
     """顶部 16 行总览（结果栏：✓/✗/⚠/–）——一眼扫完，不用十几个卡片里翻（ADR-0030）。"""
     rows = []
+    last_tier = None
     for k in ALL_KEYS:
         v = report["metrics"][k]
+        tier = TIER_OF.get(k, "")
+        if tier != last_tier:
+            rows.append(f"<tr class='tier'><td colspan='5'>{_esc(tier_label(tier.lower()))}</td></tr>")
+            last_tier = tier
         rows.append(f"<tr><td>{k}</td><td>{_esc(DIM_NAMES.get(k, ''))}</td><td>{_glyph(v['verdict'])}</td>"
                     f"<td>{_esc(v['method'])}</td><td>{_esc(_cell(v.get('note') or ''))}</td></tr>")
     return ("<div class='card'><h3 style='margin:0'>16 项指标总览</h3>"
@@ -1249,7 +1304,7 @@ def render_html(report: dict, evalset_dir=None, skill_arg=None) -> str:
     cls = report["conclusion"]
     meta_bits = []
     if report.get("tier"):
-        meta_bits.append(f"<span class='badge skipped' style='margin-left:8px'>{_esc(report['tier'])}</span>")
+        meta_bits.append(f"<span class='badge skipped' style='margin-left:8px'>{_esc(tier_label(report['tier']))}</span>")
     if report.get("reviewed_by") == "ai":
         meta_bits.append("<small style='margin-left:8px;color:#fbbf24'>评测集 AI 审核，未经人工复核</small>")
     return (_HTML_TMPL.replace("__CLS__", CONCLUSION_CLS.get(cls, "skipped"))
@@ -1264,7 +1319,7 @@ def render_html(report: dict, evalset_dir=None, skill_arg=None) -> str:
 def render_md(report: dict) -> str:
     head = ["# Skill 评估报告", "", f"**结论：{report['conclusion']}**"]
     if report.get("tier"):
-        head.append(f"**档位：{report['tier']}**")
+        head.append(f"**评估深度：{tier_label(report['tier'])}**")
     if report.get("reviewed_by") == "ai":
         head.append("**评测集 AI 审核，未经人工复核**")
     ev = report.get("evaluator") or {}
@@ -1318,7 +1373,7 @@ def main():
         else:
             rest.append(args[i]); i += 1
     if len(rest) != 1:
-        print("usage: report.py <results目录> [--tier <static|review|trigger|core|full>] "
+        print("usage: report.py <results目录> [--tier <t0|t1|t2a|t2b|t3>] "
               "[--html] [--evalset <evalsets/<name>/vN>] [--skill <被测skill目录>]", file=sys.stderr)
         sys.exit(2)
     d = Path(rest[0])
@@ -1328,6 +1383,7 @@ def main():
     report = build(d, evalset_dir)
     if tier:
         report["tier"] = tier
+        report["tier_label"] = tier_label(tier)
     meta = build_meta(report, skill_arg, evalset_dir)
     _console.write_text(d / "report.json", json.dumps(report, ensure_ascii=False, indent=2))
     _console.write_text(d / "report.md", render_md(report))

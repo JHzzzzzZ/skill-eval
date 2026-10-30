@@ -336,6 +336,32 @@ def test_deps_trace_error_overrides_semantic_pass(tmp_path):
 
 # --- #19/#20：report.md 按指标 ID 排序 + 每处标注中文含义 ---
 
+def test_manual_fail_to_warn_is_recorded(tmp_path):
+    write_inputs(tmp_path, {
+        "static.json": _static(dangerous=[{"pattern": "x"}], errors=["发现 1 处危险命令模式"],
+                               passed=False),
+        "overrides.json": {"#4": {"from": "fail", "to": "warn", "reason": "示例误报",
+                                  "reviewer": "reviewer-a", "at": "2026-10-04T12:00:00"}}})
+    out = run_report(tmp_path)
+    m = out["metrics"]["#4"]
+    assert m["verdict"] == "warn"
+    assert "人工复核" in m["note"] and "示例误报" in m["note"]
+    assert out["manual_overrides"][0]["reviewer"] == "reviewer-a"
+
+
+def test_ui_hides_adr_and_orders_metrics_by_id(tmp_path):
+    write_inputs(tmp_path, {"static.json": _static()})
+    r = subprocess.run([sys.executable, str(SCRIPT), str(tmp_path), "--html"],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
+    assert r.returncode == 0, r.stderr
+    out = json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))
+    md = (tmp_path / "report.md").read_text(encoding="utf-8")
+    html = (tmp_path / "report.html").read_text(encoding="utf-8")
+    assert "ADR-" not in md and "ADR-" not in html
+    assert list(out["metrics"]) == ALL_KEYS
+    assert out["metric_tiers"]["#1"] == "T0" and out["metric_tiers"]["#10"] == "T2A"
+
+
 def test_report_md_ordered_with_chinese_labels(tmp_path):
     write_inputs(tmp_path, {"score.json": {"trigger": {"precision": 1.0, "recall": 1.0, "f1": 1.0},
                                            "cost": "skipped", "necessity": "skipped", "passed": True},
@@ -511,6 +537,16 @@ def test_brevity_body_lines_over_fail_is_fail(tmp_path):
     assert "600 行" in m["note"] and "失败阈值" in m["note"]
 
 
+def test_static_reports_name_chars(tmp_path):
+    write_inputs(tmp_path, {"static.json": _static(
+        name_chars=12, name_max_chars=64, description_chars=80,
+        description_warn_chars=384, description_fail_chars=1024,
+        description_level="ok")})
+    m = run_report(tmp_path)["metrics"]["#1"]
+    assert m["data"]["name_chars"] == 12
+    assert "name 12 字符" in m["note"]
+
+
 def test_static_description_chars_warn_and_fail(tmp_path):
     write_inputs(tmp_path, {"static.json": _static(
         description_level="warn", description_chars=500,
@@ -550,7 +586,7 @@ def test_brevity_without_judge_still_reports_static_pass(tmp_path):
     m = run_report(tmp_path)["metrics"]["#2"]
     assert m["verdict"] == "skipped"                # 语义面未测，不冒充 pass
     # ADR-0037：body_level 是新增的结构化裁决字段（旧 static.json 回退时补 ok）
-    assert m["data"] == {"skill_md_body_lines": 70, "skill_md_body_max_lines": 150,
+    assert m["data"] == {"skill_md_body_lines": 70, "skill_md_body_warn_lines": 150,
                          "body_level": "ok"}
 
 
