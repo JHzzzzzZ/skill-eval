@@ -132,7 +132,7 @@ T1 评审走 `llm` 接口层（ADR-0034）：模型 `--model` > `llm.model` > `S
 `scripts/runner.py` 是确定性编排：按 `--tier` 调 T0→T1→T2A→T2B→T3，最后 `report.py`；进度以 NDJSON 输出，`--results` 指定产物目录，`--real-input` 给真实输入对比。
 
 `web/app.py` 是 stdlib HTTP 入口（只绑 `127.0.0.1`）：
-- `POST /api/upload`：接收 zip（base64），安全解压到 `web/runs/uploads/`，返回 skill 路径；拒绝 `..`/绝对路径/符号链接，限制 70MB 压缩包与 200MB 解压体积。
+- `POST /api/upload`：浏览器直接以 `application/zip` 流式上传（不再 base64），安全解压到 `web/runs/uploads/`，返回 skill 路径；拒绝 `..`/绝对路径/符号链接，限制 1GB 压缩包、2GB 解压体积、20000 个文件。
 - `GET /api/llm/config`、`POST /api/llm/test`：返回非敏感默认配置 / 测试连接。
 - `POST /api/run`：启动 runner；可带 `llm`（protocol/base_url/model/api_key）与 `real_input`。
 - `GET /api/events?id=`：SSE 进度；`GET /api/report?id=`：报告 JSON；`GET /report?id=`：报告页。

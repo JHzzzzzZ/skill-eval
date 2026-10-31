@@ -149,9 +149,7 @@
   .inline-note code{font-family:var(--mono);font-size:11px;background:var(--card);padding:1px 5px;border-radius:5px;border:1px solid var(--line)}
 
   .progress-slot{position:relative;min-width:0}
-  .progress-card{position:sticky;top:18px;z-index:6;flex:0 0 auto}
-  .progress-card.is-fixed{position:fixed;z-index:30;margin:0;max-height:calc(100vh - 32px);overflow:auto}
-  .progress-slot.pinned{display:block}
+  .progress-card{position:relative;flex:0 0 auto}
   .progress-top{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}
   .progress-top strong{font-size:13px}
   .progress-top span{font-family:var(--mono);font-size:12px;color:var(--muted)}
@@ -211,11 +209,6 @@
   .toast.ok{border-left-color:var(--pass)} .toast.err{border-left-color:var(--fail)}
   @keyframes slidein{from{transform:translateY(8px);opacity:0}to{transform:none;opacity:1}}
   .empty{padding:26px;text-align:center;color:var(--muted);font-size:13px}
-  @media(min-width:641px){
-    /* 固定进度栏占右栏；顶部内容让出同一宽度，避免被盖住 */
-    .topbar,.hero{margin-right:calc((100% - 18px) * .44 + 30px)}
-    .hero .hintbox{display:none}
-  }
   @media(max-width:1000px){
     .tier-grid{grid-template-columns:repeat(2,1fr)}
     .hero{flex-direction:column;align-items:flex-start}
@@ -223,8 +216,6 @@
   }
   @media(max-width:640px){
     .layout{grid-template-columns:1fr}
-    .progress-slot{display:contents}
-    .progress-card{position:sticky;top:8px;max-height:calc(100vh - 16px);overflow:auto}
   }
   @media(max-width:640px){
     .shell{padding:18px 14px 50px}
@@ -281,7 +272,7 @@
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M12 16V4m0 0 4 4m-4-4L8 8M5 20h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
           </div>
           <strong>拖入 .zip，或点击选择</strong>
-          <span>解压后自动定位 SKILL.md</span>
+          <span>解压后自动定位 SKILL.md · 最大 1GB</span>
           <div class="upload-state" id="uploadState">未上传</div>
         </div>
         <div class="field" style="margin-top:14px">
@@ -515,49 +506,6 @@ function markStep(name, state, detail){
   const small = el.querySelector("small"); if(detail) small.textContent = detail;
 }
 
-// 实时进度：滚动到原位置后改为 fixed，避免被父级 sticky 约束/内容推走
-const progressSlot = $("progressSlot"), progressCard = $("progressCard");
-let progressPinned = true;
-function layoutProgress(){
-  if(!progressSlot || !progressCard) return;
-  if(window.innerWidth <= 640){
-    if(progressPinned){
-      progressSlot.classList.add("pinned");
-      progressSlot.style.height = progressCard.offsetHeight + "px";
-      progressCard.classList.add("is-fixed");
-      progressCard.style.top = "8px";
-      progressCard.style.left = "14px";
-      progressCard.style.width = (window.innerWidth - 28) + "px";
-    }else{
-      progressSlot.classList.remove("pinned");
-      progressCard.classList.remove("is-fixed");
-      progressSlot.style.height = "";
-      progressCard.style.left = progressCard.style.top = progressCard.style.width = "";
-    }
-    return;
-  }
-  progressSlot.classList.remove("pinned");
-  const rect = progressSlot.getBoundingClientRect();
-  const slotTop = rect.top + window.scrollY;
-  const gap = 16;
-  const fix = progressPinned || window.scrollY + gap >= slotTop;
-  if(fix){
-    progressSlot.style.height = progressCard.offsetHeight + "px";
-    progressCard.classList.add("is-fixed");
-    progressCard.style.top = gap + "px";
-    progressCard.style.left = rect.left + "px";
-    progressCard.style.width = rect.width + "px";
-  }else{
-    progressCard.classList.remove("is-fixed");
-    progressSlot.style.height = "";
-    progressCard.style.left = progressCard.style.top = progressCard.style.width = "";
-  }
-}
-window.addEventListener("scroll", layoutProgress, {passive:true});
-window.addEventListener("resize", layoutProgress);
-if(window.ResizeObserver) new ResizeObserver(layoutProgress).observe(progressCard);
-layoutProgress();
-
 // theme
 const savedTheme = localStorage.getItem("se-theme");
 if(savedTheme) document.documentElement.dataset.theme = savedTheme;
@@ -578,21 +526,35 @@ fetch("/api/llm/config").then(r=>r.json()).then(c=>{
 
 // upload
 const drop = $("dropzone");
-async function uploadFile(file){
+function uploadFile(file){
   if(!file) return;
   if(!file.name.toLowerCase().endsWith(".zip")){ toast("只支持 .zip", "err"); return; }
-  $("uploadState").textContent = "上传中…";
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  let bin = ""; for(let i=0;i<bytes.length;i+=0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i,i+0x8000));
-  try{
-    const r = await fetch("/api/upload", {method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({filename:file.name, data_base64:btoa(bin)})});
-    const d = await r.json();
-    if(!r.ok) throw new Error(d.error||"上传失败");
+  if(file.size > 1024 * 1024 * 1024){ toast("压缩包超过 1GB", "err"); return; }
+  $("uploadState").textContent = "上传中… 0%";
+  const xhr = new XMLHttpRequest();
+  xhr.open("POST", "/api/upload?filename=" + encodeURIComponent(file.name));
+  xhr.setRequestHeader("Content-Type", "application/zip");
+  xhr.upload.onprogress = (e) => {
+    if(e.lengthComputable) $("uploadState").textContent = `上传中… ${Math.round(e.loaded/e.total*100)}%`;
+  };
+  xhr.onload = () => {
+    let d = {};
+    try{ d = JSON.parse(xhr.responseText || "{}"); }catch{}
+    if(xhr.status < 200 || xhr.status >= 300){
+      const msg = d.error || ("上传失败（HTTP " + xhr.status + "）");
+      $("uploadState").textContent = "✗ " + msg;
+      toast(msg, "err");
+      return;
+    }
     $("skill").value = d.skill;
     $("uploadState").textContent = "已解压：" + d.skill;
     toast("压缩包已解压", "ok");
-  }catch(e){ $("uploadState").textContent = "✗ " + e.message; toast(e.message, "err"); }
+  };
+  xhr.onerror = () => {
+    $("uploadState").textContent = "✗ 网络中断";
+    toast("上传中断，请重试", "err");
+  };
+  xhr.send(file);
 }
 $("zip").onchange = () => uploadFile($("zip").files[0]);
 ["dragenter","dragover"].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add("drag");}));
@@ -669,7 +631,6 @@ $("run").onclick = async () => {
   if(!skill){ toast("先上传压缩包或填 skill 路径", "err"); return; }
   setBusy(true); $("state").textContent = "运行中…"; $("log").textContent = "";
   runId = null; $("stages").innerHTML = ""; stageStarted = {}; setProgress(0); $("result").style.display = "none";
-  progressPinned = true; layoutProgress();
   const llm = {protocol:$("provider").value, base_url:$("base_url").value.trim(),
                model:$("model").value.trim(), api_key:$("api_key").value};
   try{

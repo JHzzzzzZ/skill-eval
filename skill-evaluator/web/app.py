@@ -29,6 +29,9 @@ import llm as llm_layer  # noqa: E402
 RUNS = WEB / "runs"
 RUNS.mkdir(parents=True, exist_ok=True)
 ACTIVE = {}
+MAX_UPLOAD_BYTES = 1024 ** 3
+MAX_EXTRACTED_BYTES = 2 * 1024 ** 3
+MAX_UPLOAD_FILES = 20000
 
 
 def _json_body(handler) -> dict:
@@ -52,11 +55,13 @@ def _send_json(handler, code: int, payload):
 
 def _safe_extract(zip_path: Path, dest: Path) -> None:
     """解压 zip：拒绝绝对路径/.. /符号链接；限制文件数与总解压体积。"""
+    if zip_path.stat().st_size > MAX_UPLOAD_BYTES:
+        raise ValueError("压缩包超过 1GB")
     dest.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(zip_path) as zf:
         infos = zf.infolist()
-        if len(infos) > 3000:
-            raise ValueError("压缩包文件数超过 3000")
+        if len(infos) > MAX_UPLOAD_FILES:
+            raise ValueError(f"压缩包文件数超过 {MAX_UPLOAD_FILES}")
         total = 0
         for info in infos:
             name = info.filename.replace("\\", "/")
@@ -65,9 +70,40 @@ def _safe_extract(zip_path: Path, dest: Path) -> None:
             if (info.external_attr >> 16) & 0o170000 == 0o120000:
                 raise ValueError(f"压缩包含符号链接：{name}")
             total += info.file_size
-            if total > 200 * 1024 * 1024:
-                raise ValueError("解压后体积超过 200MB")
+            if total > MAX_EXTRACTED_BYTES:
+                raise ValueError("解压后体积超过 2GB")
         zf.extractall(dest)
+
+
+def _receive_zip(handler) -> tuple[str, Path, Path]:
+    """流式接收原始 zip（浏览器直接 POST File，不走 base64/JSON）。"""
+    q = parse_qs(urlparse(handler.path).query)
+    filename = (q.get("filename") or [""])[0]
+    if not filename.lower().endswith(".zip"):
+        raise ValueError("只支持 .zip")
+    length = int(handler.headers.get("Content-Length") or 0)
+    if length <= 0:
+        raise ValueError("缺少 Content-Length")
+    if length > MAX_UPLOAD_BYTES:
+        handler.close_connection = True
+        raise ValueError("压缩包超过 1GB")
+    uid = uuid.uuid4().hex[:12]
+    dest = RUNS / "uploads" / uid
+    zpath = dest.with_suffix(".zip")
+    zpath.parent.mkdir(parents=True, exist_ok=True)
+    remaining = length
+    try:
+        with zpath.open("wb") as fh:
+            while remaining > 0:
+                chunk = handler.rfile.read(min(1024 * 1024, remaining))
+                if not chunk:
+                    raise ValueError("上传中断")
+                fh.write(chunk)
+                remaining -= len(chunk)
+    except Exception:
+        zpath.unlink(missing_ok=True)
+        raise
+    return uid, dest, zpath
 
 
 def _skill_root(dest: Path) -> Path:
@@ -287,6 +323,22 @@ class Handler(BaseHTTPRequestHandler):
                                           "running": run["proc"].poll() is None,
                                           "stopped": bool(run.get("stopped"))})
         if path == "/api/upload":
+            ctype = (self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+            if ctype in ("application/zip", "application/octet-stream"):
+                try:
+                    uid, dest, zpath = _receive_zip(self)
+                    try:
+                        _safe_extract(zpath, dest)
+                        skill = _skill_root(dest)
+                    except Exception:
+                        shutil.rmtree(dest, ignore_errors=True)
+                        raise
+                    finally:
+                        zpath.unlink(missing_ok=True)
+                    return _send_json(self, 200, {"skill": str(skill), "upload_id": uid})
+                except Exception as exc:
+                    return _send_json(self, 400, {"error": str(exc)})
+            # 兼容旧的 base64 JSON 小包上传
             data = _json_body(self)
             raw = str(data.get("data_base64") or "")
             if not raw:
@@ -295,8 +347,8 @@ class Handler(BaseHTTPRequestHandler):
                 blob = base64.b64decode(raw, validate=True)  # static-check:ignore
             except Exception:
                 return _send_json(self, 400, {"error": "base64 解码失败"})
-            if len(blob) > 70 * 1024 * 1024:
-                return _send_json(self, 400, {"error": "压缩包超过 70MB"})
+            if len(blob) > MAX_UPLOAD_BYTES:
+                return _send_json(self, 400, {"error": "压缩包超过 1GB"})
             uid = uuid.uuid4().hex[:12]
             dest = RUNS / "uploads" / uid
             zpath = dest.with_suffix(".zip")
@@ -307,6 +359,8 @@ class Handler(BaseHTTPRequestHandler):
                 skill = _skill_root(dest)
             except Exception as exc:
                 return _send_json(self, 400, {"error": str(exc)})
+            finally:
+                zpath.unlink(missing_ok=True)
             return _send_json(self, 200, {"skill": str(skill), "upload_id": uid})
         if path == "/api/evalset/generate":
             data = _json_body(self)
