@@ -151,6 +151,7 @@
   .progress-slot{position:relative;min-width:0}
   .progress-card{position:sticky;top:18px;z-index:6;flex:0 0 auto}
   .progress-card.is-fixed{position:fixed;z-index:30;margin:0;max-height:calc(100vh - 32px);overflow:auto}
+  .progress-slot.pinned{display:block}
   .progress-top{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}
   .progress-top strong{font-size:13px}
   .progress-top span{font-family:var(--mono);font-size:12px;color:var(--muted)}
@@ -511,18 +512,30 @@ function markStep(name, state, detail){
 
 // 实时进度：滚动到原位置后改为 fixed，避免被父级 sticky 约束/内容推走
 const progressSlot = $("progressSlot"), progressCard = $("progressCard");
+let progressPinned = false;
 function layoutProgress(){
   if(!progressSlot || !progressCard) return;
   if(window.innerWidth <= 640){
-    progressCard.classList.remove("is-fixed");
-    progressSlot.style.height = "";
-    progressCard.style.left = progressCard.style.top = progressCard.style.width = "";
+    if(progressPinned){
+      progressSlot.classList.add("pinned");
+      progressSlot.style.height = progressCard.offsetHeight + "px";
+      progressCard.classList.add("is-fixed");
+      progressCard.style.top = "8px";
+      progressCard.style.left = "14px";
+      progressCard.style.width = (window.innerWidth - 28) + "px";
+    }else{
+      progressSlot.classList.remove("pinned");
+      progressCard.classList.remove("is-fixed");
+      progressSlot.style.height = "";
+      progressCard.style.left = progressCard.style.top = progressCard.style.width = "";
+    }
     return;
   }
+  progressSlot.classList.remove("pinned");
   const rect = progressSlot.getBoundingClientRect();
   const slotTop = rect.top + window.scrollY;
   const gap = 16;
-  const fix = window.scrollY + gap >= slotTop;
+  const fix = progressPinned || window.scrollY + gap >= slotTop;
   if(fix){
     progressSlot.style.height = progressCard.offsetHeight + "px";
     progressCard.classList.add("is-fixed");
@@ -651,6 +664,7 @@ $("run").onclick = async () => {
   if(!skill){ toast("先上传压缩包或填 skill 路径", "err"); return; }
   setBusy(true); $("state").textContent = "运行中…"; $("log").textContent = "";
   runId = null; $("stages").innerHTML = ""; stageStarted = {}; setProgress(0); $("result").style.display = "none";
+  progressPinned = true; layoutProgress();
   const llm = {protocol:$("provider").value, base_url:$("base_url").value.trim(),
                model:$("model").value.trim(), api_key:$("api_key").value};
   try{

@@ -254,13 +254,16 @@ def main():
     args = sys.argv[1:]
     worktree = prompt = model = thinking = out_path = None
     skills = []
+    guard_repos = []
+    guard_revert = False
     events_file = build_only = no_skill = early_exit = None
     # 位置参数形式（seam 声明）：trace_run.py <worktree> <prompt>
     positional = [a for i, a in enumerate(args) if a not in (
         "--events", "--build-only", "--worktree", "--prompt", "--skill", "--no-skill", "--early-exit",
-        "--out", "--model", "--thinking", "--")
+        "--out", "--model", "--thinking", "--guard-repo", "--guard-revert", "--")
         and (i == 0 or args[i - 1] not in (
-            "--events", "--worktree", "--prompt", "--skill", "--out", "--model", "--thinking"))
+            "--events", "--worktree", "--prompt", "--skill", "--out", "--model", "--thinking",
+            "--guard-repo"))
     ]
     i = 0
     while i < len(args):
@@ -284,6 +287,10 @@ def main():
             model = args[i + 1]; i += 2
         elif args[i] == "--thinking":
             thinking = args[i + 1]; i += 2
+        elif args[i] == "--guard-repo":
+            guard_repos.append(args[i + 1]); i += 2
+        elif args[i] == "--guard-revert":
+            guard_revert = True; i += 1
         else:
             i += 1
 
@@ -337,6 +344,12 @@ def main():
         trace["passed"] = False
         print(json.dumps(trace, ensure_ascii=False))
         return
+    guard_before = {}
+    for repo in guard_repos:
+        if Path(repo).is_dir():
+            guard_before[repo] = _porcelain(repo)
+        else:
+            print(f"[guard] 仓库不存在，跳过: {repo}", file=sys.stderr)
     t0 = time.time()
     try:
         if not early_exit:
