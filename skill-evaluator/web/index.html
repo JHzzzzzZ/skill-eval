@@ -211,6 +211,11 @@
   .toast.ok{border-left-color:var(--pass)} .toast.err{border-left-color:var(--fail)}
   @keyframes slidein{from{transform:translateY(8px);opacity:0}to{transform:none;opacity:1}}
   .empty{padding:26px;text-align:center;color:var(--muted);font-size:13px}
+  @media(min-width:641px){
+    /* 固定进度栏占右栏；顶部内容让出同一宽度，避免被盖住 */
+    .topbar,.hero{margin-right:calc((100% - 18px) * .44 + 30px)}
+    .hero .hintbox{display:none}
+  }
   @media(max-width:1000px){
     .tier-grid{grid-template-columns:repeat(2,1fr)}
     .hero{flex-direction:column;align-items:flex-start}
@@ -512,7 +517,7 @@ function markStep(name, state, detail){
 
 // 实时进度：滚动到原位置后改为 fixed，避免被父级 sticky 约束/内容推走
 const progressSlot = $("progressSlot"), progressCard = $("progressCard");
-let progressPinned = false;
+let progressPinned = true;
 function layoutProgress(){
   if(!progressSlot || !progressCard) return;
   if(window.innerWidth <= 640){
