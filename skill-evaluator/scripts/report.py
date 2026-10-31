@@ -617,18 +617,20 @@ def build(d: Path, evalset_dir: Path | None = None) -> dict:
             if m[k]["verdict"] != "skipped":
                 m[k]["note"] = f"{m[k]['note']}（{ai_note}）"
 
-    # 人工复核：只允许 fail → warn；必须留原因，报告与 audit 文件同时记录（需求 9）
+    # 人工复核：记录 from → to；必须留原因，报告与 audit 文件同时记录
     overrides = load(d, "overrides.json") or {}
     manual = []
     if isinstance(overrides, dict):
         for metric, info in overrides.items():
             if not isinstance(info, dict) or metric not in m:
                 continue
-            if info.get("from") != "fail" or info.get("to") != "warn" or m[metric]["verdict"] != "fail":
+            current = m[metric]["verdict"]
+            src, dst = info.get("from"), info.get("to")
+            if src not in VERDICT_RANK or dst not in VERDICT_RANK or current != src or dst == src:
                 continue
-            m[metric]["verdict"] = "warn"
+            m[metric]["verdict"] = dst
             reason = str(info.get("reason") or "人工复核").strip()
-            m[metric]["note"] = (m[metric].get("note") or "") + f"；人工复核：fail → warn（{reason}）"
+            m[metric]["note"] = (m[metric].get("note") or "") + f"；人工复核：{src} → {dst}（{reason}）"
             m[metric]["data"] = {**(m[metric].get("data") or {}), "manual_override": info}
             manual.append({"metric": metric, **info})
     for value in m.values():

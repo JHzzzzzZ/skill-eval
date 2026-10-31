@@ -349,6 +349,16 @@ def test_manual_fail_to_warn_is_recorded(tmp_path):
     assert out["manual_overrides"][0]["reviewer"] == "reviewer-a"
 
 
+def test_manual_override_can_change_any_verdict(tmp_path):
+    write_inputs(tmp_path, {
+        "static.json": _static(),
+        "overrides.json": {"#1": {"from": "pass", "to": "warn", "reason": "人工判断",
+                                  "reviewer": "reviewer-b", "at": "2026-10-04T12:00:00"}}})
+    out = run_report(tmp_path)
+    assert out["metrics"]["#1"]["verdict"] == "warn"
+    assert "人工复核：pass → warn" in out["metrics"]["#1"]["note"]
+
+
 def test_ui_hides_adr_and_orders_metrics_by_id(tmp_path):
     write_inputs(tmp_path, {"static.json": _static()})
     r = subprocess.run([sys.executable, str(SCRIPT), str(tmp_path), "--html"],

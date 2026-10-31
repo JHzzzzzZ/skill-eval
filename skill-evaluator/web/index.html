@@ -73,6 +73,7 @@
   .layout > .stack:last-child{display:flex;flex-direction:column;min-width:0}
   .stack{display:grid;gap:18px;min-width:0;align-content:start}
   #result{min-width:0}
+  #metrics{min-width:0}
   .card{
     background:color-mix(in srgb,var(--card) 94%,transparent);
     border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow-sm);
@@ -193,6 +194,9 @@
   .badge.fail{background:var(--fail-soft);color:var(--fail)}
   .badge.skipped{background:var(--skip-soft);color:var(--skip)}
   .metric-note{color:var(--muted);max-width:640px}
+  .verdict-select{width:auto;min-width:88px;padding:5px 8px;border-radius:8px;font-size:12px;font-weight:650;background:var(--card-soft)}
+  .verdict-select.pass{color:var(--pass)} .verdict-select.warn{color:var(--warn)}
+  .verdict-select.fail{color:var(--fail)} .verdict-select.skipped{color:var(--skip)}
   .override-box{display:flex;gap:8px;align-items:center;margin-top:14px;flex-wrap:wrap}
   .override-box input{flex:1;min-width:240px}
   .eval-table{max-height:360px;overflow:auto;border:1px solid var(--line);border-radius:12px;margin-top:10px}
@@ -425,10 +429,10 @@
           <table id="metrics"></table>
         </div>
         <div class="override-box">
-          <input id="ovReason" placeholder="人工把“失败”调成“警告”的原因（必填）">
-          <button class="btn btn-danger btn-sm" id="ovBtn" type="button">调整选中指标</button>
+          <input id="ovReason" placeholder="本次人工调整的原因（必填）">
+          <button class="btn btn-danger btn-sm" id="ovBtn" type="button">应用调整</button>
         </div>
-        <div class="inline-note" style="margin-top:8px">只允许 fail → warn；后台记录指标、原因、审核人和时间。</div>
+        <div class="inline-note" style="margin-top:8px">直接改结果下拉框；一次填写理由并批量应用。后台记录指标、原值、新值、原因、审核人和时间。</div>
       </section>
     </div>
   </div>
@@ -443,7 +447,7 @@ const STAGE_LABELS = {T0:"基础检查", T1:"文档语义评审", [K2A]:"触发�
 const TIER_LABELS = {T0:"基础检查", T1:"文档语义评审", [K2A]:"触发评测", [K2B]:"真实输入对比", T3:"完整任务运行"};
 const WEIGHT = {T0:5,T1:25,sandbox:30,[K2A]:40,[K2B]:50,T3:80,report:100};
 const STAGE_ORDER = ["T0","T1","sandbox",K2A,K2B,"T3","report"];
-let es = null, runId = null, report = null, selectedMetric = null, stageStarted = {};
+let es = null, runId = null, report = null, stageStarted = {};
 
 function label(name){ return STAGE_LABELS[name] || name; }
 function tierValue(){ const el = document.querySelector('input[name="tier"]:checked'); return el ? el.value : "t2a"; }
@@ -731,30 +735,42 @@ async function showReport(id){
       const t = (report.metric_tiers||{})[k] || "其他";
       (groups[t] = groups[t] || []).push([k,v]);
     });
-    let rows = `<thead><tr><th>指标</th><th>结果</th><th>摘要</th><th></th></tr></thead><tbody>`;
+    let rows = `<thead><tr><th>指标</th><th>结果</th><th>摘要</th></tr></thead><tbody>`;
     for(const t of ["T0","T1",K2A,K2B,"T3"]){
       if(!groups[t]) continue;
-      rows += `<tr class="group"><td colspan="4">${TIER_LABELS[t]||t}</td></tr>`;
+      rows += `<tr class="group"><td colspan="3">${TIER_LABELS[t]||t}</td></tr>`;
       for(const [k,v] of groups[t]){
-        const can = v.verdict === "fail";
-        rows += `<tr><td><code>${k}</code></td><td><span class="badge ${v.verdict}">${v.verdict}</span></td>
-          <td class="metric-note">${publicText(v.note||"").replace(/</g,"&lt;")}</td>
-          <td>${can?`<button class="btn btn-danger btn-sm" onclick="pick('${k}')">选中调整</button>`:""}</td></tr>`;
+        const opts = ["pass","warn","fail","skipped"].map(o =>
+          `<option value="${o}" ${o===v.verdict?"selected":""}>${o}</option>`).join("");
+        rows += `<tr><td><code>${k}</code></td>
+          <td><select class="verdict-select ${v.verdict}" data-metric="${k}" data-original="${v.verdict}">${opts}</select></td>
+          <td class="metric-note">${publicText(v.note||"").replace(/</g,"&lt;")}</td></tr>`;
       }
     }
     $("metrics").innerHTML = rows + "</tbody>";
+    document.querySelectorAll(".verdict-select").forEach(sel=>{
+      sel.addEventListener("change", ()=>{ sel.className = "verdict-select " + sel.value; syncOverrideState(); });
+    });
+    syncOverrideState();
   }catch(e){ toast("读报告失败："+e.message, "err"); }
 }
-function pick(metric){ selectedMetric = metric; $("ovReason").placeholder = `调整 ${metric} 的原因（必填）`; $("ovReason").focus(); }
+function syncOverrideState(){
+  const changed = [...document.querySelectorAll(".verdict-select")].filter(s=>s.value !== s.dataset.original);
+  $("ovBtn").textContent = changed.length ? `应用 ${changed.length} 项调整` : "应用调整";
+}
 $("ovBtn").onclick = async () => {
-  if(!runId || !selectedMetric){ toast("先在表格里点“选中调整”", "err"); return; }
+  if(!runId){ toast("先跑一次评估", "err"); return; }
+  const changes = [...document.querySelectorAll(".verdict-select")]
+    .filter(s=>s.value !== s.dataset.original)
+    .map(s=>({metric:s.dataset.metric, to:s.value}));
+  if(!changes.length){ toast("没有修改任何结果", "err"); return; }
   const reason = $("ovReason").value.trim();
-  if(!reason){ toast("必须写原因", "err"); return; }
+  if(!reason){ toast("必须写调整理由", "err"); return; }
   const r = await fetch("/api/override", {method:"POST", headers:{"Content-Type":"application/json"},
-    body: JSON.stringify({id:runId, metric:selectedMetric, reason, reviewer:"web"})});
+    body: JSON.stringify({id:runId, changes, reason, reviewer:"web"})});
   const d = await r.json();
   if(!r.ok){ toast(d.error||"调整失败", "err"); return; }
-  report = d; $("ovReason").value=""; selectedMetric=null; showReport(runId); toast("已调整并记录审计", "ok");
+  report = d; $("ovReason").value=""; showReport(runId); toast("已调整并记录审计", "ok");
 };
 </script>
 </body>

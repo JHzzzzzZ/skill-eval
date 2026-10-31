@@ -137,7 +137,7 @@ T1 评审走 `llm` 接口层（ADR-0034）：模型 `--model` > `llm.model` > `S
 - `POST /api/run`：启动 runner；可带 `llm`（protocol/base_url/model/api_key）与 `real_input`。
 - `GET /api/events?id=`：SSE 进度；`GET /api/report?id=`：报告 JSON；`GET /report?id=`：报告页。
 - `GET /api/evalset/status|items`、`POST /api/evalset/generate|review`：评测集检查、生成草稿、逐条审核（写 `reviews/review.json` + `audit.jsonl`）。
-- `POST /api/override`：只允许 fail→warn，写 `overrides.json` + `manual-overrides.jsonl`，重出报告。
+- `POST /api/override`：支持一次提交多条裁决调整（`changes: [{metric,to}]`），统一写 `overrides.json` + `manual-overrides.jsonl`，重出报告。
 
 前端不重算指标。
 
@@ -166,7 +166,7 @@ T1 评审走 `llm` 接口层（ADR-0034）：模型 `--model` > `llm.model` > `S
 - `traces/`：逐 run 的原始 trace；`--guard-repo` 时另带 `guard.escaped_writes`（越界写入，ADR-0027）
 - `compare.json`：compare.py --aggregate 裁决（#14）；逐 case 文件在 `compare/`
 - `actual/` + `expected/`：T3 每 case 的实际回答与期望（compare.py 输入）
-- `overrides.json`：人工复核 `{metric: {from:"fail", to:"warn", reason, reviewer, at}}`；只允许 fail→warn
+- `overrides.json`：人工复核 `{metric: {from, to, reason, reviewer, at}}`；from/to 必须是 pass|warn|fail|skipped，报告按 from 匹配当前裁决后应用
 - `manual-overrides.jsonl`：人工调整的追加审计日志（前端 `/api/override` 写入）
 - `evalset.json`：evalset_check.py stdout（触发集质量，#10 降级依据）
 - `model_robust.json`：model_robust.py stdout（#15 跨模型一致率）
@@ -224,7 +224,7 @@ evalsets/<name>/results/<version>/
 - 跨档位的指标值不直接比较
 - 各中间产物记录生成时的 skill content_sha256；高档复用低档产物时校验一致，不一致则该产物作废重跑
 - 16 条指标全部出现，`metrics` 按 #1–#16 排序；未测的标 `skipped` 并注明原因，不打 0 分
-- `manual_overrides` 列出本次人工 fail→warn 的指标、原因、审核人与时间；报告 note 同步标注
+- `manual_overrides` 列出本次人工调整的指标、原值/新值、原因、审核人与时间；报告 note 同步标注
 - **data 渲染**（report.md / report.html 共用一套，ADR-0030）：**所有指标一律表格化**——已知形状走定制表（#16 `per_pair`、#15 `cost_by_case`+`cv_by_case`、#13 `cost`、#14 `per_case`、#10 三率、#11 三分量、#12 报错与评审项、#4 六组与闸门），其余走**通用兜底**（dict/list 递归压平成 key-value 表）；judge 面（`items`）另加 score/reason 摘要行。原始 JSON 一律保留：**有表就折叠**（`<details>`，不管多短），无表且 ≤400 字符才内联；单元格 >800 字符截断并标注。**不得静默截断**（旧实现 `[:2000]` 会把 2165 字符的 #16 data 切成非法 JSON）。渲染层不得反向改 `report.json` 的形状
 - **结果符号**：卡片徽章、表格结果列与顶部 16 行总览表（`id="overview"`）统一 pass=✓ / fail=✗ / warn=⚠ / skipped=–
 - **优化建议**（ADR-0030）：`report.json.advice` = `[{metric, severity, problem, evidence, action}]`，由 `build()` 从裁决确定性派生（`severity` = fail/warn/info，排序 fail→warn→info）；每个指标卡下方内联该指标建议，`report.html` 另有「优化建议」tab（`#N` 锚点跳回指标卡），report.md 有 `## 优化建议` 段。问题与建议同源，不存在“建议里说了、指标里没有”

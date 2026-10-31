@@ -36,7 +36,7 @@ runner 是确定性编排，按档位短路；下面的 9 步是它内部做的�
 6. **真实场景 A/B**（T2B）：用户提供 ≥1 例真实输入；同 cwd、同输入跑 golden（加载 skill）与 baseline（不加载）两臂，服务 #11 必要性、#12 最小依赖。#11 报告样本数 n，n<3 时最高 warn；真实输入存 `uploads/`，报告只回显哈希 + 标签。未提供真实输入 → 整档 skipped，不自动生成“真实”输入（ADR-0033）
 7. **核心沙箱**（T3）：隔离副本（git 仓库）内 golden 主运行 + 重复×N + idem + compare，服务 #13 成本 / #14 结果可验证 / #15 稳定性 / #16 幂等；每 run 前 `git -C <worktree> clean -fdx`，并带 `--guard-repo <评估器仓库>` 把越界写入记进 trace（ADR-0027）；可选跨模型：换 `--model` 再跑一遍，trace 落 `results/<version>/models/<模型名>/`，`scripts/model_robust.py` 出一致率折进 #15（默认不跑，成本 ×模型数）
 8. **LLM 评审**（T1）：`scripts/judge_run.py --metric <name> --skill <dir> --out judges/<metric>.json` 默认走 `llm` 接口层（固定 prompt = rubric + 被测文件，单发、无 tools，ADR-0022/0034）；`--backend pi` 可回退旧路径。原始 request/response 存 `raw/llm-judge/<metric>.json`（#2 只判两条语义检查点——行数由第 3 步的静态面负责，ADR-0017）
-9. **计算与报告**：`scripts/score.py` + `scripts/idem.py`（T3）→ `scripts/report.py <results目录> --skill <被测skill目录>`（#14 用 `scripts/compare.py`，T3）产出 report.json（`schema: 2` + `legacy_id_map` + 16 key）+ report.md + meta.json（评估器指纹 / 被测 skill 指纹 / 评测集来源）。report.json 记录 `tier` / `tier_label` / `metric_tiers`；人工 fail→warn 写 `overrides.json`，报告带 `manual_overrides` 与审计日志
+9. **计算与报告**：`scripts/score.py` + `scripts/idem.py`（T3）→ `scripts/report.py <results目录> --skill <被测skill目录>`（#14 用 `scripts/compare.py`，T3）产出 report.json（`schema: 2` + `legacy_id_map` + 16 key）+ report.md + meta.json（评估器指纹 / 被测 skill 指纹 / 评测集来源）。report.json 记录 `tier` / `tier_label` / `metric_tiers`；人工调整写 `overrides.json`，报告带 `manual_overrides` 与审计日志
 
 ## 边界
 

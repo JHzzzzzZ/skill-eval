@@ -420,7 +420,6 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/override":
             data = _json_body(self)
             rid = str(data.get("id") or "")
-            metric = str(data.get("metric") or "")
             reason = str(data.get("reason") or "").strip()
             run = ACTIVE.get(rid)
             if not run:
@@ -431,19 +430,41 @@ class Handler(BaseHTTPRequestHandler):
             if not report_path.is_file():
                 return _send_json(self, 400, {"error": "报告还没生成"})
             report = json.loads(report_path.read_text(encoding="utf-8"))
-            if (report.get("metrics", {}).get(metric) or {}).get("verdict") != "fail":
-                return _send_json(self, 400, {"error": "只能把 fail 调整为 warn"})
+            metrics = report.get("metrics", {})
+            raw_changes = data.get("changes")
+            if not isinstance(raw_changes, list) or not raw_changes:
+                metric = str(data.get("metric") or "")
+                raw_changes = [{"metric": metric, "to": str(data.get("to") or "warn")}] if metric else []
+            changes = {}
+            for item in raw_changes:
+                if not isinstance(item, dict):
+                    continue
+                metric = str(item.get("metric") or "")
+                target = str(item.get("to") or "")
+                if metric not in metrics:
+                    return _send_json(self, 400, {"error": f"未知指标：{metric}"})
+                if target not in ("pass", "warn", "fail", "skipped"):
+                    return _send_json(self, 400, {"error": f"未知裁决：{target}"})
+                current = (metrics.get(metric) or {}).get("verdict")
+                if target == current:
+                    continue
+                changes[metric] = {"from": current, "to": target}
+            if not changes:
+                return _send_json(self, 400, {"error": "没有实际调整"})
             ov_path = run["results"] / "overrides.json"
             try:
                 overrides = json.loads(ov_path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 overrides = {}
-            overrides[metric] = {"from": "fail", "to": "warn", "reason": reason,
-                                 "reviewer": str(data.get("reviewer") or "human"),
-                                 "at": time.strftime("%Y-%m-%dT%H:%M:%S")}
+            reviewer = str(data.get("reviewer") or "human")
+            at = time.strftime("%Y-%m-%dT%H:%M:%S")
+            for metric, change in changes.items():
+                overrides[metric] = {**change, "reason": reason, "reviewer": reviewer, "at": at}
             ov_path.write_text(json.dumps(overrides, ensure_ascii=False, indent=2), encoding="utf-8")
             with (run["results"] / "manual-overrides.jsonl").open("a", encoding="utf-8") as fh:
-                fh.write(json.dumps({"metric": metric, **overrides[metric]}, ensure_ascii=False) + "\n")
+                for metric, change in changes.items():
+                    fh.write(json.dumps({"metric": metric, **overrides[metric]},
+                                        ensure_ascii=False) + "\n")
             try:
                 return _send_json(self, 200, _rerun_report(run))
             except Exception as exc:

@@ -28,6 +28,7 @@ def test_ui_has_no_internal_adr_or_tier_jargon():
     assert "T2B" not in html
     assert 'id="stop"' in html
     assert 'id="reuse"' in html and 'id="rerunT0"' in html and 'id="rerunT1"' in html
+    assert 'verdict-select' in html and '选中调整' not in html
 
 
 def test_stop_process_terminates():
