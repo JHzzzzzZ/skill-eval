@@ -148,7 +148,9 @@
   .inline-note{font-size:11.5px;color:var(--muted);line-height:1.45}
   .inline-note code{font-family:var(--mono);font-size:11px;background:var(--card);padding:1px 5px;border-radius:5px;border:1px solid var(--line)}
 
+  .progress-slot{position:relative;min-width:0}
   .progress-card{position:sticky;top:18px;z-index:6;flex:0 0 auto}
+  .progress-card.is-fixed{position:fixed;z-index:30;margin:0;max-height:calc(100vh - 32px);overflow:auto}
   .progress-top{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}
   .progress-top strong{font-size:13px}
   .progress-top span{font-family:var(--mono);font-size:12px;color:var(--muted)}
@@ -213,8 +215,9 @@
     .hero{flex-direction:column;align-items:flex-start}
     .stats{grid-template-columns:1fr 1fr}
   }
-  @media(max-width:760px){
+  @media(max-width:640px){
     .layout{grid-template-columns:1fr}
+    .progress-slot{display:contents}
     .progress-card{position:sticky;top:8px;max-height:calc(100vh - 16px);overflow:auto}
   }
   @media(max-width:640px){
@@ -400,7 +403,8 @@
     </div>
 
     <div class="stack">
-      <section class="card card-pad progress-card">
+      <div class="progress-slot" id="progressSlot">
+      <section class="card card-pad progress-card" id="progressCard">
         <div class="progress-top">
           <strong>实时进度</strong>
           <span id="pct">0%</span>
@@ -409,6 +413,7 @@
         <div class="timeline" id="stages"></div>
         <pre class="log" id="log">等待开始…</pre>
       </section>
+      </div>
 
       <section class="card card-pad" id="result" style="display:none">
         <div class="result-head">
@@ -503,6 +508,37 @@ function markStep(name, state, detail){
   const el = stepEl(name); el.className = "step " + state;
   const small = el.querySelector("small"); if(detail) small.textContent = detail;
 }
+
+// 实时进度：滚动到原位置后改为 fixed，避免被父级 sticky 约束/内容推走
+const progressSlot = $("progressSlot"), progressCard = $("progressCard");
+function layoutProgress(){
+  if(!progressSlot || !progressCard) return;
+  if(window.innerWidth <= 640){
+    progressCard.classList.remove("is-fixed");
+    progressSlot.style.height = "";
+    progressCard.style.left = progressCard.style.top = progressCard.style.width = "";
+    return;
+  }
+  const rect = progressSlot.getBoundingClientRect();
+  const slotTop = rect.top + window.scrollY;
+  const gap = 16;
+  const fix = window.scrollY + gap >= slotTop;
+  if(fix){
+    progressSlot.style.height = progressCard.offsetHeight + "px";
+    progressCard.classList.add("is-fixed");
+    progressCard.style.top = gap + "px";
+    progressCard.style.left = rect.left + "px";
+    progressCard.style.width = rect.width + "px";
+  }else{
+    progressCard.classList.remove("is-fixed");
+    progressSlot.style.height = "";
+    progressCard.style.left = progressCard.style.top = progressCard.style.width = "";
+  }
+}
+window.addEventListener("scroll", layoutProgress, {passive:true});
+window.addEventListener("resize", layoutProgress);
+if(window.ResizeObserver) new ResizeObserver(layoutProgress).observe(progressCard);
+layoutProgress();
 
 // theme
 const savedTheme = localStorage.getItem("se-theme");
