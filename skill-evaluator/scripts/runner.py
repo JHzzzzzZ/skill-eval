@@ -25,10 +25,11 @@ import report as report_mod
 
 SCRIPTS = Path(__file__).resolve().parent
 ROOT = SCRIPTS.parent
+CACHE = ROOT.parent / ".skill-eval-cache" / "t0t1"
 TIERS = ("t0", "t1", "t2a", "t2b", "t3")
 TIER_RANK = {name: i for i, name in enumerate(TIERS)}
 EXCLUDE = {"tests", "evalsets", "uploads", "attic", ".git", "node_modules",
-           "__pycache__", ".sandbox", ".skillrepos", ".pytest_cache", "runs"}
+           "__pycache__", ".sandbox", ".skillrepos", ".pytest_cache", "runs", "cache"}
 RUBRICS = ("brevity", "redundancy", "fallback", "precheck", "contract", "deps", "pii")
 GUARD = [ROOT.parent] if (ROOT.parent / ".git").exists() else []
 
@@ -155,6 +156,32 @@ def _cache_match(old: dict, skill_sha: str, eval_sha, judge_key: dict | None = N
     return True
 
 
+def _cache_dir(skill_sha: str, eval_sha: str, judge_key: dict | None = None) -> Path:
+    raw = f"{skill_sha}:{eval_sha or 'unknown'}"
+    if judge_key is not None:
+        raw += ":" + json.dumps(judge_key, sort_keys=True, ensure_ascii=False)
+    return CACHE / hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
+
+
+def _copy_cache(src: Path, dst: Path, files=(), dirs=()) -> bool:
+    """把缓存产物复制进 results；返回是否真的复制了东西。"""
+    if not src.is_dir():
+        return False
+    copied = False
+    dst.mkdir(parents=True, exist_ok=True)
+    for name in files:
+        p = src / name
+        if p.is_file():
+            shutil.copy2(p, dst / name)
+            copied = True
+    for rel in dirs:
+        p = src / rel
+        if p.is_dir():
+            shutil.copytree(p, dst / rel, dirs_exist_ok=True)
+            copied = True
+    return copied
+
+
 def _find_evalset(name: str) -> Path | None:
     for base in (ROOT / "evalsets", ROOT.parent / "evalsets"):
         d = base / name
@@ -222,20 +249,26 @@ def run(args) -> int:
         ROOT / "evalsets" / skill.name / "results" / f"auto-{version}"
     results.mkdir(parents=True, exist_ok=True)
     static_path = results / "static.json"
-    old_meta = _read_json(results / "run-meta.json", {}) or {}
     skill_sha = _skill_digest(skill)
     eval_info = report_mod.evaluator_fingerprint(ROOT)
     eval_sha = eval_info.get("content_sha256")
+    cache_t0 = _cache_dir(skill_sha, eval_sha)
+    static_from_cache = False
+    if not args.rerun_t0 and not static_path.is_file():
+        static_from_cache = _copy_cache(cache_t0, results, ("static.json",))
+    old_meta = _read_json(results / "run-meta.json", {}) or {}
     progress.emit("stage", name="T0", status="start")
 
     # T0 静态检查：同 skill + 同评估器才复用，否则重跑
     static = _read_json(static_path, {}) or {}
     reuse_static = (not args.rerun_t0 and bool(static)
                     and isinstance(static.get("passed"), bool)
-                    and _cache_match(old_meta, skill_sha, eval_sha))
+                    and (static_from_cache or _cache_match(old_meta, skill_sha, eval_sha)))
     if not reuse_static:
         _run("static_check.py", [skill, "--out", static_path])
         static = _read_json(static_path, {}) or {}
+    if isinstance(static.get("passed"), bool):
+        _copy_cache(results, cache_t0, ("static.json",))
     name = static.get("name") or skill.name
     human = bool(static.get("human")) or (static.get("invoke") or {}).get("resolved") == "human"
     progress.emit("stage", name="T0", status="done", passed=static.get("passed"),
@@ -263,8 +296,12 @@ def run(args) -> int:
         progress.emit("stage", name="T1", status="start")
         jdir = results / "judges"
         jdir.mkdir(parents=True, exist_ok=True)
+        cache_t1 = _cache_dir(skill_sha, eval_sha, judge_key)
+        judges_from_cache = False
+        if not args.rerun_t1 and not _judges_ready(jdir):
+            judges_from_cache = _copy_cache(cache_t1, results, (), ("judges", "raw/llm-judge"))
         reuse_judges = (not args.rerun_t1 and _judges_ready(jdir)
-                        and _cache_match(old_meta, skill_sha, eval_sha, judge_key))
+                        and (judges_from_cache or _cache_match(old_meta, skill_sha, eval_sha, judge_key)))
         if reuse_judges:
             progress.emit("stage", name="T1", status="done", cached=True)
         else:
@@ -289,7 +326,9 @@ def run(args) -> int:
                     except Exception as exc:
                         progress.emit("judge", metric=metric, status="skipped", elapsed_s=elapsed,
                                       error=str(exc))
-            progress.emit("stage", name="T1", status="done")
+        if _judges_ready(jdir):
+            _copy_cache(results, cache_t1, (), ("judges", "raw/llm-judge"))
+        progress.emit("stage", name="T1", status="done")
 
     # T2+ 沙箱
     sandbox = None

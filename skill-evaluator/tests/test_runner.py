@@ -77,6 +77,56 @@ def test_t0_reuses_artifacts_and_can_force_rerun(tmp_path):
     assert t0(third)["cached"] is False
 
 
+def test_t0_cache_crosses_results_dirs(tmp_path):
+    skill = make_skill(tmp_path)
+    (skill / "SKILL.md").write_text(
+        f"---\nname: sample-{tmp_path.name}\ndescription: d\n---\nbody\n", encoding="utf-8")
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    p1 = tmp_path / "p1.ndjson"
+    p2 = tmp_path / "p2.ndjson"
+    base = [sys.executable, str(SCRIPT), "--skill", str(skill), "--tier", "t0"]
+    r = subprocess.run(base + ["--results", str(first), "--progress", str(p1)],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
+    assert r.returncode == 0, r.stderr
+    r = subprocess.run(base + ["--results", str(second), "--progress", str(p2)],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
+    assert r.returncode == 0, r.stderr
+    events = [json.loads(x) for x in p2.read_text(encoding="utf-8").splitlines()]
+    done = next(e for e in events if e["type"] == "stage" and e.get("name") == "T0"
+                and e.get("status") == "done")
+    assert done["cached"] is True
+
+
+def test_t1_cache_crosses_results_dirs(tmp_path):
+    skill = make_skill(tmp_path)
+    (skill / "SKILL.md").write_text(
+        f"---\nname: cache-{tmp_path.name}\ndescription: d\n---\nbody\n", encoding="utf-8")
+    base = [sys.executable, str(SCRIPT), "--skill", str(skill), "--backend", "pi"]
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    r = subprocess.run(base + ["--tier", "t0", "--results", str(first)],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
+    assert r.returncode == 0, r.stderr
+    jdir = first / "judges"
+    jdir.mkdir()
+    for metric in ("brevity", "redundancy", "fallback", "precheck", "contract", "deps", "pii"):
+        (jdir / f"{metric}.json").write_text(json.dumps({
+            "items": [{"name": "x", "pass": True, "quote": "x"}],
+            "score": 1.0, "evidence": [], "reason": ""}), encoding="utf-8")
+    r = subprocess.run(base + ["--tier", "t1", "--results", str(first)],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
+    assert r.returncode == 0, r.stderr
+    p2 = tmp_path / "p2.ndjson"
+    r = subprocess.run(base + ["--tier", "t1", "--results", str(second), "--progress", str(p2)],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
+    assert r.returncode == 0, r.stderr
+    events = [json.loads(x) for x in p2.read_text(encoding="utf-8").splitlines()]
+    t1 = next(e for e in events if e["type"] == "stage" and e.get("name") == "T1"
+              and e.get("status") == "done")
+    assert t1["cached"] is True
+
+
 def test_t1_reuses_valid_judges_without_llm(tmp_path):
     skill = make_skill(tmp_path)
     results = tmp_path / "results"

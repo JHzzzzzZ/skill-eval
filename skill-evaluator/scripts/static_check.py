@@ -65,7 +65,7 @@ INVOKE_VALUES = {"human", "both"}  # pi 真实三态归约：缺省/false=both�
 # .skillrepos/ 是沙箱副本 repo（每个被测 skill 一份完整拷贝，含 scripts/static_check.py）：
 # 不排除它，自检就会在自己副本的正则表定义行上自命中（实测 4 处 exfil → 237 个测试里
 # test_evaluator_self_check_passes 挂）。副本是运行面痕迹，不是被测内容。
-DEFAULT_EXCLUDE_DIRS = ("tests", "evalsets", "uploads", ".sandbox", ".skillrepos", "runs")
+DEFAULT_EXCLUDE_DIRS = ("tests", "evalsets", "uploads", ".sandbox", ".skillrepos", "runs", "cache")
 
 # 行内抑制标记：合法文档里引用危险模式（如本仓 reference.md 的硬编码说明行）时用
 IGNORE_MARKER = "static-check:ignore"

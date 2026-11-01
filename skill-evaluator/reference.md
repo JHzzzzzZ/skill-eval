@@ -34,7 +34,7 @@ Windows 上杀 pi 子进程树用 `taskkill /T`（`_subprocess.py` 的硬依赖�
 
 已知漏检（如实告知，不要当成"扫过就是安全"）：自造格式的高熵 token、改写的语义注入、跨段拼接的注入、无读取动词的 `.env` 引用。混淆与个人信息类命中仅警告，需人工复核。PII 静态面的边界：只能认格式化的个人标识（邮箱/手机号/身份证/银行卡/公网 IP，带 Luhn 与证件校验位），自造示例（如真实号段格式的假号码）会误报、工号与客户名会漏报——后者靠 `judges/pii.md` 四项检查点补。
 
-扫描口径（ADR-0012）：默认排除 `tests/`、`evalsets/`、`runs/` 与扫描器自身源码（`--no-default-excludes` 关闭默认排除）；`--exclude <路径>` 的相对路径按 **skill 目录**解析；单行末尾加 `static-check:ignore` 可抑制命中，被抑制项记入 `ignored` 字段（不静默丢）。
+扫描口径（ADR-0012）：默认排除 `tests/`、`evalsets/`、`runs/`、`cache/` 与扫描器自身源码（`--no-default-excludes` 关闭默认排除）；`--exclude <路径>` 的相对路径按 **skill 目录**解析；单行末尾加 `static-check:ignore` 可抑制命中，被抑制项记入 `ignored` 字段（不静默丢）。
 
 ## 版本号
 
@@ -91,7 +91,7 @@ evalsets/<name>/v1/
 
 ## 运行场景
 
-档位（tier）定义增量递进的评估深度（ADR-0033），入口参数 `--tier <t0|t1|t2a|t2b|t3>`（也接受 `T0`–`T3`），**默认 T2A**。高档复用低档产物：结果目录里各中间产物记录生成时的 skill content_sha256、评估器指纹与评审模型，一致则复用，不一致则作废重跑；`--rerun-t0` / `--rerun-t1` 强制重跑对应档，Web 对应“重跑基础检查 / 重跑文档评审”。低档先行、后续增量补跑（staged）不重做已完成档。T4 不开放（ADR-0032）。
+档位（tier）定义增量递进的评估深度（ADR-0033），入口参数 `--tier <t0|t1|t2a|t2b|t3>`（也接受 `T0`–`T3`），**默认 T2A**。高档复用低档产物：结果目录里各中间产物记录生成时的 skill content_sha256、评估器指纹与评审模型，一致则复用，不一致则作废重跑；`--rerun-t0` / `--rerun-t1` 强制重跑对应档，Web 对应“重跑基础检查 / 重跑文档评审”。低档先行、后续增量补跑（staged）不重做已完成档；T0/T1 产物持久缓存到 `.skill-eval-cache/t0t1/<key>/`（仓库根，gitignore；key = skill/evaluator/评审模型哈希），跨 run / 重启仍可复用，`--rerun-*` 才强制重算。T4 不开放（ADR-0032）。
 
 | 档 | 场景 | 做什么 | 服务指标 |
 |---|---|---|---|

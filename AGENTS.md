@@ -3,7 +3,7 @@
 Generated: 2026-09-22T13:43:08.578Z
 Snapshot: 2026-09-24 · 基准 commit `7d6b6e5` · Branch: main
 最近一次在分支 `feat/report-advice-and-pii` 上做的更新（ADR-0029/0030/0031）：
-计数与结构已重算（324 tests / 38 ADR / 14 个 Python CLI + 5 个共享模块 + 8 份 rubric）。v2 设计（ADR-0032–0038）已落文档，代码按 PR1–PR5 分批。
+计数与结构已重算（326 tests / 38 ADR / 14 个 Python CLI + 5 个共享模块 + 8 份 rubric）。v2 设计（ADR-0032–0038）已落文档，代码按 PR1–PR5 分批。
 
 ## OVERVIEW
 
@@ -23,7 +23,7 @@ skill-evaluator/        # 产品本体（自闭环，ADR-0006）
 ├── scripts/            # 14 个 Python CLI + 5 个共享模块（_config/_console/_subprocess/llm/harness）+ check-deps.sh
 ├── judges/             # 8 份 LLM 评审 rubric（md）；side-effects 已移入 attic
 ├── web/                # 本地前端（stdlib HTTP + SSE + 原生 JS，ADR-0036）
-└── tests/              # 324 个测试，扁平单层；conftest.py 只设 PYTHONIOENCODING
+└── tests/              # 326 个测试，扁平单层；conftest.py 只设 PYTHONIOENCODING
 docs/adr/               # 38 条架构决策（0001–0038）
 evalsets/               # ⚠ 被 gitignore：评测集 + 运行产物，本地态```
 
@@ -113,7 +113,7 @@ cd skill-evaluator                    # 所有相对路径以此目录为基准
 bash scripts/check-deps.sh            # 前置自检，退出码 0 = 可跑（缺硬依赖不要继续）
 pip install -r requirements.txt       # 仅跑测试时需要（pytest>=7）
 
-python -m pytest tests                # 全量：324 个测试
+python -m pytest tests                # 全量：326 个测试
 python -m pytest tests/test_idem.py   # 单文件
 python -m pytest tests -k "idem or report"
 

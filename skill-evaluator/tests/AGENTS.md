@@ -4,7 +4,7 @@ Generated: 2026-09-22T13:43:08.578Z
 
 ## OVERVIEW
 
-23 个测试文件 / 324 个 test，全部走 subprocess seam：把脚本当 CLI 跑，不 import 被测脚本（`test_trace_run.py` 例外，它 import `EventAggregator` 做增量消费断言；`test_config.py` 直接 import 纯解析模块 `_config.py`）。
+23 个测试文件 / 326 个 test，全部走 subprocess seam：把脚本当 CLI 跑，不 import 被测脚本（`test_trace_run.py` 例外，它 import `EventAggregator` 做增量消费断言；`test_config.py` 直接 import 纯解析模块 `_config.py`）。
 
 ## WHERE TO LOOK
 
@@ -16,7 +16,7 @@ Generated: 2026-09-22T13:43:08.578Z
 | `test_web.py` | `web/app.py`（zip 上传安全边界 / UI 术语 / 停止进程 / 复用拷贝） | 5 |
 | `test_llm.py` | `scripts/llm.py`（协议/无 tools/JSON 提取） | 5 |
 | `test_judge_run.py` | `scripts/judge_run.py`（文件收集/prompt/SKILL.md 优先） | 5 |
-| `test_runner.py` | `scripts/runner.py`（dry-run/T0 端到端 / 进度计时 / T0-T1 复用） | 6 |
+| `test_runner.py` | `scripts/runner.py`（dry-run/T0 端到端 / 进度计时 / T0-T1 复用与跨目录缓存） | 8 |
 | `test_report.py` | `report.py` 16-key 契约基线 | 50 |
 | `test_trace_run.py` | `scripts/trace_run.py` | 39 |
 | `test_report3.py` | `report.py` 元数据/指纹批次（ADR-0010/0011）+ data 渲染层 | 21 |
