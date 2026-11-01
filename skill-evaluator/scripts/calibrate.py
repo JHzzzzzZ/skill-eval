@@ -61,11 +61,21 @@ def summarize(case_results: list, samples: int) -> dict:
             "cases": len(values),
             "samples": samples,
         }
+    case_details = []
+    for case in case_results:
+        per = {}
+        for name, want in case.get("expected", {}).items():
+            got, agreement = _majority(case.get("observations", {}).get(name, []))
+            per[name] = {"expected": bool(want), "majority": got,
+                         "agreement": round(agreement, 3),
+                         "valid": sum(1 for v in case.get("observations", {}).get(name, [])
+                                      if isinstance(v, bool))}
+        case_details.append({"case": case.get("name", ""), "items": per})
     overall_agreement = (sum(v["agreement"] for v in items.values()) / len(items)
                          if items else 0.0)
     overall_accuracy = (sum(v["accuracy"] for v in items.values()) / len(items)
                         if items else 0.0)
-    return {"items": items,
+    return {"items": items, "cases_detail": case_details,
             "overall_agreement": round(overall_agreement, 3),
             "overall_accuracy": round(overall_accuracy, 3)}
 
@@ -137,7 +147,8 @@ def main() -> int:
                 errors.append({"case": case.name, "error": str(exc)})
                 for name in expected:
                     observations[name].append(None)
-        case_results.append({"expected": expected, "observations": observations})
+        case_results.append({"name": case.name, "expected": expected,
+                             "observations": observations})
 
     summary = summarize(case_results, A.samples)
     summary.update({"metric": A.metric, "cases_dir": str(base),
