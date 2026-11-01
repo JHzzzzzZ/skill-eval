@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import _console
@@ -100,13 +101,13 @@ def main() -> int:
     class A:
         metric = None; cases = None; samples = 3; backend = "auto"
         model = None; base_url = None; api_key = None; protocol = None
-        out = None; min_agreement = 0.8; min_accuracy = 0.9; timeout = 300
+        out = None; min_agreement = 0.8; min_accuracy = 0.9; timeout = 300; workers = 4
     i = 0
     while i < len(args):
         key = args[i]
         if key in ("--metric", "--cases", "--samples", "--backend", "--model",
                    "--base-url", "--api-key", "--protocol", "--out", "--min-agreement",
-                   "--min-accuracy", "--timeout"):
+                   "--min-accuracy", "--timeout", "--workers"):
             if i + 1 >= len(args):
                 print(f"{key} 缺值", file=sys.stderr); return 2
             name = key[2:].replace("-", "_")
@@ -115,12 +116,13 @@ def main() -> int:
             print(f"未知参数: {key}", file=sys.stderr); return 2
     if not A.metric:
         print("usage: calibrate.py --metric <name> [--cases <dir>] [--samples 3] "
-              "[--backend auto|llm|pi] [--out <json>]", file=sys.stderr)
+              "[--workers 4] [--backend auto|llm|pi] [--out <json>]", file=sys.stderr)
         return 2
     A.samples = max(1, int(A.samples))
     A.min_agreement = float(A.min_agreement)
     A.min_accuracy = float(A.min_accuracy)
     A.timeout = int(A.timeout)
+    A.workers = max(1, int(A.workers))
     base = Path(A.cases) if A.cases else DEFAULT_CASES / A.metric
     if not base.is_dir():
         print(f"校准集不存在: {base}", file=sys.stderr)
@@ -130,31 +132,44 @@ def main() -> int:
         print(f"没有 case（需要 <case>/skill/SKILL.md + expected.json）: {base}", file=sys.stderr)
         return 2
 
-    case_results = []
-    errors = []
+    case_data = []
     for case in cases:
-        skill = case / "skill"
         expected = json.loads((case / "expected.json").read_text(encoding="utf-8")).get("items", {})
-        observations = {name: [] for name in expected}
-        for _ in range(A.samples):
-            try:
-                with tempfile.TemporaryDirectory() as td:
-                    result = _run_judge(A.metric, skill, A, Path(td) / "judge.json")
-                got = {item.get("name"): item.get("pass") for item in result.get("items", [])}
-                for name in expected:
-                    observations[name].append(got.get(name))
-            except Exception as exc:
-                errors.append({"case": case.name, "error": str(exc)})
-                for name in expected:
-                    observations[name].append(None)
-        case_results.append({"name": case.name, "expected": expected,
-                             "observations": observations})
+        case_data.append((case, case / "skill", expected))
+    observations = {case.name: {name: [] for name in expected}
+                    for case, _, expected in case_data}
+    errors = []
 
+    def run_one(case, skill, sample):
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                result = _run_judge(A.metric, skill, A, Path(td) / "judge.json")
+            got = {item.get("name"): item.get("pass") for item in result.get("items", [])}
+            return case.name, sample, got, None
+        except Exception as exc:
+            return case.name, sample, None, str(exc)
+
+    with ThreadPoolExecutor(max_workers=A.workers) as pool:
+        futures = [pool.submit(run_one, case, skill, sample)
+                   for case, skill, expected in case_data
+                   for sample in range(A.samples)]
+        for fut in as_completed(futures):
+            name, sample, got, error = fut.result()
+            expected = next(e for c, _, e in case_data if c.name == name)
+            for item in expected:
+                observations[name][item].append(got.get(item) if got else None)
+            if error:
+                errors.append({"case": name, "sample": sample, "error": error})
+
+    case_results = [{"name": case.name, "expected": expected,
+                     "observations": observations[case.name]}
+                    for case, _, expected in case_data]
     summary = summarize(case_results, A.samples)
     summary.update({"metric": A.metric, "cases_dir": str(base),
                     "case_count": len(cases), "samples": A.samples,
                     "min_agreement": A.min_agreement, "min_accuracy": A.min_accuracy,
                     "backend": A.backend, "model": A.model or "",
+                    "workers": A.workers,
                     "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
                     "errors": errors})
     failed = [name for name, item in summary["items"].items()
@@ -169,7 +184,7 @@ def main() -> int:
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    print(f"校准 {A.metric}: {len(cases)} cases × {A.samples} samples")
+    print(f"校准 {A.metric}: {len(cases)} cases × {A.samples} samples, workers={A.workers}")
     for name, item in summary["items"].items():
         flag = "✓" if item["agreement"] >= A.min_agreement else "✗"
         print(f"  {flag} {name}: agreement={item['agreement']:.2f} "
