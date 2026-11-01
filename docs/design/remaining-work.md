@@ -61,45 +61,33 @@
 
 验收：skill 改版后旧评测集仍可选，但明确标“基于旧版本”；新评测集标“当前版本”。
 
-### #16 验证 T1 中断后只补缺失 rubric
+### #16 验证阶段级检查点
 
-这是验收项，不新增产品逻辑：
+这是验收项，不新增产品逻辑。检查点只放在**阶段边界**，不做 rubric/case 级续跑。
 
-1. 预置缓存：2 个合法 judge JSON。
-2. 启动 T1，确认只调用剩余 5 个 rubric。
-3. 中断 T1，确认已完成的 2 个仍在缓存。
-4. 再启动，确认只补缺失项。
-5. 断言不重复调用已完成 metric，缓存文件不丢。
+1. 停在 T1：T0 已缓存；T1 未完成，缓存不写。下次 T1 整体重跑。
+2. 停在 T2A：T0/T1 已缓存；T2A 未完成，缓存不写。下次 T2A 整体重跑。
+3. 停在 T3：T0/T1/T2A/T2B 已缓存；T3 未完成，缓存不写。下次 T3 整体重跑。
+4. 断言：不读取半截 T1/T2A/T3 结果；不把部分 rubric/case 当已完成。
 
-### #18 T2A/T2B/T3 逐 case 检查点与续跑
+### #18 阶段级检查点与中断续跑
 
-目标：任意阶段中断，已完成 case 不丢；下次同 key 继续。
+目标：中断时只保留**完整阶段**，当前阶段整体重跑；不逐 rubric、不逐 case 做检查点。
 
-通用：
+规则：
 
-- 阶段缓存 key 不变；每完成一个 case 调用 `_checkpoint(results, cache, files, dirs)`。
-- 阶段开始先恢复缓存；只跳过“产物完整”的 case。
-- 部分阶段不写最终 report；下次继续。
+- 检查点只在阶段完成后写：
+  - T0 完成 → 缓存 `static.json`
+  - T1 完成（7 个 rubric 全齐）→ 缓存 `judges/` + `raw/llm-judge/`
+  - T2A 完成 → 缓存 `triggers.json` / `score.json` / `triggers/` / `trigger-judge/`
+  - T2B 完成 → 缓存 `t2b/` / `real-input.meta.json` / `golden.json`
+  - T3 完成 → 缓存 `runs.json` / `idem.json` / `compare.json` / `score.json` / `traces/`
+- 阶段开始只恢复**完整阶段**缓存；当前阶段的部分产物不参与续跑。
+- 中断发生在 T1/T2A/T2B/T3 中间：该阶段缓存不写，下次整档重跑；之前完整阶段照常复用。
+- 现有 T1 逐 rubric 落盘是过度设计，必须回退为“7 个全齐才写缓存”。
+- T2A/T2B/T3 已按整档缓存；补上阶段完成判定与失败时的缓存清理，避免半截产物被误认为完整。
 
-T2A：
-
-- 每 case 产物：`triggers/<group>-<idx>.json`、`trigger-judge/<group>-<idx>.json`（early-exit 可无 judge）。
-- 每完成一条写部分 `triggers.json`；恢复时按 trace/judge 判断完成。
-- 失败/超时 case 记录 skipped，不重复计入 P/R。
-
-T2B：
-
-- 每 case 产物：`t2b/cases/<id>/{with,baseline,prompt,case}.json/txt`，按需 compare/pairwise。
-- 每完成一条更新部分 `runs.json` / `baseline.json` / `compare.json` / `pairwise.json`。
-- 恢复时两臂齐全才跳过；只缺 judge 的 case 只补 judge。
-
-T3：
-
-- 每 repeat 产物：`traces/golden-<case>-<rep>.json`。
-- 每完成一次写部分 `runs.json`；恢复时按 trace 存在且合法跳过。
-- idem/compare/score 只在阶段完整时生成。
-
-验收：中途停止后，重启只补缺失 case；已完成的 trace/判决不重跑；缓存与 results 一致。
+验收：停在 T1 → 只复用 T0；停在 T2A → 复用 T0/T1；停在 T3 → 复用 T0/T1/T2A/T2B；部分阶段结果不被读取。
 
 ### #25 停止后生成已完成阶段的局部报告
 
@@ -124,7 +112,7 @@ T3：
 - `/api/stop` 在进程退出后调用局部报告生成；SSE 的 `stopped` 事件带 `report` 地址。
 - 前端停止后显示“已停止，查看已完成阶段报告”，不再只显示终止 toast。
 
-边界：T1 只完成部分 rubric → T1 不算完整，报告只到 T0；已完成 rubric 缓存保留，下次续跑。T2A/T2B/T3 的部分 case 同理。
+边界：T1 只完成部分 rubric → T1 不算完整，报告只到 T0；T1 缓存不写，下次整档重跑。T2A/T2B/T3 的部分 case 同理。
 
 验收：停在 T2A 有 T0/T1 报告且 T2A skipped；停在 T3 有 T0–T2B 报告；T0 未完成不生成空报告；报告页有“局部报告”标识。
 
