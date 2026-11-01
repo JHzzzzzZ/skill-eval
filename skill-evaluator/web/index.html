@@ -158,7 +158,32 @@
   .inline-note code{font-family:var(--mono);font-size:11px;background:var(--card);padding:1px 5px;border-radius:5px;border:1px solid var(--line)}
 
   .progress-slot{position:relative;min-width:0}
-  .progress-card{position:relative;flex:0 0 auto}
+  .progress-card{position:sticky;top:18px;flex:0 0 auto;z-index:2}
+  .cta-bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px;
+    padding:12px;border:1px solid var(--line);border-radius:14px;background:var(--card-soft)}
+  .cta-bar .inline-note{flex:1;min-width:180px}
+  .tag-rec{font-size:10px;font-weight:700;color:var(--brand);background:var(--brand-soft);
+    border-radius:999px;padding:1px 7px;margin-left:4px;vertical-align:1px}
+  .recent-list{display:grid;gap:7px;margin-top:10px}
+  .recent-item{display:flex;justify-content:space-between;gap:10px;align-items:center;width:100%;
+    border:1px solid var(--line);border-radius:10px;background:var(--card-soft);padding:8px 10px;
+    font-size:12px;color:var(--ink-2);cursor:pointer;text-align:left}
+  .recent-item:hover{border-color:var(--brand);color:var(--brand)}
+  .recent-item small{color:var(--muted);font-size:11px}
+  .error-bar{position:fixed;left:50%;top:14px;transform:translateX(-50%);z-index:70;
+    display:flex;gap:10px;align-items:center;flex-wrap:wrap;max-width:min(920px,94vw);
+    background:var(--fail-soft);color:var(--fail);border:1px solid color-mix(in srgb,var(--fail) 40%,transparent);
+    border-radius:12px;padding:10px 14px;box-shadow:var(--shadow);font-size:12.5px}
+  .error-bar[hidden]{display:none}
+  .error-bar .run-id{font-family:var(--mono);font-size:11.5px;opacity:.85}
+  .modal{position:fixed;inset:0;z-index:80;background:rgba(16,24,40,.55);display:grid;place-items:center;padding:20px}
+  .modal[hidden]{display:none}
+  .modal-card{width:min(920px,96vw);max-height:82vh;display:flex;flex-direction:column;
+    background:var(--card);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);overflow:hidden}
+  .modal-head{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid var(--line)}
+  .modal-head b{font-size:13.5px}
+  .modal-card pre{margin:0;padding:14px 16px;overflow:auto;flex:1;font:12px/1.6 var(--mono);white-space:pre-wrap;word-break:break-word;background:#0b1220;color:#d7e0f0}
+  .inline-note.warn{color:var(--warn);background:var(--warn-soft);border:1px solid color-mix(in srgb,var(--warn) 35%,transparent);border-radius:10px;padding:8px 11px}
   .progress-top{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}
   .progress-top strong{font-size:13px}
   .progress-top span{font-family:var(--mono);font-size:12px;color:var(--muted)}
@@ -274,13 +299,13 @@
 
   <section class="hero">
     <div>
-      <div class="eyebrow">Evaluation workspace</div>
+      <div class="eyebrow">评估工作台</div>
       <h2>先看结构，再看语义，最后跑真实任务。</h2>
       <p>上传 zip 或选择已有工作区，选择评估深度。页面会实时显示进度；结果按评估阶段分组，失败项可人工复核。</p>
     </div>
     <div class="hintbox">
-      <strong>外部使用者</strong>
-      直接上传 skill 压缩包，不需要配置 Python 路径。
+      <strong>开始之前</strong>
+      本地启动后上传 zip；同一内容自动复用，评测集按版本自动归档。
     </div>
   </section>
 
@@ -317,25 +342,34 @@
             <p>越深越接近真实任务，也越慢。可以先跑浅层，再补跑深层。</p>
           </div>
         </div>
-        <div class="tier-grid" id="tierGrid">
-          <div class="tier-opt"><input type="radio" name="tier" id="t0" value="t0"><label for="t0"><b>基础检查</b><small>文件结构 / 规则扫描</small></label></div>
-          <div class="tier-opt"><input type="radio" name="tier" id="t1" value="t1"><label for="t1"><b>文档语义评审</b><small>LLM 读文档</small></label></div>
-          <div class="tier-opt"><input type="radio" name="tier" id="t2a" value="t2a" checked><label for="t2a"><b>触发评测</b><small>模拟用户提问</small></label></div>
-          <div class="tier-opt"><input type="radio" name="tier" id="t2b" value="t2b"><label for="t2b"><b>真实输入对比</b><small>有 / 无 skill 两臂</small></label></div>
-          <div class="tier-opt"><input type="radio" name="tier" id="t3" value="t3"><label for="t3"><b>完整任务运行</b><small>多轮 + 稳定性</small></label></div>
+        <div class="cta-bar">
+          <button class="btn btn-primary" id="run" type="button">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M8 5v14l11-7L8 5Z" fill="currentColor"/></svg>
+            开始评估
+          </button>
+          <button class="btn btn-danger" id="stop" type="button" disabled>停止评估</button>
+          <span class="inline-note" id="runHint">会先做基础检查，再按所选深度继续；停止时保留已完成阶段。</span>
         </div>
+        <div class="tier-grid" id="tierGrid">
+          <div class="tier-opt"><input type="radio" name="tier" id="t0" value="t0"><label for="t0"><b>基础检查</b><small>5–15 秒 · 0 次模型</small><small>#1 #3 #4 #12</small></label></div>
+          <div class="tier-opt"><input type="radio" name="tier" id="t1" value="t1"><label for="t1"><b>文档语义评审</b><small>1–2 分钟 · 7 次模型</small><small>#2 #5–#9</small></label></div>
+          <div class="tier-opt"><input type="radio" name="tier" id="t2a" value="t2a" checked><label for="t2a"><b>触发评测 <span class="tag-rec">推荐</span></b><small>2–45 分钟 · 按 case 兜底</small><small>#10</small></label></div>
+          <div class="tier-opt"><input type="radio" name="tier" id="t2b" value="t2b"><label for="t2b"><b>真实输入对比</b><small>5–40 分钟 · 2×case</small><small>#11 #12</small></label></div>
+          <div class="tier-opt"><input type="radio" name="tier" id="t3" value="t3"><label for="t3"><b>完整任务运行</b><small>30 分钟–数小时 · 重复×3</small><small>#13–#16</small></label></div>
+        </div>
+        <div class="inline-note" style="margin-top:8px">时间为范围，取决于模型、评测集与 case 数。</div>
 
         <div class="grid-2" style="margin-top:14px">
           <div class="field">
-            <label for="harness">执行载体</label>
-            <select id="harness"><option value="pi">pi（当前可用）</option></select>
+            <label for="harness">运行方式</label>
+            <select id="harness"><option value="pi">本机命令行（当前可用）</option></select>
           </div>
           <div class="field">
-            <label for="backend">T1 评审后端</label>
+            <label for="backend">评审方式</label>
             <select id="backend">
-              <option value="auto" selected>自动（有 LLM 配置就直连）</option>
-              <option value="llm">LLM 直连</option>
-              <option value="pi">pi</option>
+              <option value="auto" selected>自动（有模型配置就直连）</option>
+              <option value="llm">模型直连</option>
+              <option value="pi">本机命令行</option>
             </select>
           </div>
         </div>
@@ -348,10 +382,10 @@
           <label class="check"><input type="checkbox" id="rerunFull"> 重跑完整任务运行</label>
           <button class="btn btn-ghost btn-sm" id="rerunAll" type="button">全部重跑</button>
         </div>
-        <div class="inline-note" style="margin-top:6px">默认复用已有结果；勾选对应阶段或点「全部重跑」会强制重算。</div>
+        <div class="inline-note" style="margin-top:10px">默认复用已有结果；勾选对应阶段或点「全部重跑」会强制重算。中断时只保留完整阶段，下次整档重跑。</div>
 
         <details class="advanced" style="margin-top:12px">
-          <summary>LLM 连接设置 <span class="muted" style="font-weight:400">（可选；留空用服务端配置 / 环境变量）</span></summary>
+          <summary>模型连接设置 <span class="muted" style="font-weight:400">（可选；留空用服务端配置 / 环境变量）</span></summary>
           <div class="adv-body">
             <div class="grid-3">
               <div class="field">
@@ -397,15 +431,6 @@
             <div class="inline-note">只有 prompt 必填；验收标准用于匹配率，备注只做显示。会存到本地 <code>uploads/</code>，报告不回显正文。</div>
           </div>
         </details>
-
-        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:16px">
-          <button class="btn btn-primary" id="run" type="button">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M8 5v14l11-7L8 5Z" fill="currentColor"/></svg>
-            开始评估
-          </button>
-          <button class="btn btn-danger" id="stop" type="button" disabled>停止评估</button>
-          <span class="inline-note" id="runHint">会先做基础检查，再按所选深度继续。</span>
-        </div>
       </section>
 
       <section class="card card-pad" id="evalCard">
@@ -418,8 +443,8 @@
         </div>
         <div class="grid-2">
           <div class="field">
-            <label for="evalOut">评测集目录</label>
-            <input id="evalOut" placeholder=".../evalsets/<name>/v1">
+            <label for="evalVersion">评测集版本</label>
+            <select id="evalVersion"><option value="">选择工作区后自动识别</option></select>
           </div>
           <div class="field">
             <label for="evalCount">每组生成条数</label>
@@ -430,6 +455,9 @@
           <button class="btn btn-ghost btn-sm" id="genEval" type="button">生成草稿</button>
           <button class="btn btn-ghost btn-sm" id="loadEval" type="button">加载并审核</button>
           <button class="btn btn-ghost btn-sm" id="submitReview" type="button">提交审核</button>
+          <button class="btn btn-ghost btn-sm" id="importEval" type="button">导入 .zip</button>
+          <button class="btn btn-ghost btn-sm" id="exportEval" type="button">导出 .zip</button>
+          <input id="evalZip" type="file" accept=".zip,application/zip" hidden>
           <span class="inline-note" id="evalMsg"></span>
         </div>
         <div id="evalReview"></div>
@@ -452,11 +480,12 @@
       <section class="card card-pad" id="result" style="display:none">
         <div class="result-head">
           <div>
-            <div class="eyebrow">Result</div>
+            <div class="eyebrow">结果</div>
             <h3>评估结果</h3>
           </div>
           <a class="btn btn-ghost btn-sm" id="reportLink" target="_blank" rel="noopener">打开完整报告 →</a>
         </div>
+        <div class="inline-note warn" id="partialNote" hidden></div>
         <div class="stats" id="summary"></div>
         <div class="table-wrap">
           <table id="metrics"></table>
@@ -467,10 +496,36 @@
         </div>
         <div class="inline-note" style="margin-top:8px">直接改结果下拉框；一次填写理由并批量应用。后台记录指标、原值、新值、原因、审核人和时间。</div>
       </section>
+
+      <section class="card card-pad" id="recentCard">
+        <div class="card-head">
+          <div>
+            <div class="eyebrow">历史</div>
+            <h3>最近报告</h3>
+            <p>从本地运行记录里打开历史结果，刷新或重开页面也不丢。</p>
+          </div>
+        </div>
+        <div class="recent-list" id="recent"><div class="empty">还没有报告</div></div>
+      </section>
     </div>
   </div>
 </div>
 <div class="toast-wrap" id="toasts"></div>
+<div class="error-bar" id="errorBar" role="alert" hidden>
+  <strong>出错了</strong>
+  <span id="errorText"></span>
+  <span class="run-id" id="errorRun"></span>
+  <button class="btn btn-ghost btn-sm" id="errorLog" type="button">查看日志</button>
+  <button class="btn btn-ghost btn-sm" id="errorRetry" type="button">重连</button>
+  <button class="btn btn-ghost btn-sm" id="errorClose" type="button">关闭</button>
+</div>
+<div class="modal" id="logModal" hidden>
+  <div class="modal-card">
+    <div class="modal-head"><b>运行日志（尾部 200 行）</b>
+      <button class="btn btn-ghost btn-sm" id="logClose" type="button">关闭</button></div>
+    <pre id="logBody">加载中…</pre>
+  </div>
+</div>
 
 <script>
 const $ = (id) => document.getElementById(id);
@@ -478,12 +533,18 @@ const K2A = "T2" + "A", K2B = "T2" + "B";
 const STAGE_LABELS = {T0:"基础检查", T1:"文档语义评审", [K2A]:"触发评测", [K2B]:"真实输入对比",
                       T3:"完整任务运行", sandbox:"准备隔离副本", report:"生成报告"};
 const TIER_LABELS = {T0:"基础检查", T1:"文档语义评审", [K2A]:"触发评测", [K2B]:"真实输入对比", T3:"完整任务运行"};
+const CONCLUSION_LABELS = {"all-pass":"全部通过", "with-warnings":"有警告", "has-failures":"有失败"};
+const VERDICT_LABELS = {pass:"通过", warn:"警告", fail:"失败", skipped:"未测"};
 const WEIGHT = {T0:5,T1:25,sandbox:30,[K2A]:40,[K2B]:50,T3:80,report:100};
 const STAGE_ORDER = ["T0","T1","sandbox",K2A,K2B,"T3","report"];
 let es = null, runId = null, report = null, stageStarted = {};
-let currentSkill = "", currentWorkspace = "";
+let currentSkill = "", currentWorkspace = "", currentEvalsetPath = "";
+let workspaceMap = new Map(), reconnectAttempt = 0, errorRunId = "";
 
 function label(name){ return STAGE_LABELS[name] || name; }
+function conclusionText(code){ return CONCLUSION_LABELS[code] || code || "—"; }
+function verdictText(code){ return VERDICT_LABELS[code] || code || ""; }
+function tierLabel(t){ return TIER_LABELS[String(t || "").toUpperCase()] || t || ""; }
 function tierValue(){ const el = document.querySelector('input[name="tier"]:checked'); return el ? el.value : "t2a"; }
 function syncRerun(){
   const rank = {t0:0,t1:1,t2a:2,t2b:3,t3:4};
@@ -563,30 +624,61 @@ fetch("/api/llm/config").then(r=>r.json()).then(c=>{
   if(c.base_url) $("base_url").value = c.base_url;
   if(c.model) $("model").value = c.model;
   $("llmState").textContent = c.configured
-    ? "服务端已有可用 LLM 配置；页面字段会覆盖它"
-    : "服务端未配置 LLM；填端点/模型/key，或继续用 pi";
+    ? "服务端已有可用模型配置；页面字段会覆盖它"
+    : "服务端未配置模型；填端点/模型/key，或继续用本机命令行";
 }).catch(()=>{ $("llmState").textContent = "读取服务端配置失败"; });
 
-// workspaces
-async function loadWorkspaces(selected){
+// workspaces / evalset versions
+function versionText(v){
+  const tail = v.source === "current" ? "当前版本" : v.source === "old" ? "基于旧版本" : "来源未知";
+  return `${v.version} · ${tail}`;
+}
+function applyWorkspace(w, preferred){
+  if(!w) return;
+  currentSkill = w.skill || "";
+  currentWorkspace = w.id || w.workspace_id || "";
+  workspaceMap.set(currentWorkspace, w);
+  const versions = w.evalset_versions || [];
+  const sel = $("evalVersion");
+  sel.innerHTML = versions.length
+    ? versions.map(v=>`<option value="${v.path}">${versionText(v)}</option>`).join("")
+    : `<option value="${w.evalset || ""}">v1（未创建）</option>`;
+  const paths = versions.map(v=>v.path);
+  sel.value = (preferred && paths.includes(preferred)) ? preferred
+    : (w.evalset && paths.includes(w.evalset)) ? w.evalset
+    : (paths.length ? paths[paths.length-1] : (w.evalset || ""));
+  currentEvalsetPath = sel.value || "";
+  $("uploadState").textContent = "工作区：" + (w.name || currentWorkspace);
+}
+async function loadWorkspaces(selected, preferredVersion){
   try{
     const r = await fetch("/api/workspaces");
     const d = await r.json();
+    const items = d.workspaces || [];
+    items.forEach(w=>workspaceMap.set(w.id, w));
     const sel = $("workspace");
+    const ver = w => (w.evalset_versions && w.evalset_versions.length
+      ? w.evalset_versions[w.evalset_versions.length-1].version : (w.evalset_version || ""));
     sel.innerHTML = '<option value="">上传 zip 或选择已有工作区</option>' +
-      (d.workspaces||[]).map(w=>`<option value="${w.id}" data-skill="${w.skill}" data-evalset="${w.evalset||""}" data-name="${w.name||w.id}">${w.name||w.id} · ${w.id.slice(-8)}</option>`).join("");
-    if(selected) sel.value = selected;
+      items.map(w=>`<option value="${w.id}">${w.name||w.id} · ${w.id.slice(-8)}${ver(w) ? " · " + ver(w) : ""}</option>`).join("");
+    if(selected){
+      sel.value = selected;
+      applyWorkspace(workspaceMap.get(selected), preferredVersion);
+    }
   }catch(e){ /* 首次启动/服务未就绪时静默 */ }
 }
 $("workspace").onchange = () => {
-  const opt = $("workspace").selectedOptions[0];
-  if(!opt || !opt.value){ currentSkill = ""; currentWorkspace = ""; return; }
-  currentSkill = opt.dataset.skill || "";
-  currentWorkspace = opt.value;
-  $("evalOut").value = opt.dataset.evalset || "";
-  $("uploadState").textContent = "工作区：" + (opt.dataset.name || opt.value);
+  const w = workspaceMap.get($("workspace").value);
+  if(!w){ currentSkill = ""; currentWorkspace = ""; currentEvalsetPath = "";
+    $("evalVersion").innerHTML = '<option value="">选择工作区后自动识别</option>'; return; }
+  applyWorkspace(w);
+};
+$("evalVersion").onchange = () => {
+  currentEvalsetPath = $("evalVersion").value || "";
+  $("evalMsg").textContent = "";
 };
 loadWorkspaces();
+loadRuns();
 
 // upload
 const drop = $("dropzone");
@@ -610,11 +702,10 @@ function uploadFile(file){
       toast(msg, "err");
       return;
     }
-    currentSkill = d.skill;
-    currentWorkspace = d.workspace_id || "";
-    if(d.evalset) $("evalOut").value = d.evalset;
-    $("uploadState").textContent = "工作区：" + (d.workspace || d.workspace_id || "已创建");
-    loadWorkspaces(d.workspace_id);
+    const ws = {...d, id: d.workspace_id || d.id || "",
+                name: d.workspace || d.name || d.workspace_id || ""};
+    applyWorkspace(ws, d.evalset);
+    loadWorkspaces(ws.id, d.evalset);
     toast("压缩包已解压", "ok");
   };
   xhr.onerror = () => {
@@ -642,10 +733,11 @@ $("testLlm").onclick = async () => {
 };
 
 // eval set
+function evalsetPath(){ return currentEvalsetPath || $("evalVersion").value || ""; }
 $("genEval").onclick = async () => {
-  const skill = currentSkill, out = $("evalOut").value.trim();
-  if(!skill || !out){ toast("先上传或选择工作区，并确认评测集目录", "err"); return; }
-  $("evalMsg").textContent = "生成中（会调用 LLM，可能较慢）…";
+  const skill = currentSkill, out = evalsetPath();
+  if(!skill || !out){ toast("先上传或选择工作区", "err"); return; }
+  $("evalMsg").textContent = "生成中（会调用模型，可能较慢）…";
   try{
     const r = await fetch("/api/evalset/generate", {method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify({skill, out, count:parseInt($("evalCount").value||"10",10),
@@ -654,13 +746,14 @@ $("genEval").onclick = async () => {
     const d = await r.json();
     if(!r.ok) throw new Error(d.error||"生成失败");
     $("evalMsg").textContent = "✓ 草稿已生成：" + JSON.stringify(d.counts||{});
+    await loadWorkspaces(currentWorkspace, out);
     toast("评测集草稿已生成", "ok");
   }catch(e){ $("evalMsg").textContent = "✗ " + e.message; toast(e.message, "err"); }
 };
 let evalItems = [];
 $("loadEval").onclick = async () => {
-  const evalset = $("evalOut").value.trim();
-  if(!evalset){ toast("先填评测集目录", "err"); return; }
+  const evalset = evalsetPath();
+  if(!evalset){ toast("先选择工作区与评测集版本", "err"); return; }
   try{
     const r = await fetch("/api/evalset/items?evalset="+encodeURIComponent(evalset));
     const d = await r.json();
@@ -677,7 +770,7 @@ $("loadEval").onclick = async () => {
   }catch(e){ $("evalMsg").textContent = "✗ " + e.message; toast(e.message, "err"); }
 };
 $("submitReview").onclick = async () => {
-  const evalset = $("evalOut").value.trim();
+  const evalset = evalsetPath();
   if(!evalset || !evalItems.length){ toast("先加载评测集", "err"); return; }
   const decisions = evalItems.map((it,i)=>({file:it.file, group:it.group, prompt:it.prompt,
     expect:it.expect||"", verdict:document.querySelector(`.rv[data-i="${i}"]`).value,
@@ -690,6 +783,39 @@ $("submitReview").onclick = async () => {
     $("evalMsg").textContent = "✓ 审核已记录：" + d.path;
     toast("审核已记录", "ok");
   }catch(e){ $("evalMsg").textContent = "✗ " + e.message; toast(e.message, "err"); }
+};
+$("exportEval").onclick = () => {
+  const evalset = evalsetPath();
+  if(!evalset){ toast("先选择评测集版本", "err"); return; }
+  const a = document.createElement("a");
+  a.href = "/api/evalset/export?evalset=" + encodeURIComponent(evalset);
+  a.download = "";
+  document.body.appendChild(a); a.click(); a.remove();
+};
+$("importEval").onclick = () => $("evalZip").click();
+$("evalZip").onchange = () => {
+  const file = $("evalZip").files[0];
+  $("evalZip").value = "";
+  if(!file) return;
+  if(!file.name.toLowerCase().endsWith(".zip")){ toast("只支持 .zip", "err"); return; }
+  if(file.size > 50 * 1024 * 1024){ toast("压缩包超过 50MB", "err"); return; }
+  $("evalMsg").textContent = "导入中…";
+  const xhr = new XMLHttpRequest();
+  xhr.open("POST", "/api/evalset/import?filename=" + encodeURIComponent(file.name));
+  xhr.setRequestHeader("Content-Type", "application/zip");
+  xhr.onload = () => {
+    let d = {};
+    try{ d = JSON.parse(xhr.responseText || "{}"); }catch{}
+    if(xhr.status < 200 || xhr.status >= 300){
+      const msg = d.error || ("导入失败（HTTP " + xhr.status + "）");
+      $("evalMsg").textContent = "✗ " + msg; toast(msg, "err"); return;
+    }
+    $("evalMsg").textContent = "✓ 已导入 " + (d.name ? d.name + " " : "") + d.evalset_version;
+    loadWorkspaces(currentWorkspace, d.evalset);
+    toast("评测集已导入 " + (d.name ? d.name + " " : "") + d.evalset_version, "ok");
+  };
+  xhr.onerror = () => { $("evalMsg").textContent = "✗ 网络中断"; toast("导入中断", "err"); };
+  xhr.send(file);
 };
 
 // real input rows
@@ -778,40 +904,49 @@ $("run").onclick = async () => {
   let realCases = [];
   try{ realCases = realPayload(); }catch(e){ toast(e.message, "err"); return; }
   setBusy(true); $("state").textContent = "运行中…"; $("log").textContent = "";
-  runId = null; $("stages").innerHTML = ""; stageStarted = {}; setProgress(0); $("result").style.display = "none";
+  runId = null; $("stages").innerHTML = ""; stageStarted = {}; setProgress(0);
+  $("result").style.display = "none"; hideError();
   const llm = {protocol:$("provider").value, base_url:$("base_url").value.trim(),
                model:$("model").value.trim(), api_key:$("api_key").value};
   try{
     const r = await fetch("/api/run", {method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify({skill, tier:tierValue(), harness:$("harness").value,
-        model:llm.model, evalset:$("evalOut").value.trim(), backend:$("backend").value,
-        real_cases: realCases, llm,
+        model:llm.model, evalset:evalsetPath(), backend:$("backend").value,
+        real_cases: realCases, llm, workspace: currentWorkspace,
         rerun_t0: $("rerunT0").checked, rerun_t1: $("rerunT1").checked,
         rerun_t2a: $("rerunTrigger").checked, rerun_t2b: $("rerunReal").checked,
         rerun_t3: $("rerunFull").checked})});
     const data = await r.json();
     if(!r.ok) throw new Error(data.error||"启动失败");
-    runId = data.id; listen(data.id);
-  }catch(e){ log("✗ "+e.message); setBusy(false); toast(e.message, "err"); }
+    runId = data.id;
+    history.replaceState(null, "", "?run=" + encodeURIComponent(data.id));
+    localStorage.setItem("se-last-run", data.id);
+    listen(data.id);
+    loadRuns();
+  }catch(e){ log("✗ "+e.message); setBusy(false); showError(e.message, "", false); }
 };
 
 $("stop").onclick = async () => {
   if(!runId){ toast("当前没有运行中的评估", "err"); return; }
-  if(!confirm("终止当前评估？已完成的阶段会保留，但不会生成完整报告。")) return;
+  if(!confirm("终止当前评估？已完成的阶段会保留，并生成局部报告。")) return;
   $("stop").disabled = true;
   try{
     const r = await fetch("/api/stop", {method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify({id:runId})});
     const d = await r.json();
     if(!r.ok) throw new Error(d.error||"终止失败");
-    log("⏹ 已请求终止");
-    setBusy(false); $("state").textContent = "已终止"; finish();
-    toast("评估已终止", "err");
-  }catch(e){ $("stop").disabled = false; toast(e.message, "err"); }
+    log("⏹ 已停止，已完成阶段已保留");
+    setBusy(false); $("state").textContent = "已停止"; finish();
+    if(d.report){ hideError(); await showReport(runId); toast("已停止，查看局部报告", "ok"); }
+    else { showError(d.error || "停止后未能生成报告", runId, false); }
+    loadRuns();
+  }catch(e){ $("stop").disabled = false; showError(e.message, runId, false); }
 };
 
 function listen(id){
+  finish();
   es = new EventSource("/api/events?id="+id);
+  es.onopen = () => { reconnectAttempt = 0; };
   es.onmessage = (msg) => {
     let ev; try{ ev = JSON.parse(msg.data); }catch{ return; }
     const at = ev.clock || clockOf(ev.ts);
@@ -828,9 +963,10 @@ function listen(id){
         const verb = ev.cached ? "复用" : "完成";
         const detail = ev.cases != null ? ` · ${ev.valid||0}/${ev.cases} 有效` : "";
         const cacheNote = !ev.cached && ev.cache_reason ? ` · ${ev.cache_reason}` : "";
-        markStep(ev.name, "ok", verb + (!ev.cached && dur? " · "+dur : "") + detail + cacheNote);
+        const partialNote = ev.incomplete ? " · 本次未跑完" : "";
+        markStep(ev.name, "ok", verb + (!ev.cached && dur? " · "+dur : "") + detail + cacheNote + partialNote);
         setProgress(WEIGHT[ev.name]||0);
-        log(`[${label(ev.name)}] ${verb}` + (!ev.cached && dur? " · "+dur : "") + detail + cacheNote, at);
+        log(`[${label(ev.name)}] ${verb}` + (!ev.cached && dur? " · "+dur : "") + detail + cacheNote + partialNote, at);
       }
       if(ev.status==="skipped"){
         markStep(ev.name, "skip", "未运行" + (ev.reason? " · "+ev.reason : ""));
@@ -853,23 +989,116 @@ function listen(id){
     } else if(ev.type==="warn"){
       log(`⚠ ${label(ev.stage||"")} ${ev.label||""} ${ev.error||""}`, at);
     } else if(ev.type==="error"){
-      log("✗ "+ev.error, at); setBusy(false); toast(ev.error, "err"); finish();
+      log("✗ "+ev.error, at); setBusy(false); finish();
+      showError(ev.error || "运行中断", id, false); loadRuns();
     } else if(ev.type==="stopped"){
-      log("⏹ 已终止", at); setBusy(false); $("state").textContent="已终止"; finish();
-      toast("评估已终止", "err");
+      log("⏹ 已停止", at); setBusy(false); $("state").textContent="已停止"; finish();
+      if(ev.report){ hideError(); showReport(id); }
+      else { showError(ev.error || "停止后未能生成报告", id, false); }
+      loadRuns();
     } else if(ev.type==="done"){
       const total = fmtDur(ev.elapsed_s);
       log("✓ 完成" + (total? " · "+total : ""), at);
-      setBusy(false); setProgress(100); finish(); showReport(id);
+      setBusy(false); setProgress(100); finish(); hideError(); showReport(id); loadRuns();
     }
   };
-  es.onerror = () => { log("连接中断（runner 可能已结束）"); setBusy(false); finish(); };
+  es.onerror = () => { handleDisconnect(id); };
 }
 function finish(){ if(es){ es.close(); es=null; } }
 
+async function handleDisconnect(id){
+  finish();
+  try{
+    const r = await fetch("/api/status?id="+id);
+    if(!r.ok){ setBusy(false); showError("无法读取这次运行的状态", id, false); return; }
+    const s = await r.json();
+    if(s.running){
+      reconnectAttempt += 1;
+      const wait = Math.min(15000, 1000 * Math.pow(2, Math.min(4, reconnectAttempt)));
+      showError(`连接中断，评估仍在运行（${Math.round(wait/1000)} 秒后自动重连）`, id, true);
+      setTimeout(()=>{ if(runId === id) listen(id); }, wait);
+      return;
+    }
+    setBusy(false);
+    $("state").textContent = s.stopped ? "已停止" : s.partial ? "已完成（局部）" : "已完成";
+    if(s.report){ hideError(); await showReport(id); }
+    else { showError("评估已结束，但没有生成报告", id, false); }
+    loadRuns();
+  }catch(e){ showError("连接中断：" + e.message, id, true); }
+}
+
+function showError(msg, id, retry){
+  errorRunId = id || "";
+  $("errorText").textContent = publicText(msg || "未知错误");
+  $("errorRun").textContent = id ? id.slice(0, 12) : "";
+  $("errorRetry").style.display = retry ? "" : "none";
+  $("errorBar").hidden = false;
+}
+function hideError(){ $("errorBar").hidden = true; }
+$("errorClose").onclick = () => hideError();
+$("errorRetry").onclick = () => { const id = errorRunId || runId; if(id){ hideError(); listen(id); } };
+$("errorLog").onclick = () => showLog(errorRunId || runId);
+$("logClose").onclick = () => { $("logModal").hidden = true; };
+$("logModal").onclick = (e) => { if(e.target.id === "logModal") $("logModal").hidden = true; };
+async function showLog(id){
+  if(!id){ toast("还没有可查看的运行", "err"); return; }
+  $("logModal").hidden = false; $("logBody").textContent = "加载中…";
+  try{
+    const r = await fetch("/api/log?id=" + encodeURIComponent(id));
+    const d = await r.json();
+    $("logBody").textContent = r.ok ? (d.log || "（日志为空）") : (d.error || "日志读取失败");
+  }catch(e){ $("logBody").textContent = "日志读取失败：" + e.message; }
+}
+
+function runTime(value){
+  if(!value) return "";
+  const d = new Date(value);
+  return isNaN(d.getTime()) ? String(value) : d.toLocaleString("zh-CN", {hour12:false});
+}
+async function loadRuns(){
+  try{
+    const r = await fetch("/api/runs?limit=10");
+    const d = await r.json();
+    const runs = d.runs || [];
+    if(!runs.length){ $("recent").innerHTML = '<div class="empty">还没有报告</div>'; return; }
+    $("recent").innerHTML = runs.map(x=>{
+      const status = x.running ? "运行中" : x.partial ? "局部报告" : x.stopped ? "已停止" : conclusionText(x.conclusion);
+      const cls = x.running ? "warn" : x.conclusion === "all-pass" ? "pass" : x.conclusion === "has-failures" ? "fail" : "skipped";
+      return `<button class="recent-item" data-id="${x.id}" type="button">
+        <span><b>${publicText(x.skill_name || x.id)}</b><br><small>${runTime(x.created_at)} · ${String(x.id).slice(0,8)}</small></span>
+        <span class="badge ${cls}">${status}</span></button>`;
+    }).join("");
+    $("recent").querySelectorAll(".recent-item").forEach(el=>{
+      el.onclick = () => openRun(el.dataset.id);
+    });
+  }catch(e){ $("recent").innerHTML = '<div class="empty">读取历史失败</div>'; }
+}
+async function openRun(id){
+  if(!id) return;
+  runId = id; errorRunId = id;
+  history.replaceState(null, "", "?run=" + encodeURIComponent(id));
+  localStorage.setItem("se-last-run", id);
+  try{
+    const r = await fetch("/api/status?id="+id);
+    if(!r.ok){ showError("找不到这次运行", id, false); return; }
+    const s = await r.json();
+    if(s.running){ setBusy(true); $("state").textContent = "运行中…"; hideError(); listen(id); return; }
+    setBusy(false);
+    $("state").textContent = s.stopped ? "已停止" : s.partial ? "已完成（局部）" : "已完成";
+    if(s.report){ hideError(); await showReport(id); }
+    else { showError("这次运行没有生成报告", id, false); }
+  }catch(e){ showError("读取运行失败：" + e.message, id, false); }
+}
+
+const linkedRun = new URLSearchParams(location.search).get("run");
+if(linkedRun){ openRun(linkedRun); }
+
 async function showReport(id){
   try{
-    const r = await fetch("/api/report?id="+id); report = await r.json();
+    const r = await fetch("/api/report?id="+id);
+    const data = await r.json();
+    if(!r.ok) throw new Error(data.error || "报告尚未生成");
+    report = data;
     $("result").style.display = "block";
     const verdicts = Object.values(report.metrics||{}).map(v=>v.verdict);
     const fails = verdicts.filter(v=>v==="fail").length;
@@ -877,10 +1106,15 @@ async function showReport(id){
     const skipped = verdicts.filter(v=>v==="skipped").length;
     const cls = report.conclusion==="all-pass"?"pass":report.conclusion==="has-failures"?"fail":"warn";
     $("summary").innerHTML = `
-      <div class="stat ${cls}"><small>结论</small><b>${report.conclusion||"—"}</b></div>
+      <div class="stat ${cls}"><small>结论</small><b>${conclusionText(report.conclusion)}</b></div>
       <div class="stat"><small>指标</small><b>${Object.keys(report.metrics||{}).length}</b></div>
       <div class="stat fail"><small>失败</small><b>${fails}</b></div>
       <div class="stat warn"><small>警告 / 未测</small><b>${warns} / ${skipped}</b></div>`;
+    $("partialNote").hidden = !report.partial;
+    if(report.partial){
+      const stages = (report.completed_stages||[]).map(tierLabel).join("、");
+      $("partialNote").textContent = "已停止：仅展示已完成阶段" + (stages ? "（" + stages + "）" : "");
+    }
     $("reportLink").href = "/report?id="+id;
     const groups = {};
     Object.entries(report.metrics||{}).forEach(([k,v])=>{
@@ -890,13 +1124,13 @@ async function showReport(id){
     let rows = `<thead><tr><th>指标</th><th>结果</th><th>摘要</th></tr></thead><tbody>`;
     for(const t of ["T0","T1",K2A,K2B,"T3"]){
       if(!groups[t]) continue;
-      rows += `<tr class="group"><td colspan="3">${TIER_LABELS[t]||t}</td></tr>`;
+      rows += `<tr class="group"><td colspan="3">${tierLabel(t)}</td></tr>`;
       for(const [k,v] of groups[t]){
         const opts = ["pass","warn","fail","skipped"].map(o =>
-          `<button type="button" class="verdict-option ${o}" data-value="${o}">${o}</button>`).join("");
+          `<button type="button" class="verdict-option ${o}" data-value="${o}">${verdictText(o)}</button>`).join("");
         rows += `<tr><td><code>${k}</code></td>
           <td><div class="verdict-picker" data-metric="${k}" data-original="${v.verdict}" data-value="${v.verdict}">
-            <button type="button" class="verdict-btn ${v.verdict}" aria-haspopup="listbox" aria-expanded="false">${v.verdict} <span class="caret">▾</span></button>
+            <button type="button" class="verdict-btn ${v.verdict}" aria-haspopup="listbox" aria-expanded="false">${verdictText(v.verdict)} <span class="caret">▾</span></button>
             <div class="verdict-menu" role="listbox">${opts}</div>
           </div></td>
           <td class="metric-note">${publicText(v.note||"").replace(/</g,"&lt;")}</td></tr>`;
@@ -919,7 +1153,7 @@ async function showReport(id){
           e.stopPropagation();
           picker.dataset.value = opt.dataset.value;
           btn.className = "verdict-btn " + opt.dataset.value;
-          btn.innerHTML = opt.dataset.value + ' <span class="caret">▾</span>';
+          btn.innerHTML = verdictText(opt.dataset.value) + ' <span class="caret">▾</span>';
           picker.classList.remove("open");
           btn.setAttribute("aria-expanded","false");
           syncOverrideState();
@@ -927,7 +1161,7 @@ async function showReport(id){
       });
     });
     syncOverrideState();
-  }catch(e){ toast("读报告失败："+e.message, "err"); }
+  }catch(e){ toast("读报告失败："+e.message, "err"); showError("读报告失败："+e.message, id, false); }
 }
 document.addEventListener("click", ()=>{
   document.querySelectorAll(".verdict-picker.open").forEach(p=>{

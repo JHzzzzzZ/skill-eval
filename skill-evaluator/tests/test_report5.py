@@ -189,13 +189,19 @@ def test_badge_text_is_light_on_colored_background(tmp_path):
 
 
 def test_badges_keep_verdict_classes(tmp_path):
-    """修 CSS 不得动契约：徽章仍是 `badge vf-<裁决>`，glyph + 原文都在（ADR-0030）。"""
+    """修 CSS 不得动契约：徽章仍是 `badge vf-<裁决>`，glyph + 中文原文都在。
+
+    契约变更：可见徽章文字已中文化（通过/警告/失败/未测），英文 code 只保留在
+    class 与 report.json 里。旧断言要求徽章文字含英文 code，按新契约改写。
+    """
     _rep, html = render(tmp_path)
+    labels = {"pass": "通过", "warn": "警告", "fail": "失败", "skipped": "未测"}
     for verdict, glyph in (("pass", "✓"), ("warn", "⚠"), ("fail", "✗"), ("skipped", "–")):
         m = re.search(rf"class='badge vf-{verdict}'>(.*?)</span>", html)
         assert m, f"缺 {verdict} 徽章"
         assert m.group(1).startswith(glyph), m.group(1)
-        assert verdict in m.group(1), m.group(1)
+        assert labels[verdict] in m.group(1), m.group(1)
+        assert verdict not in m.group(1), m.group(1)
 
 
 # --- Slice 2：没有底色的独立符号（vf vf-x）在卡片白底上必须可读 ---

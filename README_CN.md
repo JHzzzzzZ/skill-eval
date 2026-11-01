@@ -29,8 +29,8 @@ skill-evaluator/
 ├── judges/             # LLM 评审 rubric（结构化 JSON 输出，固定单发 prompt）
 ├── scripts/            # CLI + runner + llm/harness 适配层；check-deps.sh = 前置自检（#7）
 ├── web/                # 本地前端（stdlib HTTP + SSE + 原生 JS）
-└── tests/              # 340 个测试，全部走 subprocess seam
-docs/adr/               # 40 条架构决策记录
+└── tests/              # 365 个测试，全部走 subprocess seam
+docs/adr/               # 41 条架构决策记录
 ```
 
 评估器**自闭环**：脚本与测试全部在 skill 包内（ADR-0006）。评估产物（评测集、报告）放 `evalsets/<skill名>/`，按版本冻结——重跑不重新生成。
@@ -68,7 +68,7 @@ docs/adr/               # 40 条架构决策记录
 
 ```bash
 cd skill-evaluator
-python -m pytest tests        # 340 个测试全绿
+python -m pytest tests        # 365 个测试全绿
 ```
 
 设计决策及理由见 `docs/adr/`。英文版见 `README.md`。

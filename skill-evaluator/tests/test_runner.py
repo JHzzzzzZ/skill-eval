@@ -191,3 +191,79 @@ def test_real_cases_limit_20(tmp_path):
     f.write_text("\n".join('{"prompt":"p"}' for _ in range(21)), encoding="utf-8")
     with pytest.raises(RunnerError, match="最多 20"):
         _real_cases(f)
+
+
+# --- 阶段级检查点：只有完整阶段才写缓存 ---
+
+RUBRICS = ("brevity", "redundancy", "fallback", "precheck", "contract", "deps", "pii")
+
+
+def write_judges(d: Path, metrics=RUBRICS, score=1.0):
+    d.mkdir(parents=True, exist_ok=True)
+    for metric in metrics:
+        (d / f"{metric}.json").write_text(json.dumps({
+            "items": [{"name": "x", "pass": True, "quote": "x"}],
+            "score": score, "evidence": [], "reason": ""}), encoding="utf-8")
+
+
+def test_judges_ready_requires_all_seven(tmp_path):
+    from runner import _judges_ready
+    write_judges(tmp_path / "judges", RUBRICS[:3])
+    assert _judges_ready(tmp_path / "judges") is False
+    write_judges(tmp_path / "judges", RUBRICS[3:])
+    assert _judges_ready(tmp_path / "judges") is True
+    (tmp_path / "judges" / "pii.json").write_text('{"items": [], "score": 2}',
+                                                   encoding="utf-8")
+    assert _judges_ready(tmp_path / "judges") is False
+
+
+def test_stage_ready_checks_required_fields(tmp_path):
+    from runner import stage_ready
+    assert stage_ready("t0", tmp_path) is False
+    (tmp_path / "static.json").write_text("{}", encoding="utf-8")
+    assert stage_ready("t0", tmp_path) is False
+    (tmp_path / "static.json").write_text('{"passed": false}', encoding="utf-8")
+    assert stage_ready("t0", tmp_path) is True
+
+    (tmp_path / "triggers.json").write_text(
+        '{"should": [true], "should_not": [], "confusable": []}', encoding="utf-8")
+    assert stage_ready("t2a", tmp_path) is False
+    (tmp_path / "score.json").write_text('{"trigger": {"f1": 1}}', encoding="utf-8")
+    assert stage_ready("t2a", tmp_path) is True
+
+    (tmp_path / "t2b").mkdir()
+    (tmp_path / "t2b" / "score.json").write_text('{"necessity": "skipped"}', encoding="utf-8")
+    (tmp_path / "t2b" / "runs.json").write_text("[]", encoding="utf-8")
+    assert stage_ready("t2b", tmp_path) is False
+    (tmp_path / "t2b" / "baseline.json").write_text("[]", encoding="utf-8")
+    assert stage_ready("t2b", tmp_path) is True
+
+    (tmp_path / "runs.json").write_text("[]", encoding="utf-8")
+    assert stage_ready("t3", tmp_path) is False
+    (tmp_path / "score.json").write_text(
+        '{"trigger": "skipped", "cost": {}, "necessity": "skipped"}', encoding="utf-8")
+    assert stage_ready("t3", tmp_path) is True
+
+
+def test_t1_partial_judges_are_not_cached(tmp_path):
+    skill = make_skill(tmp_path)
+    (skill / "SKILL.md").write_text(
+        f"---\nname: partial-{tmp_path.name}\ndescription: d\n---\nbody\n", encoding="utf-8")
+    results = tmp_path / "results"
+    write_judges(results / "judges", RUBRICS[:3])
+    base = [sys.executable, str(SCRIPT), "--skill", str(skill), "--tier", "t1",
+            "--results", str(results), "--backend", "llm",
+            "--base-url", "http://127.0.0.1:9"]
+    first = tmp_path / "first.ndjson"
+    second = tmp_path / "second.ndjson"
+    for prog in (first, second):
+        r = subprocess.run(base + ["--progress", str(prog)],
+                           capture_output=True, text=True, encoding="utf-8", errors="replace")
+        assert r.returncode == 0, r.stderr
+        events = [json.loads(x) for x in prog.read_text(encoding="utf-8").splitlines()]
+        t1 = next(e for e in events if e["type"] == "stage" and e.get("name") == "T1"
+                  and e.get("status") == "done")
+        assert t1["cached"] is False
+        assert t1["incomplete"] is True
+        # 半截评审被整档丢弃，7 个 rubric 全部重跑
+        assert sum(1 for e in events if e["type"] == "judge") == 7

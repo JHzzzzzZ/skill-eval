@@ -27,6 +27,10 @@ Generated: 2026-11-01（v2 更新：ADR-0032–0040）
 | 改依赖全面性 | ADR-0031 + `static_check.py::collect_deps` |
 | 改阈值 | `config.yaml`（ADR-0035）；解析器 `scripts/_config.py` |
 | 改 UI / 进度 | `web/app.py` + `web/index.html` + `runner.py` 的 NDJSON 进度（ADR-0036）；工作区见 0039，真实输入多 case 见 0040 |
+| 改阶段检查点/断点续跑 | `runner.py` 的 `stage_ready()` + `_judges_ready()`；T1 必须 7 个 rubric 全齐才写缓存，半截阶段不续跑 |
+| 改评测集版本/导入导出 | `web/app.py` 的 `_evalset_versions` / `_evalset_export_zip` / `_import_evalset` + `web/index.html` 版本下拉 |
+| 改停止后的局部报告 | `web/app.py` 的 `_completed_stages` / `_finalize_partial` + `report.py --partial` |
+| 改运行历史/日志/重连 | `web/app.py` 的 `_runs` / `_status_payload` / `_tail_log` / `Handler._events`（无硬截止，15s 心跳） |
 
 ## PIPELINE
 
@@ -37,7 +41,9 @@ runner 按档位增量执行（ADR-0033）：
 - **T2A**：`trace_run.py --early-exit` + `trigger_judge.py` → `triggers.json` → `score.py`（#10）；human 型跳过
 - **T2B**：1–20 条真实输入逐条跑 golden + baseline → `t2b/score.json`（#11/#12）；有 expect 算匹配率，无 expect 双向 A/B 偏好；n<3 最高 warn
 - **T3**：cases golden ×N + `idem.py` + `compare.py` → `runs.json`/`idem.json`/`compare.json`（#13/#14/#15/#16）
-- **report**：`report.py --tier <t> --html` → `report.json`（schema 2 + legacy_id_map）+ md/html/meta
+- **report**：`report.py --tier <t> --html` → `report.json`（schema 2 + legacy_id_map）+ md/html/meta；停止时 `--partial --completed-stages ...` 只展示已完成阶段
+
+阶段产物完成后才写缓存（`.skill-eval-cache/`）；阶段开始只恢复完整阶段，T1 半截 / T2A·T2B·T3 半截一律整档重跑。报告 meta 记录所选评测集版本与 `skill_sha256`。
 
 前端 `web/app.py` 用 stdlib HTTP + SSE 调 runner，只绑 `127.0.0.1`。
 

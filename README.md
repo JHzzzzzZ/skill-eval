@@ -29,8 +29,8 @@ skill-evaluator/
 ├── judges/             # LLM-judge rubrics (structured JSON output, fixed single-shot prompt)
 ├── scripts/            # CLI + runner + llm/harness adapters; check-deps.sh = preflight (#7)
 ├── web/                # local UI (stdlib HTTP + SSE + vanilla JS)
-└── tests/              # 340 tests, subprocess-seam based
-docs/adr/               # 40 architecture decisions
+└── tests/              # 365 tests, subprocess-seam based
+docs/adr/               # 41 architecture decisions
 ```
 
 The evaluator is **self-contained**: all scripts and tests live inside the skill package (ADR-0006). Evaluation artifacts (eval sets, reports) live in `evalsets/<skill-name>/` and are frozen per version — never regenerated on re-runs.
@@ -68,7 +68,7 @@ Tier entry: `--tier <t0|t1|t2a|t2b|t3>` (default T2A); higher tiers reuse lower-
 
 ```bash
 cd skill-evaluator
-python -m pytest tests        # 340 tests, all green
+python -m pytest tests        # 365 tests, all green
 ```
 
 Design decisions and their reasoning live in `docs/adr/`. See `README_CN.md` for the Chinese version.

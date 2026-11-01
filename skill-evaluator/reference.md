@@ -84,11 +84,17 @@ evalsets/<name>/v1/
 
 冻结前跑质量自检（ADR-0011）：`python scripts/evalset_check.py <evalset目录> --skill <skill目录>`，查 should prompt 照抄 description、组内近似重复、同句跨组冲突；命中则先改写再冻结，裁决落 `evalset.json`（clean=false → report.py 把 #10 降级为 warn）。
 
-草稿生成：`python scripts/evalset_gen.py --skill <skill目录> --out <evalset目录> --count 10`（默认走 `llm`；只写草稿，不写 `meta.json`）。前端「评测集」面板可生成草稿、加载逐条审核并写 `reviews/review.json`；`report.html` 的「评测集审核」tab 保留。
+草稿生成：`python scripts/evalset_gen.py --skill <skill目录> --out <evalset目录> --count 10`（默认走 `llm`；只写草稿，不写 `meta.json`）。Web 生成后补写 `meta.json` 的 `name`/`version`/`skill_name`/`skill_sha256`/`created_at`，供版本来源判定。前端「评测集」面板按版本操作：生成草稿、加载逐条审核并写 `reviews/review.json`；`report.html` 的「评测集审核」tab 保留。
+
+评测集版本与导入导出：
+
+- 版本目录固定 `evalsets/<name>/vN/`；前端不填路径，只选版本。`GET /api/workspaces` 与上传响应带 `evalset`（默认最新）、`evalset_version`、`evalset_versions: [{version,path,frozen,reviewed_by,skill_sha256,source}]`。`source` = `current`（meta 的 `skill_sha256` 等于当前工作区）/ `old`（不等）/ `unknown`（旧集没记 hash）——只提示，不阻止运行。
+- `GET /api/evalset/export?evalset=<vN>`：只允许 `evalsets/` 下路径；内存打 zip，根含 `meta.json` + `triggers/` + `cases/` + 可选 `reviews/`，排除 `results/`；文件名 `evalset-<name>-<version>.zip`。
+- `POST /api/evalset/import?filename=x.zip`：原始 zip 上传，沿用安全解压（`..`/绝对路径/符号链接拒绝），单独限 50MB / 500 文件；自动定位 zip 根（`meta.json` 或 `triggers/`/`cases/`），至少需一个触发组或 cases。名称优先 `meta.json.name`，否则文件名；版本优先 `meta.json.version`，否则 `v1`；目标已存在则自动新建下一个 `vN`，**绝不覆盖冻结集**。写入 `imported_at` / `source_archive` 后返回新路径与版本列表。
 
 ## 运行场景
 
-档位（tier）定义增量递进的评估深度（ADR-0033），入口参数 `--tier <t0|t1|t2a|t2b|t3>`（也接受 `T0`–`T3`），**默认 T2A**。高档复用低档产物：结果目录里各中间产物记录生成时的 skill content_sha256、评估器指纹与评审模型，一致则复用，不一致则作废重跑；`--rerun-t0` / `--rerun-t1` 强制重跑对应档，Web 提供五个阶段勾选与“全部重跑”（只勾当前档及以下），默认复用持久缓存，页面不再发送 `reuse_from`/`no_cache`；`--no-cache` 只在 CLI/API 保留。低档先行、后续增量补跑（staged）不重做已完成档；各档产物持久缓存到 `.skill-eval-cache/<stage>/<key>/`（仓库根，gitignore），key 含 skill/evaluator/评测集/真实输入/模型/载体；跨 run / 重启仍可复用，`--rerun-t0|t1|t2a|t2b|t3` 才强制重算，`--no-cache` 关闭全部复用。缓存未命中时 T0/T1 的进度事件带 `cache_reason`（首次运行或评估器/模型变化），页面会显示原因。T1 每完成一个 rubric 就立即写入缓存；中断后下次只补缺失项，不重跑已完成项。T4 不开放（ADR-0032）。
+档位（tier）定义增量递进的评估深度（ADR-0033），入口参数 `--tier <t0|t1|t2a|t2b|t3>`（也接受 `T0`–`T3`），**默认 T2A**。高档复用低档产物：结果目录里各中间产物记录生成时的 skill content_sha256、评估器指纹与评审模型，一致则复用，不一致则作废重跑；`--rerun-t0` / `--rerun-t1` 强制重跑对应档，Web 提供五个阶段勾选与“全部重跑”（只勾当前档及以下），默认复用持久缓存，页面不再发送 `reuse_from`/`no_cache`；`--no-cache` 只在 CLI/API 保留。低档先行、后续增量补跑（staged）不重做已完成档；各档产物持久缓存到 `.skill-eval-cache/<stage>/<key>/`（仓库根，gitignore），key 含 skill/evaluator/评测集/真实输入/模型/载体；跨 run / 重启仍可复用，`--rerun-t0|t1|t2a|t2b|t3` 才强制重算，`--no-cache` 关闭全部复用。缓存未命中时 T0/T1 的进度事件带 `cache_reason`（首次运行或评估器/模型变化），页面会显示原因。**检查点只在阶段边界**：T0 完成写 `static.json`；T1 必须 7 个 rubric 全齐才写 `judges/` + `raw/llm-judge/`；T2A 完成写 `triggers.json`/`score.json`/`triggers/`；T2B 完成写 `t2b/`/`real-input.meta.json`/`golden.json`；T3 完成写 `runs.json`/`idem.json`/`compare.json`/`score.json`/`traces/`。阶段开始只恢复**完整阶段**（JSON 可读且必要字段齐备），半截 T1/T2A/T2B/T3 一律不续跑：该阶段缓存不写，下次整档重跑，之前完整阶段照常复用。T4 不开放（ADR-0032）。
 
 | 档 | 场景 | 做什么 | 服务指标 |
 |---|---|---|---|
@@ -127,23 +133,30 @@ T1 评审走 `llm` 接口层（ADR-0034）：模型 `--model` > `llm.model` > `S
 
 ## 工作区
 
-上传先解压到临时目录，再按 `skill_sha256` 落到稳定工作区 `web/workspaces/<slug>-<hash8>/skill/`；同一内容重复上传复用同一路径，内容变化新建工作区。`workspace.json` 记录 `id`/`name`/`skill_sha256`/`source`/`created_at`/`last_used_at`；`GET /api/workspaces` 返回列表。UI 的工作区下拉可选择已有工作区，上传后自动填 `evalsets/<name>/v<N>`（已有取最新版本，否则 v1）；`web/workspaces/` 是本地态，gitignore。旧 `web/runs/uploads/` 保留只读，不迁移。
+上传先解压到临时目录，再按 `skill_sha256` 落到稳定工作区 `web/workspaces/<slug>-<hash8>/skill/`；同一内容重复上传复用同一路径，内容变化新建工作区。`workspace.json` 记录 `id`/`name`/`skill_sha256`/`source`/`created_at`/`last_used_at`；`GET /api/workspaces` 返回列表，每项带评测集版本字段。UI 的工作区下拉文案为 `名称 · hash8 · vN`，选中后由「评测集版本」下拉驱动 `currentEvalset`；没有评测集时显示 `v1（未创建）`，生成草稿写到该路径。生成/审核/运行都只读这个状态，不再有评测集路径输入框。`web/workspaces/` 是本地态，gitignore。旧 `web/runs/uploads/` 保留只读，不迁移。
 
 ## 前端与 runner（ADR-0036）
 
 `scripts/runner.py` 是确定性编排：按 `--tier` 调 T0→T1→T2A→T2B→T3，最后 `report.py`；进度以 NDJSON 输出，`--results` 指定产物目录，`--real-input` 给真实输入对比。
 
 `web/app.py` 是 stdlib HTTP 入口（只绑 `127.0.0.1`）：
-- `POST /api/upload`：浏览器直接以 `application/zip` 流式上传，安全解压到临时目录后复制进工作区；返回 `workspace_id`/`workspace`/`skill`/`evalset`/`skill_sha256`；拒绝 `..`/绝对路径/符号链接，限制 1GB 压缩包、2GB 解压体积、20000 个文件。旧 base64 分支仅兼容，UI 不使用。
-- `GET /api/workspaces`：返回 `{"workspaces": [{id,name,skill_sha256,skill,evalset,...}]}`，供工作区下拉。
+- `POST /api/upload`：浏览器直接以 `application/zip` 流式上传，安全解压到临时目录后复制进工作区；返回 `workspace_id`/`workspace`/`skill`/`evalset`/`evalset_version`/`evalset_versions`/`skill_sha256`；拒绝 `..`/绝对路径/符号链接，限制 1GB 压缩包、2GB 解压体积、20000 个文件。旧 base64 分支仅兼容，UI 不使用。
+- `GET /api/workspaces`：返回 `{"workspaces": [{id,name,skill_sha256,skill,evalset,evalset_version,evalset_versions}]}`，供工作区与评测集版本下拉。
 - `GET /api/llm/config`、`POST /api/llm/test`：返回非敏感默认配置 / 测试连接。
-- `POST /api/run`：启动 runner；可带 `llm`（protocol/base_url/model/api_key）与 `real_cases`（数组，每条 `{prompt,note,expect}`；也兼容旧 `real_input` 字符串）。
-- `POST /api/stop`：终止当前 runner；`GET /api/status` 返回当前运行状态。
-- `GET /api/events?id=`：SSE 进度；`GET /api/report?id=`：报告 JSON；`GET /report?id=`：报告页。
+- `POST /api/run`：启动 runner；可带 `llm`（protocol/base_url/model/api_key）与 `real_cases`（数组，每条 `{prompt,note,expect}`；也兼容旧 `real_input` 字符串）。启动时写 `web/runs/<id>/run.json`（skill 名/tier/评测集/创建时间），供重启后历史列表。
+- `POST /api/stop`：终止当前 runner 后按产物做一次完成度判定，取**最高完整阶段**生成局部报告（`report.py --partial --completed-stages ...`，档位 = 该阶段）；响应带 `report`/`partial`/`completed_stages`/`error`。连 T0 都没完成时不生成空报告。
+- `GET /api/status?id=`：先查活动 run，再回退 `web/runs/<id>/results/` 磁盘产物；返回 `running`/`returncode`/`stopped`/`partial`/`completed_stages`/`results`/`report`/`log`。
+- `GET /api/runs?limit=20`：扫描 `web/runs/*/results/run-meta.json`，返回 `id`/`skill_name`/`tier`/`created_at`/`conclusion`/`partial`/`stopped`/`running`/`has_report`，按时间倒序；含活动 run。
+- `GET /api/log?id=`：返回 `run.log` 尾部 200 行；活动 run 与磁盘旧 run 都可读。
+- `GET /api/events?id=`：SSE 进度，无硬截止；每 15 秒发注释心跳，进程结束/停止才收尾；`stopped` 事件带 `report` 地址。
+- `GET /api/report?id=` / `GET /report?id=`：先查活动 run，再回退磁盘 `results/`；只有两边都没有才 404。
 - `GET /api/evalset/status|items`、`POST /api/evalset/generate|review`：评测集检查、生成草稿、逐条审核（写 `reviews/review.json` + `audit.jsonl`）。
+- `GET /api/evalset/export?evalset=`、`POST /api/evalset/import?filename=`：评测集 zip 导出/导入（见 § 评测集冻结）。
 - `POST /api/override`：支持一次提交多条裁决调整（`changes: [{metric,to}]`），统一写 `overrides.json` + `manual-overrides.jsonl`，重出报告。
 
-前端不重算指标。
+前端不重算指标。页面启动解析 `?run=<id>`（刷新/深链恢复），运行开始时用 `history.replaceState` 写 URL 并存 `localStorage`；右栏「最近报告」来自 `/api/runs`。SSE 断线不直接收尾：先查 `/api/status`，仍在跑就指数退避重连并显示常驻错误条，已结束则加载报告。错误条与日志弹层常驻，不自动消失。
+
+用户可见文本只出现中文档位/结论（`全部通过`/`有警告`/`有失败`），不显示内部缩写；`report.json` 仍保留 `all-pass` 等 code。
 
 被测 skill 出现宿主环境硬编码（绝对路径、特定用户目录、.claude/.cursor 等他方生态路径）→ 可移植性闸门整体 fail（ADR-0008，static_check 的 `hardcoded` 字段）。<!-- static-check:ignore -->
 
@@ -174,11 +187,12 @@ T1 评审走 `llm` 接口层（ADR-0034）：模型 `--model` > `llm.model` > `S
 - `compare.json`：compare.py --aggregate 裁决（#14）；逐 case 文件在 `compare/`
 - `actual/` + `expected/`：T3 每 case 的实际回答与期望（compare.py 输入）
 - `overrides.json`：人工复核 `{metric: {from, to, reason, reviewer, at}}`；from/to 必须是 pass|warn|fail|skipped，报告按 from 匹配当前裁决后应用
+- `run.json`（在 `web/runs/<id>/`，不属 results）：前端运行元数据 `{id,skill,skill_name,workspace,tier,evalset,created_at,stopped?,stopped_at?}`，重启后历史列表/深链靠它恢复
 - `manual-overrides.jsonl`：人工调整的追加审计日志（前端 `/api/override` 写入）
 - `evalset.json`：evalset_check.py stdout（触发集质量，#10 降级依据）
 - `model_robust.json`：model_robust.py stdout（#15 跨模型一致率）
 - `models/<模型名>/trace-<序号>.json`：跨模型运行的逐 case trace（序号 = 评测集顺序，各模型必须一致）
-- `meta.json`：`{"schema": "skill-eval/results-meta/1", "generated_at", "conclusion", "evaluator", "skill_fingerprint", "evalset_source", "metrics"}`（report.py 写入，ADR-0010）；已存在时**合并保留**人工填写的键（model/sandbox/skipped_reason 等），不静默覆盖
+- `meta.json`：`{"schema": "skill-eval/results-meta/1", "generated_at", "conclusion", "evaluator", "skill_fingerprint", "evalset_source", "metrics"}`（report.py 写入，ADR-0010）；已存在时**合并保留**人工填写的键（model/sandbox/skipped_reason 等），不静默覆盖。局部报告另带 `partial: true` / `completed_stages` / `stopped_at`。`evalset_source` 记录所选版本（name/version/frozen/reviewed_by）与 `skill_sha256`（旧集没有则不猜）。
 - `judges/<metric>.json`：judge_runner.py 校验通过的 LLM 评审输出，metric ∈ {brevity, redundancy, fallback, precheck, contract, deps, pii}（**不要**存成 judge-*.json 或放 results 根目录，report.py 只认 judges/<metric>.json）
 - `raw/llm-judge/<metric>.json`：T1 直连 LLM 的 request/response（含 prompt，不含密钥）；`--backend pi` 时原始事件流仍存 `raw/judge-events/<metric>.events.jsonl`
 
@@ -232,6 +246,7 @@ evalsets/<name>/results/<version>/
 
 规则：
 - `tier` 记录本次跑到的最高档位；`tier_label` 是给人看的名称；`metric_tiers` 给出 #N→T0/T1/T2A/T2B/T3 分组
+- **局部报告**：`report.py <results> --partial --completed-stages t0,t1 --tier t1`。`report.json` 顶层写 `partial: true` / `completed_stages` / `stopped_at`（`report.md`、`meta.json` 同步）；**最高完整阶段之后**的指标一律 `skipped`（`note` = “已停止：<阶段>未完成”），当前半截阶段的数据不参与 `conclusion()`。`report.md` / `report.html` 顶部标注“局部报告：仅展示已完成阶段”。停在 T2B 时根 `score.json` 可能只有 T2A 数据，从 `t2b/score.json` 补 `necessity`/`match`/`preference`，但 T3 指标仍 skipped。连 T0 都没完成不生成报告。
 - 跨档位的指标值不直接比较
 - 各中间产物记录生成时的 skill content_sha256；高档复用低档产物时校验一致，不一致则该产物作废重跑
 - 16 条指标全部出现，`metrics` 按 #1–#16 排序；未测的标 `skipped` 并注明原因，不打 0 分

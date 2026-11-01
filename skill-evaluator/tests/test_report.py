@@ -213,7 +213,8 @@ def test_report_md_written(tmp_path):
         "dangerous": [], "passed": True}})
     run_report(tmp_path)
     md = (tmp_path / "report.md").read_text(encoding="utf-8")
-    assert "#1" in md and "结论" in md and "pass" in md
+    # #23：报告页结论/裁决中文化（report.json 仍保留 code）——旧断言锁的是英文枚举
+    assert "#1" in md and "结论" in md and "[通过]" in md and "[pass]" not in md
 
 
 # --- 全仓复审 P2: #12 稳定性阈值（变异系数）---
@@ -685,3 +686,113 @@ def test_deps_ignores_agent_wrong_artifact_path(tmp_path):
     m = run_report(tmp_path)["metrics"]["#12"]
     assert m["verdict"] == "pass"
     assert m["data"]["ignored_errors"]
+
+
+# --- 部分报告：停止后只用已完成阶段 ---
+
+def run_report_extra(d: Path, *args):
+    r = subprocess.run([sys.executable, str(SCRIPT), str(d), *args],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
+    assert r.returncode == 0, f"report.py failed: {r.stderr}"
+    return json.loads((d / "report.json").read_text(encoding="utf-8"))
+
+
+def test_partial_report_marks_stage_and_skips_later(tmp_path):
+    write_inputs(tmp_path, {"static.json": _static()})
+    out = run_report_extra(tmp_path, "--partial", "--completed-stage", "t0",
+                           "--tier", "t0", "--html")
+    assert out["partial"] is True
+    assert out["completed_stages"] == ["t0"]
+    assert out["stopped_at"]
+    assert len(out["metrics"]) == 16
+    for key in ("#2", "#5", "#10", "#11", "#13"):
+        assert out["metrics"][key]["verdict"] == "skipped", key
+    assert out["conclusion"] == "with-warnings"
+    md = (tmp_path / "report.md").read_text(encoding="utf-8")
+    html = (tmp_path / "report.html").read_text(encoding="utf-8")
+    assert "局部报告" in md and "局部报告" in html
+    assert "有警告" in md and "with-warnings" not in md.splitlines()[2]
+    # 可见徽章用中文；英文 code 只允许出现在 class/数据里，不再作为徽章文字
+    for visible in (">pass<", ">warn<", ">fail<", ">skipped<"):
+        assert visible not in html, visible
+    assert "✓ 通过" in html or "⚠ 警告" in html or "– 未测" in html
+    meta = json.loads((tmp_path / "meta.json").read_text(encoding="utf-8"))
+    assert meta["partial"] is True
+    assert meta["completed_stages"] == ["t0"]
+    assert meta["stopped_at"] == out["stopped_at"]
+
+
+def test_report_html_badges_use_chinese_labels(tmp_path):
+    write_inputs(tmp_path, {"static.json": _static()})
+    out = run_report_extra(tmp_path, "--html")
+    html = (tmp_path / "report.html").read_text(encoding="utf-8")
+    for visible in (">pass<", ">warn<", ">fail<", ">skipped<"):
+        assert visible not in html, visible
+    assert "✓ 通过" in html and "– 未测" in html
+    assert out["metrics"]["#1"]["verdict"] == "pass"  # report.json 仍保留 code
+
+
+def test_partial_t2b_uses_t2b_score_for_necessity(tmp_path):
+    necessity = {key: {"golden": 5.0, "baseline": 10.0, "improvement": 0.5, "n": 5}
+                 for key in ("tokens", "tool_calls", "seconds")}
+    write_inputs(tmp_path, {
+        "static.json": _static(),
+        "t2b/score.json": {"necessity": necessity, "match": {"match": True, "valid": 3}},
+        "t2b/runs.json": [{"case": "c1", "tool_calls": 1, "tokens": 5, "seconds": 1}],
+        "t2b/baseline.json": [{"case": "c1", "tool_calls": 2, "tokens": 10, "seconds": 2}],
+    })
+    out = run_report_extra(tmp_path, "--partial", "--completed-stage", "t2b",
+                           "--tier", "t2b", "--html")
+    assert out["metrics"]["#11"]["verdict"] == "pass"
+    assert out["metrics"]["#13"]["verdict"] == "skipped"
+    assert out["metrics"]["#15"]["verdict"] == "skipped"
+    assert "stopped" not in out["metrics"]["#10"]["note"]
+
+
+def test_partial_t0_does_not_read_pii_judge(tmp_path):
+    # 停在 T0 时 T1 未完成：judges/pii.json 即使存在也不能影响 #4（只反映静态面）
+    write_inputs(tmp_path, {
+        "static.json": _static(),
+        "judges/pii.json": {
+            "items": [{"name": "客户信息", "pass": False, "quote": "客户名单"}],
+            "score": 0.0, "evidence": [], "reason": "含公司特化信息"},
+    })
+    full = run_report(tmp_path)
+    assert full["metrics"]["#4"]["verdict"] == "fail"  # 完整报告会合并语义面
+    out = run_report_extra(tmp_path, "--partial", "--completed-stage", "t0",
+                           "--tier", "t0")
+    assert out["metrics"]["#4"]["verdict"] == "pass"
+    data = out["metrics"]["#4"]["data"] or {}
+    assert "pii_judge" not in data
+    assert "pii" not in out["metrics"]["#4"]["note"].lower()
+
+
+def test_partial_t0_does_not_read_brevity_judge(tmp_path):
+    # 停在 T0 时 T1 未完成：judges/brevity.json 的 score=0 不能把 T0 指标 #2 拉成 fail，
+    # #2 只保留静态正文行数结论（与 pii 同一条 T1 门槛）。
+    write_inputs(tmp_path, {
+        "static.json": _static(skill_md_body_lines=70,
+                                skill_md_body_warn_lines=150,
+                                skill_md_body_fail_lines=500, body_level="ok"),
+        "judges/brevity.json": {
+            "items": [{"name": "语义精简", "pass": False, "quote": "冗余段落"}],
+            "score": 0.0, "evidence": [], "reason": "正文冗余"},
+    })
+    full = run_report(tmp_path)
+    assert full["metrics"]["#2"]["verdict"] == "fail"  # 完整报告会合并语义面
+    out = run_report_extra(tmp_path, "--partial", "--completed-stage", "t0",
+                           "--tier", "t0")
+    m = out["metrics"]["#2"]
+    assert m["verdict"] != "fail"
+    assert m["data"] == {"skill_md_body_lines": 70, "skill_md_body_warn_lines": 150,
+                         "skill_md_body_fail_lines": 500, "body_level": "ok"}
+    assert "brevity" not in m["note"].lower()
+    assert "冗余" not in m["note"]
+
+
+def test_partial_without_completed_stage_keeps_all_metrics(tmp_path):
+    # 没有 --completed-stages 时不猜“已完成到哪”，16 key 仍全出现且不崩
+    out = run_report_extra(tmp_path, "--partial")
+    assert out["partial"] is True
+    assert len(out["metrics"]) == 16
+    assert all(v["verdict"] == "skipped" for v in out["metrics"].values())

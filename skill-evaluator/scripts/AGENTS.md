@@ -15,8 +15,8 @@ Generated: 2026-09-22T13:43:08.578Z
 | `harness.py` | 75 | 无 CLI；`run_case/available` | 执行载体适配（当前 pi） |
 | `judge_run.py` | 172 | `--metric --skill --out [--backend]` | T1 评审执行器 |
 | `evalset_gen.py` | 115 | `--skill --out [--count]` | 生成 T2A 评测集草稿 |
-| `runner.py` | 818 | `--skill --tier [--evalset] [--real-input]` | 确定性编排 + NDJSON 进度 |
-| `report.py` | 1442 | `<results目录> [--html] [--evalset <vN>] [--skill <dir>] [--tier <t>]` | 汇总 16 条 + 优化建议 + 报告页 |
+| `runner.py` | 868 | `--skill --tier [--evalset] [--real-input]` | 确定性编排 + NDJSON 进度 + 阶段级检查点 |
+| `report.py` | 1515 | `<results目录> [--html] [--evalset <vN>] [--skill <dir>] [--tier <t>] [--partial --completed-stages t0,t1]` | 汇总 16 条 + 优化建议 + 报告页 + 局部报告 |
 | `static_check.py` | 714 | `<skill目录> [--exclude <p>]... [--no-default-excludes]` | #1/#3/#4 六组 + 可移植性闸门 + #12 依赖全面性 |
 | `trace_run.py` | 474 | `<沙箱目录> <prompt> [--skill\|--no-skill] [--early-exit] [--model] [--events] [--out] [--build-only]` | #10/#13/#11/#12/#15/#16 数据源 |
 | `evalset_check.py` | 180 | `<evalset目录> --skill <skill目录> [--out]` | #10 可信度（触发集质量） |
@@ -72,6 +72,7 @@ Generated: 2026-09-22T13:43:08.578Z
 
 ## NOTES
 
+- `runner.py` 的阶段完成判定统一走 `stage_ready(name, dir)`：T0 看 `static.passed` 是 bool；T1 看 7 个 rubric 可读且 `score` 合法；T2A 看 `triggers.json` 三组列表 + `score.json.trigger`；T2B 看 `t2b/score.json.necessity` + 两臂数组；T3 看 `runs.json` 列表 + `score.json` 的 trigger/cost/necessity。**文件存在不等于阶段完成**，半截阶段既不写缓存也不被续跑。
 - 重复实现（抽公共模块前先读根 `AGENTS.md` 关于指纹的警告）：`normalize()` `evalset_check.py:45` vs `model_robust.py:38`（字节级相同）；`grams()` `:50` vs `:42`；`coverage()`(`:57`) 与 `jaccard()`(`model_robust.py:49`) 同源但分母不同（非对称覆盖 vs 并集）。
 - 代码级 import 扇入：`compare.extract_answer` ← `trigger_judge.py`；`static_check.parse_frontmatter` ← `evalset_check.py`；`trace_run.EventAggregator` ← `tests/test_trace_run.py`。其余脚本零代码级依赖。
 - `report.py:298 build()` 是约 260 行 if 链，16 指标无子函数。读它反推所有上游契约是最快路径。

@@ -4,7 +4,7 @@ Generated: 2026-09-22T13:43:08.578Z
 
 ## OVERVIEW
 
-25 个测试文件 / 340 个 test，全部走 subprocess seam：把脚本当 CLI 跑，不 import 被测脚本（`test_trace_run.py` 例外，它 import `EventAggregator` 做增量消费断言；`test_config.py` 直接 import `_config.py`；`test_runner.py` 直接 import `_real_cases` 做解析断言）。
+25 个测试文件 / 365 个 test，全部走 subprocess seam：把脚本当 CLI 跑，不 import 被测脚本（`test_trace_run.py` 例外，它 import `EventAggregator` 做增量消费断言；`test_config.py` 直接 import `_config.py`；`test_runner.py` 直接 import `_real_cases`/`stage_ready` 做判定断言）。
 
 ## WHERE TO LOOK
 
@@ -13,15 +13,15 @@ Generated: 2026-09-22T13:43:08.578Z
 | `test_static_check.py` | `scripts/static_check.py`（六组规则 + PII + 依赖全面性 + 字符/行阈值） | 63 |
 | `test_config.py` | `scripts/_config.py`（YAML 子集解析/优先级/类型） | 7 |
 | `test_evalset_gen.py` | `scripts/evalset_gen.py`（prompt/条目归一化） | 2 |
-| `test_web.py` | `web/app.py`（zip 上传安全边界 / UI 术语 / 停止进程 / 复用拷贝 / 工作区） | 6 |
+| `test_web.py` | `web/app.py`（zip 上传安全边界 / UI 术语 / 停止进程 / 复用拷贝 / 工作区 / 评测集版本与导入导出 / 磁盘 history 回退 / 局部报告 / ACTIVE 运行态） | 22 |
 | `test_llm.py` | `scripts/llm.py`（协议/无 tools/JSON 提取） | 5 |
 | `test_judge_run.py` | `scripts/judge_run.py`（文件收集/prompt/SKILL.md 优先） | 5 |
-| `test_runner.py` | `scripts/runner.py`（dry-run/T0 端到端 / 进度计时 / T0-T1 复用与跨目录缓存 / 真实输入解析） | 11 |
-| `test_report.py` | `report.py` 16-key 契约基线 | 50 |
+| `test_runner.py` | `scripts/runner.py`（dry-run/T0 端到端 / 进度计时 / T0-T1 复用与跨目录缓存 / 阶段级完成判定 / 半截 T1 不缓存 / 真实输入解析） | 14 |
+| `test_report.py` | `report.py` 16-key 契约基线 + 局部报告 + 徽章中文化 | 56 |
 | `test_trace_run.py` | `scripts/trace_run.py` | 44 |
 | `test_report3.py` | `report.py` 元数据/指纹批次（ADR-0010/0011）+ data 渲染层 | 21 |
 | `test_report4.py` | `report.py` 报告可用性（表格化/折叠/闸门可见/建议/✓✗/依赖全面性/PII，ADR-0029/0030/0031） | 19 |
-| `test_report5.py` | 报告页徽章对比度回归 | 6 |
+| `test_report5.py` | 报告页徽章对比度与中文可见文案回归 | 6 |
 | `test_score.py` | `scripts/score.py` | 16 |
 | `test_judge_runner.py` | `scripts/judge_runner.py` | 13 |
 | `test_evalset_check.py` | `scripts/evalset_check.py`（触发集质量） | 13 |
@@ -61,4 +61,4 @@ Generated: 2026-09-22T13:43:08.578Z
 
 - `tests/tmp-ev/triggers/should/s1.json`（内容仅 `{"prompt": "x"}`）已被 git 跟踪但全仓零引用，是误提交的 scratch 残渣。
 - `test_static_check.py::test_evaluator_self_check_passes` 是自检回归锁：保证 `python scripts/static_check.py skill-evaluator` 输出 `passed: true`（ADR-0012/0013）。
-- 该文件是最大测试文件（55 test），因 #4 扩为六组规则后每组都要正向+负向用例。加规则时必须同时加“不该误报”的负向用例（尤其 `secrets` 的占位符、`obfuscation`/`pii` 的 warn 分级与示例白名单）。
+- 该文件是最大测试文件（63 test），因 #4 扩为六组规则后每组都要正向+负向用例。加规则时必须同时加“不该误报”的负向用例（尤其 `secrets` 的占位符、`obfuscation`/`pii` 的 warn 分级与示例白名单）。

@@ -1,5 +1,9 @@
 """报告生成（17/18 的自我应用：固定输出契约）。
 Seam: python report.py <results目录> [--html] [--evalset <evalsets/<name>/vN>] [--skill <被测skill目录>]
+      [--partial --completed-stage <t> | --completed-stages <t0,t1,...>]
+
+--partial 只用于停止后的局部报告：顶层写 partial/completed_stages/stopped_at，
+最高完整阶段之后的指标一律 skipped（当前半截阶段不参与结论）。
 
 读同目录中间产物（static.json/score.json/idem.json/compare.json/golden.json/evalset.json/
 model_robust.json/judges/*.json），产出 report.json（16 key，机器可读；schema=2，ADR-0032）+ report.md（人可读）
@@ -15,6 +19,7 @@ import json
 import re
 import statistics
 import sys
+import time
 from pathlib import Path
 
 import _config
@@ -47,6 +52,7 @@ TIER_OF = {**{f"#{i}": "T0" for i in range(1, 5)},
            **{f"#{i}": "T1" for i in range(5, 10)},
            "#10": "T2A", "#11": "T2B", "#12": "T2B",
            **{f"#{i}": "T3" for i in range(13, 17)}}
+STAGE_ORDER = ("t0", "t1", "t2a", "t2b", "t3")
 
 
 def tier_label(value) -> str:
@@ -185,7 +191,8 @@ def evalset_meta(evalset_dir) -> dict:
     frozen = load(d, "meta.json")
     if isinstance(frozen, dict):
         meta["frozen"] = bool(frozen.get("frozen_at") or frozen.get("reviewed_by"))
-        for k in ("frozen_at", "reviewed_by"):
+        for k in ("frozen_at", "reviewed_by", "skill_name", "skill_sha256",
+                  "created_at", "imported_at", "source_archive"):
             if frozen.get(k):
                 meta[k] = frozen[k]
     else:
@@ -198,7 +205,7 @@ def build_meta(report: dict, skill_dir=None, evalset_dir=None) -> dict:
     （model/sandbox/skipped_reason，以及字符串形式的 skill/evalset），所以用
     skill_fingerprint / evalset_source 而不是 skill / evalset（ADR-0010）。"""
     verdicts = [v["verdict"] for v in report["metrics"].values()]
-    return {
+    meta = {
         "schema": META_SCHEMA,
         "generated_at": report["generated_at"],
         "conclusion": report["conclusion"],
@@ -209,6 +216,11 @@ def build_meta(report: dict, skill_dir=None, evalset_dir=None) -> dict:
                     "skipped": sum(1 for v in verdicts if v == "skipped")},
         "evalset_source": evalset_meta(evalset_dir),
     }
+    if report.get("partial"):
+        meta.update({"partial": True,
+                     "completed_stages": report.get("completed_stages") or [],
+                     "stopped_at": report.get("stopped_at")})
+    return meta
 
 
 def write_meta(d: Path, meta: dict) -> None:
@@ -370,10 +382,26 @@ def _load_path(p: Path):
         return None
 
 
-def build(d: Path, evalset_dir: Path | None = None) -> dict:
+def build(d: Path, evalset_dir: Path | None = None,
+          partial_stage: str | None = None,
+          completed_stages: list | None = None) -> dict:
     m = {}
+    # None = 完整报告；否则只信已完成阶段，未完成阶段的辅证输入一律不读。
+    done_stages = ({str(s).lower() for s in completed_stages}
+                   if completed_stages is not None else None)
     static = load(d, "static.json")
     score = load(d, "score.json")
+    # 停在 T3 时 T2B 已完成：根 score.json 可能只有 T2A 的触发数据，
+    # 从 t2b/score.json 补必要性/匹配/偏好，保证局部报告不漏已完成的 T2B。
+    if partial_stage == "t2b":
+        t2b_score = load(d / "t2b", "score.json")
+        if isinstance(t2b_score, dict):
+            if not isinstance(score, dict):
+                score = {}
+            for key in ("necessity", "match", "preference"):
+                if t2b_score.get(key) not in (None, "skipped") \
+                        and score.get(key) in (None, "skipped"):
+                    score[key] = t2b_score[key]
     idem = load(d, "idem.json")
     compare = load(d, "compare.json")
     golden = load(d, "golden.json")
@@ -547,11 +575,13 @@ def build(d: Path, evalset_dir: Path | None = None) -> dict:
         m["#16"] = {"verdict": "pass" if idem["idempotent"] else "fail",
                     "method": METHOD_RUN, "data": idem, "note": "重复步骤比例 ≤ 0.5 即幂等"}
 
-    # LLM 评审组
+    # LLM 评审组。局部报告停在 T0 时 T1 未完成：judges/*.json 一律不读，
+    # 否则 T0 指标 #2 会被没跑完的语义面改写（brevity score=0 会把它拉成 fail）。
+    t1_done = done_stages is None or "t1" in done_stages
     judges = {"#2": "brevity", "#5": "redundancy", "#6": "fallback", "#7": "precheck",
               "#8": "contract", "#9": "contract"}
     for key, name in judges.items():
-        j = load_judge(d, name)
+        j = load_judge(d, name) if t1_done else None
         m[key] = {"verdict": verdict_of_ratio(j["score"]) if j else "skipped",
                   "method": METHOD_JUDGE,
                   "data": ({"score": j["score"], "items": j.get("items"),
@@ -562,7 +592,8 @@ def build(d: Path, evalset_dir: Path | None = None) -> dict:
 
     # #4 语义面（ADR-0029）：工号/客户名/内部系统地址这类公司特化信息没有可枚举格式，
     # 只能靠评审。与静态面（六组 + 闸门）取**较差者**（ADR-0017 多源口径：主源 + 辅证）。
-    pii_j = load_judge(d, "pii")
+    # 同一条 T1 门槛也管 pii 评审，否则 #4 会被未完成阶段的语义面拉成 fail。
+    pii_j = load_judge(d, "pii") if t1_done else None
     if pii_j:
         cur = m["#4"]
         items = "/".join(f"{i['name']}={'✓' if i['pass'] else '✗'}" for i in pii_j.get("items", []))
@@ -641,6 +672,7 @@ def build(d: Path, evalset_dir: Path | None = None) -> dict:
     for value in m.values():
         if isinstance(value.get("note"), str):
             value["note"] = _public_text(value["note"])
+    _mask_incomplete(m, completed_stages)
     advice = _advice(m)
     for item in advice:
         for key in ("problem", "evidence", "action"):
@@ -656,6 +688,19 @@ def build(d: Path, evalset_dir: Path | None = None) -> dict:
               "evaluator": evaluator_fingerprint(),
               "generated_at": datetime.now().isoformat(timespec="seconds")}
     return _public_obj(report)
+
+
+def _mask_incomplete(m: dict, completed_stages: list | None) -> None:
+    """局部报告：最高完整阶段之后的指标一律 skipped，半截阶段不参与结论。"""
+    done = [s for s in STAGE_ORDER if s in {str(x).lower() for x in (completed_stages or [])}]
+    if not done:
+        return
+    rank = STAGE_ORDER.index(done[-1])
+    for key, value in m.items():
+        stage = str(TIER_OF.get(key, "t0")).lower()
+        if stage in STAGE_ORDER and STAGE_ORDER.index(stage) > rank:
+            m[key] = {"verdict": "skipped", "method": value.get("method"), "data": None,
+                      "note": f"已停止：{tier_label(stage)}未完成"}
 
 
 def _evalset_reviewed_by(d: Path, evalset_dir: Path | None = None):
@@ -676,6 +721,12 @@ def _evalset_reviewed_by(d: Path, evalset_dir: Path | None = None):
     if isinstance(meta, dict) and meta.get("reviewed_by") in ("human", "ai"):
         return meta["reviewed_by"]
     return None
+
+
+CONCLUSION_LABELS = {"all-pass": "全部通过", "with-warnings": "有警告",
+                    "has-failures": "有失败"}
+VERDICT_LABELS = {"pass": "通过", "warn": "警告", "fail": "失败", "skipped": "未测"}
+ADV_SEV_LABELS = {"fail": "未通过", "warn": "警告", "info": "未测"}
 
 
 def conclusion(m: dict) -> str:
@@ -1061,7 +1112,7 @@ ADVICE_ACTIONS = {
 
 def _badge(verdict: str) -> str:
     v = verdict if verdict in VF_GLYPH else "skipped"
-    return f"<span class='badge vf-{v}'>{VF_GLYPH[v]} {_esc(v)}</span>"
+    return f"<span class='badge vf-{v}'>{VF_GLYPH[v]} {_esc(VERDICT_LABELS.get(v, v))}</span>"
 
 
 def _glyph(verdict: str) -> str:
@@ -1348,10 +1399,12 @@ def render_html(report: dict, evalset_dir=None, skill_arg=None) -> str:
     meta_bits = []
     if report.get("tier"):
         meta_bits.append(f"<span class='badge skipped' style='margin-left:8px'>{_esc(tier_label(report['tier']))}</span>")
+    if report.get("partial"):
+        meta_bits.append("<span class='badge warn' style='margin-left:8px'>局部报告 · 已停止：仅展示已完成阶段</span>")
     if report.get("reviewed_by") == "ai":
         meta_bits.append("<small style='margin-left:8px;color:#fbbf24'>评测集 AI 审核，未经人工复核</small>")
     return (_HTML_TMPL.replace("__CLS__", CONCLUSION_CLS.get(cls, "skipped"))
-            .replace("__CONCLUSION__", _esc(report["conclusion"]))
+            .replace("__CONCLUSION__", _esc(CONCLUSION_LABELS.get(report["conclusion"], report["conclusion"])))
             .replace("__META__", "" .join(meta_bits))
             .replace("__CARDS__", "".join(cards))
             .replace("__ADVICE__", _advice_html(report.get("advice") or []))
@@ -1360,9 +1413,13 @@ def render_html(report: dict, evalset_dir=None, skill_arg=None) -> str:
 
 
 def render_md(report: dict) -> str:
-    head = ["# Skill 评估报告", "", f"**结论：{report['conclusion']}**"]
+    head = ["# Skill 评估报告", "",
+            f"**结论：{CONCLUSION_LABELS.get(report['conclusion'], report['conclusion'])}**"]
     if report.get("tier"):
         head.append(f"**评估深度：{tier_label(report['tier'])}**")
+    if report.get("partial"):
+        stages = "、".join(tier_label(str(x).lower()) for x in (report.get("completed_stages") or []))
+        head.append(f"**局部报告 · 已停止：仅展示已完成阶段{('（' + stages + '）') if stages else ''}**")
     if report.get("reviewed_by") == "ai":
         head.append("**评测集 AI 审核，未经人工复核**")
     ev = report.get("evaluator") or {}
@@ -1375,7 +1432,7 @@ def render_md(report: dict) -> str:
         method = {METHOD_STATIC: "静态检查", METHOD_RUN: "沙箱运行",
                   METHOD_JUDGE: "LLM评审", METHOD_COMPARE: "对比"}.get(v["method"], v["method"])
         # #20：中文指标名 + 中文测量手段；data 渲染：一律表格化（ADR-0030），report.json 仍是权威
-        lines.append(f"### {k} · {name} [{v['verdict']}]（{method}）{note}")
+        lines.append(f"### {k} · {name} [{VERDICT_LABELS.get(v['verdict'], v['verdict'])}]（{method}）{note}")
         data = v.get("data")
         if data is not None:
             has_items = isinstance(data, dict) and isinstance(data.get("items"), list)
@@ -1392,7 +1449,7 @@ def render_md(report: dict) -> str:
     if not advice:
         lines.append("- 16 项指标全部通过，无待办建议。")
     for a in advice:
-        lines.append(f"- **{a['metric']}**（{a['severity']}）{a['problem']} → {a['action']}")
+        lines.append(f"- **{a['metric']}**（{ADV_SEV_LABELS.get(a['severity'], a['severity'])}）{a['problem']} → {a['action']}")
         if a.get("evidence"):
             lines.append(f"  - 证据：{a['evidence']}")
     lines.append("")
@@ -1402,11 +1459,20 @@ def render_md(report: dict) -> str:
 def main():
     args = sys.argv[1:]
     html = evalset_dir = skill_arg = tier = None
+    partial = False
+    completed_stages = []
     rest = []
     i = 0
     while i < len(args):
         if args[i] == "--html":
             html = True; i += 1
+        elif args[i] == "--partial":
+            partial = True; i += 1
+        elif args[i] == "--completed-stage":
+            completed_stages = [args[i + 1].lower()]; i += 2
+        elif args[i] == "--completed-stages":
+            completed_stages = [x.strip().lower() for x in args[i + 1].split(",") if x.strip()]
+            i += 2
         elif args[i] == "--evalset":
             evalset_dir = Path(args[i + 1]); i += 2
         elif args[i] == "--skill":
@@ -1417,16 +1483,23 @@ def main():
             rest.append(args[i]); i += 1
     if len(rest) != 1:
         print("usage: report.py <results目录> [--tier <t0|t1|t2a|t2b|t3>] "
-              "[--html] [--evalset <evalsets/<name>/vN>] [--skill <被测skill目录>]", file=sys.stderr)
+              "[--html] [--partial --completed-stage <t0|t1|t2a|t2b|t3>] "
+              "[--evalset <evalsets/<name>/vN>] [--skill <被测skill目录>]", file=sys.stderr)
         sys.exit(2)
     d = Path(rest[0])
     if not d.is_dir():
         print(f"results 目录不存在: {d}", file=sys.stderr)
         sys.exit(2)
-    report = build(d, evalset_dir)
+    stage = completed_stages[-1] if completed_stages else None
+    report = build(d, evalset_dir, partial_stage=stage if partial else None,
+                   completed_stages=completed_stages if partial else None)
     if tier:
         report["tier"] = tier
         report["tier_label"] = tier_label(tier)
+    if partial:
+        report["partial"] = True
+        report["completed_stages"] = completed_stages
+        report["stopped_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
     meta = build_meta(report, skill_arg, evalset_dir)
     _console.write_text(d / "report.json", json.dumps(report, ensure_ascii=False, indent=2))
     _console.write_text(d / "report.md", render_md(report))

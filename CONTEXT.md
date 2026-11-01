@@ -27,6 +27,14 @@ _Avoid_: 用 pooled cv 当稳定性结论
 评估深度的增量等级：T0 静态 / T1 LLM 评审 / T2A 触发评测 / T2B 真实场景 A/B / T3 核心沙箱（ADR-0033）。高档复用低档产物；低档先行、后续补齐称**增量补跑（staged）**；沙箱故障退回低档才称**降级（fallback）**。T4 暂不开放。
 _Avoid_: 模式、级别
 
+### 阶段检查点（Stage Checkpoint）
+只在阶段边界写缓存：T0 完成、T1 七个 rubric 全齐、T2A/T2B/T3 各自产物完整。半截阶段不写、不续跑，下次整档重跑；之前完整阶段照常复用（ADR-0041）。
+_Avoid_: 逐 rubric / 逐 case 续跑（半截结果不能当完成）
+
+### 局部报告（Partial Report）
+停止运行时，按产物判定最高完整阶段，只用该阶段及之前的指标出报告；当前半截阶段标 `skipped`。`report.json` 带 `partial: true` / `completed_stages` / `stopped_at`，页面标注“仅展示已完成阶段”；连 T0 都没完成不出空报告（ADR-0041）。
+_Avoid_: 把局部报告当完整结论做跨版本对比
+
 ### 执行载体（Harness）
 T2+ 实际运行 skill 的 agent 载体：当前是 pi CLI，后续可加 Code Agent。T1 的 LLM 评审不走执行载体，走 LLM 接口层（ADR-0034）。
 _Avoid_: 把 LLM 接口层也叫 Harness

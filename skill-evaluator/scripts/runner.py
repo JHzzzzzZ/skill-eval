@@ -2,6 +2,8 @@
 
 前端与 agent 共用本入口；阶段按 --tier 短路，进度以 NDJSON 输出（--progress 另落文件）。
 不重写各脚本的测量逻辑：只负责串流程、落中间产物、报告进度。
+检查点只在阶段边界：阶段完成（产物可读且必要字段齐备）才写缓存；
+半截 T1/T2A/T2B/T3 不续跑，下次整档重跑，之前完整阶段照常复用。
 """
 from __future__ import annotations
 
@@ -135,6 +137,10 @@ def _skill_digest(skill: Path) -> str:
 
 
 def _judges_ready(jdir: Path) -> bool:
+    """T1 阶段完成判定：7 个 rubric 全部可读且契约合法才算完成。
+
+    检查点只在阶段边界：少一个 rubric 就整档重跑，不复制半截评审结果。
+    """
     if not jdir.is_dir():
         return False
     for metric in RUBRICS:
@@ -147,16 +153,44 @@ def _judges_ready(jdir: Path) -> bool:
     return True
 
 
-def _judge_ready(path: Path) -> bool:
-    data = _read_json(path, {})
-    if not isinstance(data, dict) or not isinstance(data.get("items"), list):
+def _t0_ready(d: Path) -> bool:
+    static = _read_json(d / "static.json", None)
+    return isinstance(static, dict) and isinstance(static.get("passed"), bool)
+
+
+def _t2a_ready(d: Path) -> bool:
+    triggers = _read_json(d / "triggers.json", None)
+    if not isinstance(triggers, dict):
         return False
-    score = data.get("score")
-    return not (isinstance(score, bool) or not isinstance(score, (int, float)) or not 0 <= score <= 1)
+    if not all(isinstance(triggers.get(k), list) for k in ("should", "should_not", "confusable")):
+        return False
+    score = _read_json(d / "score.json", None)
+    return isinstance(score, dict) and "trigger" in score
 
 
-def _ready_metrics(jdir: Path) -> set:
-    return {metric for metric in RUBRICS if _judge_ready(jdir / f"{metric}.json")}
+def _t2b_ready(d: Path) -> bool:
+    score = _read_json(d / "t2b" / "score.json", None)
+    if not isinstance(score, dict) or "necessity" not in score:
+        return False
+    for name in ("runs.json", "baseline.json"):
+        if not isinstance(_read_json(d / "t2b" / name, None), list):
+            return False
+    return True
+
+
+def _t3_ready(d: Path) -> bool:
+    if not isinstance(_read_json(d / "runs.json", None), list):
+        return False
+    score = _read_json(d / "score.json", None)
+    return isinstance(score, dict) and all(k in score for k in ("trigger", "cost", "necessity"))
+
+
+def stage_ready(name: str, d: Path) -> bool:
+    """阶段完成判定：只看产物且校验必要字段，文件存在不等于阶段完成。"""
+    checks = {"t0": _t0_ready, "t1": lambda p: _judges_ready(p / "judges"),
+              "t2a": _t2a_ready, "t2b": _t2b_ready, "t3": _t3_ready}
+    fn = checks.get(str(name).lower())
+    return bool(fn and fn(Path(d)))
 
 
 def _cache_match(old: dict, skill_sha: str, eval_sha, judge_key: dict | None = None) -> bool:
@@ -380,7 +414,9 @@ def run(args) -> int:
     judge_key = {"backend": judge_backend, "model": model or "",
                  "protocol": args.llm_protocol or "", "base_url": args.base_url or ""}
     _write_json(results / "run-meta.json", {
-        "skill": str(skill), "tier": tier, "evalset": str(evalset) if evalset else None,
+        "skill": str(skill), "skill_name": name, "tier": tier,
+        "evalset": str(evalset) if evalset else None,
+        "evalset_version": evalset.name if evalset else None,
         "model": model, "harness": args.harness, "llm_protocol": args.llm_protocol,
         "base_url": args.base_url, "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "skill_sha256": skill_sha, "evaluator_sha256": eval_sha,
@@ -393,23 +429,26 @@ def run(args) -> int:
         jdir = results / "judges"
         jdir.mkdir(parents=True, exist_ok=True)
         cache_t1 = _cache_dir(skill_sha, eval_sha, judge_key)
+        # 检查点只在阶段完成时写：缓存里必须 7 个 rubric 全齐，半截结果不复制。
         judges_from_cache = False
-        if not args.rerun_t1:
-            # 先恢复已完成的部分；中断后只补缺失项，不重跑全部 rubric
+        if not args.no_cache and not args.rerun_t1 and _judges_ready(cache_t1 / "judges"):
             judges_from_cache = _copy_cache(cache_t1, results, (), ("judges", "raw/llm-judge"))
-        ready = set() if (args.no_cache or args.rerun_t1) else _ready_metrics(jdir)
         reuse_judges = (not args.no_cache and not args.rerun_t1
-                        and len(ready) == len(RUBRICS)
+                        and _judges_ready(jdir)
                         and (judges_from_cache or _cache_match(old_meta, skill_sha, eval_sha, judge_key)))
+        if not reuse_judges:
+            # 当前阶段没跑完，或缓存/结果不匹配：整档重跑，不保留半截 rubric。
+            shutil.rmtree(jdir, ignore_errors=True)
+            shutil.rmtree(results / "raw" / "llm-judge", ignore_errors=True)
+            jdir.mkdir(parents=True, exist_ok=True)
         if reuse_judges:
             progress.emit("stage", name="T1", status="done", cached=True)
         else:
-            to_run = [m for m in RUBRICS if args.no_cache or m not in ready]
             workers = max(1, _config.get_int("run.judge_concurrency", 4))
             with ThreadPoolExecutor(max_workers=workers) as pool:
                 futs = {}
                 judge_started = {}
-                for metric in to_run:
+                for metric in RUBRICS:
                     judge_started[metric] = time.monotonic()
                     futs[pool.submit(_run, "judge_run.py",
                                      ["--metric", metric, "--skill", skill,
@@ -422,24 +461,17 @@ def run(args) -> int:
                     elapsed = round(time.monotonic() - judge_started.get(metric, time.monotonic()), 2)
                     try:
                         fut.result()
-                        # 每个 rubric 一完成就落缓存：中断时已完成项不丢
-                        cj = cache_t1 / "judges"
-                        cr = cache_t1 / "raw" / "llm-judge"
-                        cj.mkdir(parents=True, exist_ok=True)
-                        shutil.copy2(jdir / f"{metric}.json", cj / f"{metric}.json")
-                        raw = results / "raw" / "llm-judge" / f"{metric}.json"
-                        if raw.is_file():
-                            cr.mkdir(parents=True, exist_ok=True)
-                            shutil.copy2(raw, cr / f"{metric}.json")
                         progress.emit("judge", metric=metric, status="done", elapsed_s=elapsed)
                     except Exception as exc:
                         progress.emit("judge", metric=metric, status="skipped", elapsed_s=elapsed,
                                       error=str(exc))
         if _judges_ready(jdir):
+            # 阶段完成才落缓存；下次整档复用。
             _copy_cache(results, cache_t1, (), ("judges", "raw/llm-judge"))
         if not reuse_judges:
             progress.emit("stage", name="T1", status="done", cached=False,
-                          cache_reason="首次运行或评估器/模型变化")
+                          cache_reason="首次运行或评估器/模型变化",
+                          incomplete=not _judges_ready(jdir))
 
     # T2+ 沙箱
     sandbox = None
@@ -456,8 +488,7 @@ def run(args) -> int:
                                  model or "", args.harness or "",
                                  args.llm_protocol or "", args.base_url or "")
         reuse_t2a = (not args.no_cache and not args.rerun_t2a
-                     and (t2a_cache / "triggers.json").is_file()
-                     and (t2a_cache / "score.json").is_file())
+                     and _t2a_ready(t2a_cache))
         if reuse_t2a:
             _copy_cache(t2a_cache, results, ("triggers.json", "score.json"),
                         ("triggers", "trigger-judge"))
@@ -468,6 +499,12 @@ def run(args) -> int:
         elif not evalset:
             progress.emit("stage", name="T2A", status="skipped", reason="无评测集")
         else:
+            # 本次整档重跑：先清掉旧缓存，失败时不会留下被误认为完整的半截产物。
+            shutil.rmtree(t2a_cache, ignore_errors=True)
+            for stale in ("triggers.json", "score.json"):
+                (results / stale).unlink(missing_ok=True)
+            for stale in ("triggers", "trigger-judge"):
+                shutil.rmtree(results / stale, ignore_errors=True)
             groups = _prompts(evalset)
             judged = {"should": [], "should_not": [], "confusable": []}
             trigger_timeout = max(1, _config.get_int("run.trigger_timeout_s", 90))
@@ -516,9 +553,11 @@ def run(args) -> int:
                         progress.emit("warn", stage="T2A", label=item["file"], error=str(exc))
             _write_json(results / "triggers.json", judged)
             _run("score.py", [results, "--out", results / "score.json"], check=False)
-            _copy_cache(results, t2a_cache, ("triggers.json", "score.json"),
-                        ("triggers", "trigger-judge"))
+            if _t2a_ready(results):
+                _copy_cache(results, t2a_cache, ("triggers.json", "score.json"),
+                            ("triggers", "trigger-judge"))
             progress.emit("stage", name="T2A", status="done",
+                          incomplete=not _t2a_ready(results),
                           should=sum(judged["should"]), total_should=len(judged["should"]))
 
     # T2B 真实场景 A/B
@@ -530,7 +569,7 @@ def run(args) -> int:
                                  model or "", args.harness or "",
                                  args.llm_protocol or "", args.base_url or "")
         reuse_t2b = (not args.no_cache and not args.rerun_t2b and bool(real_input_sha)
-                     and (t2b_cache / "t2b" / "score.json").is_file())
+                     and _t2b_ready(t2b_cache))
         if reuse_t2b:
             _copy_cache(t2b_cache, results,
                         ("real-input.meta.json", "golden.json"), ("t2b",))
@@ -539,6 +578,10 @@ def run(args) -> int:
         elif not args.real_input:
             progress.emit("stage", name="T2B", status="skipped", reason="未提供真实输入")
         else:
+            shutil.rmtree(t2b_cache, ignore_errors=True)
+            shutil.rmtree(results / "t2b", ignore_errors=True)
+            for stale in ("real-input.meta.json", "golden.json"):
+                (results / stale).unlink(missing_ok=True)
             from harness import run_case
             cases = _real_cases(Path(args.real_input))
             t2b = results / "t2b"
@@ -659,10 +702,11 @@ def run(args) -> int:
                 _write_json(results / "golden.json", first_golden)
             _run("score.py", [t2b, "--out", t2b / "score.json"])
             t2b_score = t2b / "score.json"
-            _copy_cache(results, t2b_cache,
-                        ("real-input.meta.json", "golden.json"), ("t2b",))
+            if _t2b_ready(results):
+                _copy_cache(results, t2b_cache,
+                            ("real-input.meta.json", "golden.json"), ("t2b",))
             progress.emit("stage", name="T2B", status="done",
-                          cases=len(cases), valid=valid)
+                          cases=len(cases), valid=valid, incomplete=not _t2b_ready(results))
 
     # T3 核心沙箱
     if TIER_RANK[tier] >= TIER_RANK["t3"]:
@@ -674,8 +718,7 @@ def run(args) -> int:
                                 args.base_url or "", str(repeat))
         reuse_t3 = (not args.no_cache and not args.rerun_t3
                     and not args.rerun_t2a and not args.rerun_t2b
-                    and (t3_cache / "runs.json").is_file()
-                    and (t3_cache / "score.json").is_file())
+                    and _t3_ready(t3_cache))
         if reuse_t3:
             _copy_cache(t3_cache, results,
                         ("runs.json", "idem.json", "compare.json", "golden.json", "score.json"),
@@ -684,6 +727,11 @@ def run(args) -> int:
         elif not cases:
             progress.emit("stage", name="T3", status="skipped", reason="无 cases")
         else:
+            shutil.rmtree(t3_cache, ignore_errors=True)
+            for stale in ("runs.json", "idem.json", "compare.json", "score.json", "golden.json"):
+                (results / stale).unlink(missing_ok=True)
+            for stale in ("traces", "idem", "compare", "actual", "expected"):
+                shutil.rmtree(results / stale, ignore_errors=True)
             from harness import run_case
             runs = []
             traces = {}
@@ -745,10 +793,12 @@ def run(args) -> int:
             if (results / "compare").is_dir():
                 _run("compare.py", ["--aggregate", results / "compare",
                                     "--out", results / "compare.json"], check=False)
-            _copy_cache(results, t3_cache,
-                        ("runs.json", "idem.json", "compare.json", "golden.json", "score.json"),
-                        ("traces", "idem", "compare", "actual", "expected"))
-            progress.emit("stage", name="T3", status="done", cases=len(cases), runs=len(runs))
+            if _t3_ready(results):
+                _copy_cache(results, t3_cache,
+                            ("runs.json", "idem.json", "compare.json", "golden.json", "score.json"),
+                            ("traces", "idem", "compare", "actual", "expected"))
+            progress.emit("stage", name="T3", status="done", cases=len(cases), runs=len(runs),
+                          incomplete=not _t3_ready(results))
 
     if TIER_RANK[tier] == TIER_RANK["t2b"] and t2b_score:
         # T2B 只出必要性；成本属于 T3，不能因为刚跑过真实输入就冒充 #13
