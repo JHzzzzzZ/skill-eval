@@ -16,3 +16,5 @@ tmp-ev/
 web/runs/
 skill-evaluator/web/runs/
 .skill-eval-cache/
+skill-evaluator/calibration/results/
+skill-evaluator/web/workspaces/

@@ -49,12 +49,24 @@ class EventAggregator:
     skill_marker=None（没有加载被测 skill）→ 无可匹配的加载事件，恒不早停（跑完整）。"""
 
     def __init__(self, early_exit: bool = False, skill_marker: str | None = None,
-                 cwd: str | None = None):
+                 cwd: str | None = None, max_steps: int = 0, max_tokens: int = 0):
         self.early_exit = early_exit
         self.skill_marker = skill_marker
         self.cwd = cwd  # 解析相对路径 token 的基准（实测：agent 用 `cd <dir> && cat SKILL.md`）
+        self.max_steps = max(0, int(max_steps or 0))
+        self.max_tokens = max(0, int(max_tokens or 0))
+        self.limit_hit = None
         self.stop = False
         self.steps, self.errors, self.usage_totals, self.answer_parts = [], [], [], []
+
+    def _limit(self, kind: str, value: int):
+        self.limit_hit = f"{kind}上限（{value}）"
+        self.stop = True
+
+    def _usage(self, total) -> None:
+        self.usage_totals.append(total or 0)
+        if self.max_tokens and (total or 0) >= self.max_tokens:
+            self._limit("token", self.max_tokens)
 
     def feed(self, line: str):
         line = line.strip()
@@ -85,18 +97,23 @@ class EventAggregator:
             if hit:
                 self.stop = True  # 加载事件 = 触发决定点：后续 token 不再花
                 return
+            if self.max_steps and len(self.steps) >= self.max_steps:
+                self._limit("步数", self.max_steps)
+                return
         elif t == "tool_execution_end" and ev.get("isError"):
             self.errors.append(f"工具错误 {ev.get('toolCallId')}: {str(ev.get('result'))[:200]}")
         if t == "turn_end":
             u = ev.get("usage") or {}
-            self.usage_totals.append(u.get("totalTokens") or u.get("tokens", {}).get("total") or 0)
+            self._usage(u.get("totalTokens") or u.get("tokens", {}).get("total") or 0)
         elif t == "agent_end":
             for msg in ev.get("messages", []):
                 if isinstance(msg, dict) and msg.get("role") == "assistant":
-                    self.usage_totals.append((msg.get("usage") or {}).get("totalTokens") or 0)
+                    self._usage((msg.get("usage") or {}).get("totalTokens") or 0)
                     for c in msg.get("content", []):
                         if isinstance(c, dict) and c.get("type") == "text" and c.get("text"):
                             self.answer_parts.append(c["text"])  # ISS-3: 最终回答全文
+                    if self.stop:
+                        return
 
     def _hit_marker(self, raw_args, tool: str | None = None) -> bool:
         """停止条件：args 解析到被测 SKILL.md 才算命中；无 marker → 恒不命中（跑完整）。
@@ -181,15 +198,19 @@ class EventAggregator:
             "triggered": bool(self.steps),
             "passed": not self.errors,
         }
-        if self.early_exit and self.stop:
+        if self.limit_hit:
+            trace["limit_hit"] = self.limit_hit
+            trace["errors"].append(f"触发上限：{self.limit_hit}")
+            trace["passed"] = False
+        elif self.early_exit and self.stop:
             trace["early_exit"] = True
         return trace
 
 
 def parse_events(lines, early_exit: bool = False, skill_marker: str | None = None,
-                 cwd: str | None = None) -> dict:
+                 cwd: str | None = None, max_steps: int = 0, max_tokens: int = 0) -> dict:
     """把 pi --mode json 的事件流聚合为 trace。非法行计入 errors，不中断。"""
-    agg = EventAggregator(early_exit, skill_marker, cwd)
+    agg = EventAggregator(early_exit, skill_marker, cwd, max_steps, max_tokens)
     for line in lines:
         agg.feed(line)
         if agg.stop:
@@ -310,7 +331,9 @@ def main():
         if not no_skill and skills:
             marker = str(Path(skills[0]).resolve())
         trace = parse_events(Path(events_file).read_text(encoding="utf-8", errors="replace").splitlines(),
-                             early_exit=bool(early_exit), skill_marker=marker, cwd=worktree)
+                             early_exit=bool(early_exit), skill_marker=marker, cwd=worktree,
+                             max_steps=_config.get_int("run.trigger_max_steps", 30) if early_exit else 0,
+                             max_tokens=_config.get_int("run.trigger_max_tokens", 120000) if early_exit else 0)
         trace["model"] = model or os.environ.get(DEFAULT_MODEL_ENV)  # 宿主 pin：离线重算时至少记意图
         if out_path:
             _console.write_text(out_path, json.dumps(trace, ensure_ascii=False, indent=2))
@@ -356,6 +379,9 @@ def main():
             guard_before[repo] = _porcelain(repo)
         else:
             print(f"[guard] 仓库不存在，跳过: {repo}", file=sys.stderr)
+    trigger_timeout = max(1, _config.get_int("run.trigger_timeout_s", 90))
+    trigger_max_steps = max(0, _config.get_int("run.trigger_max_steps", 30))
+    trigger_max_tokens = max(0, _config.get_int("run.trigger_max_tokens", 120000))
     t0 = time.time()
     try:
         if not early_exit:
@@ -374,11 +400,13 @@ def main():
                                     stderr=subprocess.PIPE, text=True,
                                     encoding="utf-8", errors="replace")
             killed_by_watchdog = threading.Event()
-            watchdog = threading.Timer(600, lambda: (killed_by_watchdog.set(), _kill_tree(proc)))
+            watchdog = threading.Timer(trigger_timeout,
+                                       lambda: (killed_by_watchdog.set(), _kill_tree(proc)))
             watchdog.start()
             agg = EventAggregator(early_exit=True,
                                   skill_marker=str(Path(skills[0]).resolve()) if (skills and not no_skill) else None,
-                                  cwd=worktree)
+                                  cwd=worktree, max_steps=trigger_max_steps,
+                                  max_tokens=trigger_max_tokens)
             try:
                 for line in proc.stdout:
                     agg.feed(line)
@@ -411,7 +439,7 @@ def main():
                 pass
             if timed_out:
                 # watchdog 杀的树：明确报超时，而不是误导性的「pi 退出码」；保留部分 steps 作证据
-                trace["errors"] = ["运行超时（600s）"]
+                trace["errors"] = [f"运行超时（{trigger_timeout}s）"]
                 trace["passed"] = False
             elif proc.returncode not in (0, None) and not trace["errors"] and not agg.stop:
                 trace["errors"].append(f"pi 退出码 {proc.returncode}: {stderr[-300:]}")

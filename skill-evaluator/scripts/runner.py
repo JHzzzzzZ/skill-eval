@@ -238,7 +238,7 @@ def _cases(evalset: Path) -> list:
 
 def _env_error(trace: dict) -> bool:
     """pi/载体级失败不算“未触发”，否则 P/R 会被环境错误打成 0。"""
-    markers = ("pi 退出码", "pi CLI", "运行超时", "worktree", "provider")
+    markers = ("pi 退出码", "pi CLI", "运行超时", "触发上限", "worktree", "provider")
     return any(any(m in str(e) for m in markers) for e in (trace.get("errors") or []))
 
 
@@ -387,6 +387,8 @@ def run(args) -> int:
         else:
             groups = _prompts(evalset)
             judged = {"should": [], "should_not": [], "confusable": []}
+            trigger_timeout = max(1, _config.get_int("run.trigger_timeout_s", 90))
+            outer_timeout = trigger_timeout + 30  # 留给 trace_run 杀树/落盘，不先被外层打断
             total = sum(len(v) for v in groups.values())
             idx = 0
             from harness import run_case  # 延迟导入：dry-run 不需要
@@ -397,7 +399,8 @@ def run(args) -> int:
                     trace_path = results / "triggers" / f"{key}-{idx}.json"
                     try:
                         trace = run_case(item["prompt"], sandbox, skill_dir=sandbox, adapter=args.harness,
-                                         early_exit=True, model=model, out=trace_path)
+                                         early_exit=True, model=model, out=trace_path,
+                                         timeout=outer_timeout)
                         if _env_error(trace):
                             progress.emit("warn", stage="T2A", label=item["file"],
                                           error="载体失败，跳过该 case：" + str(trace.get("errors"))[:200])
@@ -410,6 +413,11 @@ def run(args) -> int:
                                                   "--api-key", args.api_key or "",
                                                   "--llm-protocol", args.llm_protocol or ""])
                         judged[key].append(bool((_read_json(jout, {}) or {}).get("triggered")))
+                    except subprocess.TimeoutExpired:
+                        # 外层兜底超时：跳过而不是记成“未触发”，否则 should-not 会被误判
+                        progress.emit("warn", stage="T2A", label=item["file"],
+                                      error=f"运行超时（>{outer_timeout}s），跳过该 case")
+                        continue
                     except Exception as exc:
                         judged[key].append(False)
                         progress.emit("warn", stage="T2A", label=item["file"], error=str(exc))

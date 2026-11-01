@@ -247,6 +247,40 @@ def test_no_early_exit_consumes_all():
     assert "early_exit" not in trace
 
 
+def test_trigger_step_limit_stops_and_marks_limit():
+    lines = [json.dumps({"type": "tool_execution_start", "toolName": "read",
+                         "args": {"path": f"{i}.md"}}) for i in range(3)]
+    agg = EventAggregator(early_exit=True, max_steps=2)
+    for line in lines:
+        agg.feed(line)
+    trace = agg.result()
+    assert agg.stop is True
+    assert trace["limit_hit"] == "步数上限（2）"
+    assert trace["tool_calls"] == 2
+    assert "触发上限" in trace["errors"][0]
+    assert "early_exit" not in trace
+
+
+def test_trigger_token_limit_stops_and_marks_limit():
+    agg = EventAggregator(early_exit=True, max_tokens=15)
+    agg.feed('{"type":"turn_end","usage":{"totalTokens":10}}')
+    assert agg.stop is False
+    agg.feed('{"type":"turn_end","usage":{"totalTokens":20}}')
+    trace = agg.result()
+    assert agg.stop is True
+    assert trace["limit_hit"] == "token上限（15）"
+    assert trace["tokens"] == 20
+    assert "触发上限" in trace["errors"][0]
+
+
+def test_trigger_limits_zero_means_unlimited():
+    agg = EventAggregator(early_exit=True, max_steps=0, max_tokens=0)
+    for _ in range(40):
+        agg.feed('{"type":"tool_execution_start","toolName":"read","args":{"path":"x.md"}}')
+    assert agg.stop is False
+    assert agg.limit_hit is None
+
+
 def test_early_exit_without_tool_call_runs_to_end():
     no_tool = [l for l in EVENT_LINES if "tool_execution" not in l]
     agg = EventAggregator(early_exit=True)

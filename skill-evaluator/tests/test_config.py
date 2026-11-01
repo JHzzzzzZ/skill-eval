@@ -64,6 +64,9 @@ def test_repo_config_has_new_thresholds():
     assert _config.get_int("static.description_fail_chars", 0) == 1024
     assert _config.get_int("static.body_warn_lines", 0) == 150
     assert _config.get_int("static.body_fail_lines", 0) == 500
+    assert _config.get_int("run.trigger_timeout_s", 0) == 90
+    assert _config.get_int("run.trigger_max_steps", 0) == 30
+    assert _config.get_int("run.trigger_max_tokens", 0) == 120000
 
 
 def test_type_getters_reject_wrong_types(tmp_path):

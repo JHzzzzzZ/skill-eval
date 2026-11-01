@@ -32,6 +32,12 @@ report:
 run:
   # 单次 LLM 调用或子进程的上限。单位：秒。默认 300。
   timeout_s: 300
+  # 触发评测单 case 的墙钟上限；到点杀进程树并跳过该 case。单位：秒。默认 90。
+  trigger_timeout_s: 90
+  # 触发评测单 case 的工具调用步数上限；超过即停并跳过。单位：步。默认 30。
+  trigger_max_steps: 30
+  # 触发评测单 case 的累计 token 上限；超过即停并跳过。单位：token。默认 120000。
+  trigger_max_tokens: 120000
   # trace 里 step.args 为字符串时的保留上限；dict 形态原样保留。单位：字符。默认 2000。
   args_max_chars: 2000
   # 主运行重复次数；runner 使用（PR5 生效）。单位：次。默认 3。
