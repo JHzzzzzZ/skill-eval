@@ -34,7 +34,7 @@
       var(--bg);
   }
   a{color:var(--brand);text-decoration:none} a:hover{text-decoration:underline}
-  .shell{max-width:1220px;margin:0 auto;padding:26px 22px 70px}
+  .shell{max-width:1440px;margin:0 auto;padding:26px 22px 70px}
   .topbar{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:26px}
   .brand{display:flex;align-items:center;gap:12px}
   .mark{
@@ -211,9 +211,14 @@
   .override-box{display:flex;gap:8px;align-items:center;margin-top:14px;flex-wrap:wrap}
   .override-box input{flex:1;min-width:240px}
   .eval-table{max-height:360px;overflow:auto;border:1px solid var(--line);border-radius:12px;margin-top:10px}
-  .eval-table table{min-width:0}
+  .eval-table table{table-layout:fixed;min-width:640px;width:100%}
   .eval-table td,.eval-table th{padding:8px 9px;font-size:12px}
-  .eval-table select,.eval-table input{padding:6px 8px;border-radius:8px;font-size:12px}
+  .eval-table th:nth-child(1),.eval-table td:nth-child(1){width:64px}
+  .eval-table th:nth-child(2),.eval-table td:nth-child(2){width:auto;word-break:break-word}
+  .eval-table th:nth-child(3),.eval-table td:nth-child(3){width:96px;white-space:nowrap}
+  .eval-table th:nth-child(4),.eval-table td:nth-child(4){width:190px}
+  .eval-table select,.eval-table input{padding:6px 8px;border-radius:8px;font-size:12px;width:100%}
+  .eval-table select{min-width:84px}
   .muted{color:var(--muted)}
   .toast-wrap{position:fixed;right:22px;bottom:22px;display:grid;gap:8px;z-index:50}
   .toast{
