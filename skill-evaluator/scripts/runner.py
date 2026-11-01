@@ -412,7 +412,9 @@ def run(args) -> int:
                                       error=str(exc))
         if _judges_ready(jdir):
             _copy_cache(results, cache_t1, (), ("judges", "raw/llm-judge"))
-        progress.emit("stage", name="T1", status="done")
+        if not reuse_judges:
+            progress.emit("stage", name="T1", status="done", cached=False,
+                          cache_reason="首次运行或评估器/模型变化")
 
     # T2+ 沙箱
     sandbox = None

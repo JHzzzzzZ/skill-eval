@@ -88,7 +88,7 @@ evalsets/<name>/v1/
 
 ## 运行场景
 
-档位（tier）定义增量递进的评估深度（ADR-0033），入口参数 `--tier <t0|t1|t2a|t2b|t3>`（也接受 `T0`–`T3`），**默认 T2A**。高档复用低档产物：结果目录里各中间产物记录生成时的 skill content_sha256、评估器指纹与评审模型，一致则复用，不一致则作废重跑；`--rerun-t0` / `--rerun-t1` 强制重跑对应档，Web 提供五个阶段勾选与“全部重跑”（只勾当前档及以下），默认复用持久缓存，页面不再发送 `reuse_from`/`no_cache`；`--no-cache` 只在 CLI/API 保留。低档先行、后续增量补跑（staged）不重做已完成档；各档产物持久缓存到 `.skill-eval-cache/<stage>/<key>/`（仓库根，gitignore），key 含 skill/evaluator/评测集/真实输入/模型/载体；跨 run / 重启仍可复用，`--rerun-t0|t1|t2a|t2b|t3` 才强制重算，`--no-cache` 关闭全部复用。T4 不开放（ADR-0032）。
+档位（tier）定义增量递进的评估深度（ADR-0033），入口参数 `--tier <t0|t1|t2a|t2b|t3>`（也接受 `T0`–`T3`），**默认 T2A**。高档复用低档产物：结果目录里各中间产物记录生成时的 skill content_sha256、评估器指纹与评审模型，一致则复用，不一致则作废重跑；`--rerun-t0` / `--rerun-t1` 强制重跑对应档，Web 提供五个阶段勾选与“全部重跑”（只勾当前档及以下），默认复用持久缓存，页面不再发送 `reuse_from`/`no_cache`；`--no-cache` 只在 CLI/API 保留。低档先行、后续增量补跑（staged）不重做已完成档；各档产物持久缓存到 `.skill-eval-cache/<stage>/<key>/`（仓库根，gitignore），key 含 skill/evaluator/评测集/真实输入/模型/载体；跨 run / 重启仍可复用，`--rerun-t0|t1|t2a|t2b|t3` 才强制重算，`--no-cache` 关闭全部复用。缓存未命中时 T0/T1 的进度事件带 `cache_reason`（首次运行或评估器/模型变化），页面会显示原因。T4 不开放（ADR-0032）。
 
 | 档 | 场景 | 做什么 | 服务指标 |
 |---|---|---|---|

@@ -827,9 +827,10 @@ function listen(id){
         const dur = fmtDur(ev.elapsed_s != null ? ev.elapsed_s : (performance.now()-started)/1000);
         const verb = ev.cached ? "复用" : "完成";
         const detail = ev.cases != null ? ` · ${ev.valid||0}/${ev.cases} 有效` : "";
-        markStep(ev.name, "ok", verb + (!ev.cached && dur? " · "+dur : "") + detail);
+        const cacheNote = !ev.cached && ev.cache_reason ? ` · ${ev.cache_reason}` : "";
+        markStep(ev.name, "ok", verb + (!ev.cached && dur? " · "+dur : "") + detail + cacheNote);
         setProgress(WEIGHT[ev.name]||0);
-        log(`[${label(ev.name)}] ${verb}` + (!ev.cached && dur? " · "+dur : "") + detail, at);
+        log(`[${label(ev.name)}] ${verb}` + (!ev.cached && dur? " · "+dur : "") + detail + cacheNote, at);
       }
       if(ev.status==="skipped"){
         markStep(ev.name, "skip", "未运行" + (ev.reason? " · "+ev.reason : ""));
