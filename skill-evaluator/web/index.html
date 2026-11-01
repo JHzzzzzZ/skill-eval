@@ -333,14 +333,14 @@
         </div>
 
         <div class="check-row">
-          <label class="check"><input type="checkbox" id="reuse" checked> 复用已有结果</label>
           <label class="check"><input type="checkbox" id="rerunT0"> 重跑基础检查</label>
           <label class="check"><input type="checkbox" id="rerunT1"> 重跑文档评审</label>
           <label class="check"><input type="checkbox" id="rerunTrigger"> 重跑触发评测</label>
           <label class="check"><input type="checkbox" id="rerunReal"> 重跑真实输入对比</label>
           <label class="check"><input type="checkbox" id="rerunFull"> 重跑完整任务运行</label>
+          <button class="btn btn-ghost btn-sm" id="rerunAll" type="button">全部重跑</button>
         </div>
-        <div class="inline-note" style="margin-top:6px">同一 skill、同一评估器与模型时复用；勾选重跑会强制重算。</div>
+        <div class="inline-note" style="margin-top:6px">默认复用已有结果；勾选对应阶段或点「全部重跑」会强制重算。</div>
 
         <details class="advanced" style="margin-top:12px">
           <summary>LLM 连接设置 <span class="muted" style="font-weight:400">（可选；留空用服务端配置 / 环境变量）</span></summary>
@@ -482,6 +482,10 @@ function syncRerun(){
 }
 document.querySelectorAll('input[name="tier"]').forEach(el=>el.addEventListener("change", syncRerun));
 syncRerun();
+$("rerunAll").onclick = () => {
+  document.querySelectorAll('#rerunT0,#rerunT1,#rerunTrigger,#rerunReal,#rerunFull')
+    .forEach(el=>{ if(!el.disabled) el.checked = true; });
+};
 function toast(msg, kind="info"){
   const el = document.createElement("div"); el.className = "toast " + (kind==="ok"?"ok":kind==="err"?"err":"");
   el.textContent = publicText(msg); $("toasts").appendChild(el);
@@ -687,10 +691,9 @@ $("run").onclick = async () => {
       body: JSON.stringify({skill, tier:tierValue(), harness:$("harness").value,
         model:llm.model, evalset:$("evalOut").value.trim(), backend:$("backend").value,
         real_input:$("real").value.trim(), llm,
-        reuse_from: $("reuse").checked ? (localStorage.getItem("se-last-run") || "") : "",
         rerun_t0: $("rerunT0").checked, rerun_t1: $("rerunT1").checked,
         rerun_t2a: $("rerunTrigger").checked, rerun_t2b: $("rerunReal").checked,
-        rerun_t3: $("rerunFull").checked, no_cache: !$("reuse").checked})});
+        rerun_t3: $("rerunFull").checked})});
     const data = await r.json();
     if(!r.ok) throw new Error(data.error||"启动失败");
     runId = data.id; listen(data.id);
@@ -754,7 +757,6 @@ function listen(id){
     } else if(ev.type==="done"){
       const total = fmtDur(ev.elapsed_s);
       log("✓ 完成" + (total? " · "+total : ""), at);
-      localStorage.setItem("se-last-run", id);
       setBusy(false); setProgress(100); finish(); showReport(id);
     }
   };
