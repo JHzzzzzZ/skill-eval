@@ -397,6 +397,14 @@ def bash_step(command: str) -> str:
                        "args": {"command": command}})
 
 
+def test_early_exit_matches_bare_relative_read_tool():
+    # pi read 工具的 args 只有 path=SKILL.md，没有 bash 那样的读取动词
+    agg = marker_agg()
+    agg.feed(json.dumps({"type": "tool_execution_start", "toolCallId": "t",
+                         "toolName": "read", "args": {"path": "SKILL.md"}}))
+    assert agg.stop is True
+
+
 def test_early_exit_matches_cd_then_relative_read():
     # 实测漏检形态：4 条探针 0 次早停全因这个写法（绝对路径子串匹配对不上）
     agg = marker_agg()

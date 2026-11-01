@@ -72,7 +72,7 @@ class EventAggregator:
         if t == "tool_execution_start":
             raw_args = ev.get("args")
             args_hash = hashlib.sha256(json.dumps(raw_args, sort_keys=True).encode()).hexdigest()[:8]
-            hit = self.early_exit and self._hit_marker(raw_args)  # 用完整 args 判命中
+            hit = self.early_exit and self._hit_marker(raw_args, ev.get("toolName"))  # 用完整 args 判命中
             step = {"tool": ev.get("toolName", "?"), "args": raw_args, "args_hash": args_hash}
             # 有界保留原始 args（ISS-3：触发判定/过程审计要第一手证据）。旧版上限 200 字符：
             # 实测 pi 的 bash/read 工具 args 是 **dict**（{"command": ...}），该分支对它们从未生效，
@@ -98,7 +98,7 @@ class EventAggregator:
                         if isinstance(c, dict) and c.get("type") == "text" and c.get("text"):
                             self.answer_parts.append(c["text"])  # ISS-3: 最终回答全文
 
-    def _hit_marker(self, raw_args) -> bool:
+    def _hit_marker(self, raw_args, tool: str | None = None) -> bool:
         """停止条件：args 解析到被测 SKILL.md 才算命中；无 marker → 恒不命中（跑完整）。
 
         匹配用 args 的原始值（dict/list 递归取值）而不是 json.dumps——dumps 会把
@@ -163,8 +163,10 @@ class EventAggregator:
                     continue
                 if any("/" in t for t in targets):
                     return True  # 带目录分隔符 = 明确指到文件
+                if tool and READ_VERBS.search(str(tool)):
+                    return True  # read 工具本身就是读取动词（args 只有裸 SKILL.md）
                 if READ_VERBS.search(seg):
-                    return True  # 裸文件名：同一段里要真有读取动词
+                    return True  # bash 裸文件名：同一段里要真有读取动词
         return False
 
     def result(self) -> dict:
