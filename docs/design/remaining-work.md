@@ -1,0 +1,181 @@
+# 待实现设计（2026-11-01）
+
+状态：**待审核，未实现**。实现必须按根 `AGENTS.md § IMPLEMENTATION WORKFLOW`：设计 → 实现方案 → 子 agent → 父 agent 测试验收。
+
+## A. 评测集与缓存
+
+### #13 移除评测集目录输入，自动识别版本
+
+目标：用户不再手填 `evalsets/<name>/vN`；工作区显示 `名称 · hash8 · v1`，版本可切换。
+
+设计：
+
+- 工作区 ID 不变：`<slug>-<skill_hash8>`。
+- `GET /api/workspaces` 每项增加：
+  ```json
+  {"evalset":".../evalsets/name/v1",
+   "evalset_version":"v1",
+   "evalset_versions":[{"version":"v1","path":"...","frozen":true}]}
+  ```
+- `_evalset_for(name, sha)` 仍返回最新版本；新增 `_evalset_versions()` 只读目录。
+- 前端删除 `evalOut` 输入框，改成“评测集版本”下拉；工作区下拉文案追加 `· v1`。
+- `currentEvalset` 由工作区/版本选择驱动；生成、审核、运行都只读这个状态。
+- 没有评测集时显示 `v1（未创建）`，生成草稿写到该路径。
+
+边界：`name` 改变则不自动复用；旧版本路径不展示给用户，只展示版本号。
+
+验收：上传同内容 skill → 显示 v1；存在 v2 → 默认最新且可切回 v1；页面无评测集路径输入；运行使用所选版本。
+
+### #14 评测集导入/导出
+
+格式：zip，根目录包含 `meta.json`、`triggers/{should,should-not,confusable}/*.json`、`cases/*.json`，可选 `reviews/`；排除 `results/`。
+
+导出：
+
+- `GET /api/evalset/export?evalset=<path>`。
+- 校验路径必须在 `evalsets/` 下。
+- 内存打 zip，返回 `application/zip`，文件名 `evalset-<name>-<version>.zip`。
+
+导入：
+
+- `POST /api/evalset/import?filename=x.zip`，原始 zip 上传，复用安全解压。
+- 单独限制：50MB / 500 文件，避免沿用 1GB skill 上限。
+- 自动定位 zip 根（`meta.json` 或 `triggers/`）；校验至少一个触发组或 cases。
+- 名称优先 `meta.json.name`，否则 zip 文件名；版本优先 `meta.json.version`，否则 `v1`。
+- 目标已存在 → 新建下一个 `vN`，绝不覆盖冻结集。
+- 写入 `imported_at` / `source_archive` 到 `meta.json`；返回新路径和版本列表。
+
+前端：评测集卡片加“导入 .zip / 导出 .zip”；导入后刷新版本下拉。
+
+验收：导出再导入 round-trip 内容一致；重复导入自动生成 v2；zip slip/超大包被拒绝；冻结集不被覆盖。
+
+### #15 评测集旧版本提示与版本选择器
+
+设计：
+
+- 新生成的 `meta.json` 记录 `skill_name`、`skill_sha256`、`created_at`。
+- 工作区响应的每个版本带 `skill_sha256`；与当前 workspace 的 skill hash 比较。
+- 版本下拉显示：`v1 · 基于旧版本` / `v2 · 当前版本` / `v1 · 来源未知`。
+- 不阻止运行，只提示；报告 meta 记录所选评测集版本与 hash。
+- 旧评测集没有 hash 时显示“来源未知”，不猜。
+
+验收：skill 改版后旧评测集仍可选，但明确标“基于旧版本”；新评测集标“当前版本”。
+
+### #16 验证 T1 中断后只补缺失 rubric
+
+这是验收项，不新增产品逻辑：
+
+1. 预置缓存：2 个合法 judge JSON。
+2. 启动 T1，确认只调用剩余 5 个 rubric。
+3. 中断 T1，确认已完成的 2 个仍在缓存。
+4. 再启动，确认只补缺失项。
+5. 断言不重复调用已完成 metric，缓存文件不丢。
+
+### #18 T2A/T2B/T3 逐 case 检查点与续跑
+
+目标：任意阶段中断，已完成 case 不丢；下次同 key 继续。
+
+通用：
+
+- 阶段缓存 key 不变；每完成一个 case 调用 `_checkpoint(results, cache, files, dirs)`。
+- 阶段开始先恢复缓存；只跳过“产物完整”的 case。
+- 部分阶段不写最终 report；下次继续。
+
+T2A：
+
+- 每 case 产物：`triggers/<group>-<idx>.json`、`trigger-judge/<group>-<idx>.json`（early-exit 可无 judge）。
+- 每完成一条写部分 `triggers.json`；恢复时按 trace/judge 判断完成。
+- 失败/超时 case 记录 skipped，不重复计入 P/R。
+
+T2B：
+
+- 每 case 产物：`t2b/cases/<id>/{with,baseline,prompt,case}.json/txt`，按需 compare/pairwise。
+- 每完成一条更新部分 `runs.json` / `baseline.json` / `compare.json` / `pairwise.json`。
+- 恢复时两臂齐全才跳过；只缺 judge 的 case 只补 judge。
+
+T3：
+
+- 每 repeat 产物：`traces/golden-<case>-<rep>.json`。
+- 每完成一次写部分 `runs.json`；恢复时按 trace 存在且合法跳过。
+- idem/compare/score 只在阶段完整时生成。
+
+验收：中途停止后，重启只补缺失 case；已完成的 trace/判决不重跑；缓存与 results 一致。
+
+## B. 五个体验问题
+
+### #20 刷新即失忆 / 历史入口
+
+设计：
+
+- 新增 `GET /api/runs?limit=20`：扫描 `web/runs/*/results/run-meta.json`，返回 id、skill 名、tier、created_at、conclusion、是否有 report、是否 active。
+- `/api/report?id=` 与 `/report?id=`：先查 ACTIVE，再回退磁盘 results；只有磁盘也没有才 404。
+- 前端启动解析 `?run=<id>`；有则恢复报告/进度。运行开始时 `history.replaceState` 写 URL，并写 `localStorage` 最近 run。
+- 右栏空态/首页显示“最近一次报告”，可打开历史列表。
+
+验收：刷新不丢当前 run；旧 run 可直接打开；历史列表能看到磁盘上的 run；404 只出现在确实不存在时。
+
+### #21 首屏 CTA 与右栏空态
+
+设计：
+
+- “开始评估”移到 01 卡片上方；或桌面端吸底操作条，移动端普通流。
+- 右栏进度卡 `position:sticky`；无运行时显示最近报告、示例报告、预计耗时。
+- 1366×768 下 CTA 首屏可见；右栏不再出现 900px 空白。
+
+验收：1366×768 不滚动能看到主按钮；右栏空态有内容；不与顶部/底部遮挡。
+
+### #22 档位耗时、成本、指标
+
+设计：每个档位显示：
+
+| 档位 | 预计 | LLM 调用 | 产出 |
+|---|---|---|---|
+| 基础检查 | 5–15s | 0 | #1 #3 #4 #12 静态面 |
+| 文档评审 | 1–2min | 7 | #2 #5–#9 |
+| 触发评测 | 2–45min | 0–30 次兜底 | #10 |
+| 真实输入 | 5–40min | 2×case + 判定 | #11 #12 |
+| 完整运行 | 30min–数小时 | 重复×3 | #13–#16 |
+
+标注“推荐 T2A”；所有时间为范围，注明取决于模型/评测集/case 数，不写死单值。
+
+验收：档位卡可见耗时/调用/指标；默认推荐明确；不出现虚假精确时间。
+
+### #23 用户可见术语中文化
+
+设计：
+
+- 结论映射：`all-pass → 全部通过`、`with-warnings → 有警告`、`has-failures → 有失败`。
+- 用户层不显示 `T0/T1/T2A/T2B/T3`、`harness`、`backend`；收进“高级设置”，显示“评审方式/运行方式”。
+- Hero 删除“不需要配置 Python 路径”这类不实文案，改成“本地启动后上传 zip”。
+- 报告页同步映射，不只在首页改。
+
+验收：可见文本无英文枚举/内部缩写；高级区仍可配置；文案与实际启动方式一致。
+
+### #24 出错即失联
+
+设计：
+
+- 常驻错误条：显示 run id、错误、`查看日志`；不自动消失。
+- `GET /api/log?id=`：返回 `run.log` 尾部 200 行；旧 run 也可读。
+- SSE 不再硬编码 60 分钟；断线后先查 `/api/status`：
+  - 仍在跑 → 显示“仍在运行，重连中”，指数退避重连。
+  - 已结束 → 加载报告。
+  - 不存在 → 显示错误条。
+- 超时/断线不把 UI 打回“待机”；保留 `?run=`，刷新可恢复。
+
+验收：runner 崩溃有常驻错误和日志入口；SSE 断开后任务继续时 UI 能重连；不会因误判结束而重复启动 run。
+
+## 实施顺序
+
+1. #13 + #15（评测集版本 UX）
+2. #14（导入/导出）
+3. #18（逐 case 检查点）
+4. #20（历史/深链）
+5. #24（错误/重连）
+6. #21（首屏布局）
+7. #23（术语）
+8. #22（档位信息）
+9. #16（T1 中断验收）
+10. #17（文档、测试、提交）
+
+粗估总计 12–16 小时；每项单独走子 agent 实现，父 agent 验收后提交。

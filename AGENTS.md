@@ -60,6 +60,7 @@ evalsets/               # ⚠ 被 gitignore：评测集 + 运行产物，本地�
 | 加/改架构决策 | `docs/adr/` → 先读该目录 `AGENTS.md` |
 | 搞懂术语（skill / 指标 / 场景 / 评测集 / 指纹） | `CONTEXT.md` 词汇表 |
 | 看历史评估结果 | `evalsets/**/results/<version>/`（本地态，不入库） |
+| 看待实现设计 | `docs/design/remaining-work.md`（待审核；未实现） |
 | 跑一次评测 | `skill-evaluator/SKILL.md § 流程` + 本文件 § COMMANDS |
 
 ## CODE MAP
