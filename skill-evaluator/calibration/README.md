@@ -33,6 +33,7 @@ python scripts/calibrate.py --metric precheck --samples 3
 - 单发对照：同一批 precheck 两次 1 sample，`声明与实现一致` 分别得到 0.75 和 1.00；3 samples 多数票为 1.00。单发评审波动明显，不能当结论，这也是默认 `--samples 3` 的原因。
 - 20 例 × 3 首次结果：overall agreement 0.98，accuracy 0.93；`声明与实现一致` agreement 0.92 但 accuracy 0.60。逐 case 明细显示 8/20 是**标注/定义不一致**（无承诺被标成不一致、脚本多查被标成不一致、正文承诺停止但脚本静默通过被标成一致）。已按 `judges/precheck.md` 的操作定义修正标注并重写该检查点；这轮数据不当作通过结论。
 - 20 例 × 3 重跑（并发 4）：overall agreement 0.99，accuracy 0.99；仅 `p10-required-optional` 的「声明与实现一致」不一致。逐条看是 rubric 把“分级”也塞进第 4 项，和“分级正确”重复扣；已把分级差异明确归第 6 项。
+- v3：overall 0.98 / 0.99；`p13-silent-fail` 的“分级正确”标注修正为 false，另有 1 次 `LLM 返回空文本`。`judge_run` 已加空响应重试；待重跑。
 
 ## 注意
 

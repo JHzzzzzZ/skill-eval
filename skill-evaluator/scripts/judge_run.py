@@ -110,6 +110,19 @@ def ask(prompt: str, backend: str, model: str | None, base_url: str | None,
     return _pi_text(events), "pi"
 
 
+def _ask_retry(prompt: str, backend: str, model, base_url, api_key, protocol) -> tuple[str, str]:
+    """一次空响应/网络失败重试；评审调用比普通聊天更值得重试。"""
+    try:
+        return ask(prompt, backend, model, base_url, api_key, protocol)
+    except Exception as first:
+        retry = (prompt + "\n\n上一次调用失败或返回空文本。"
+                 "这次只输出一个完整 JSON 对象，不要解释或 Markdown。")
+        try:
+            return ask(retry, backend, model, base_url, api_key, protocol)
+        except Exception as second:
+            raise ValueError(f"LLM 调用失败（已重试）：{first}；{second}") from second
+
+
 def run(metric: str, skill_dir: Path, out: Path, *, model=None, backend="auto",
         base_url=None, api_key=None, protocol=None, max_chars: int | None = None,
         raw_dir: Path | None = None) -> dict:
@@ -119,7 +132,7 @@ def run(metric: str, skill_dir: Path, out: Path, *, model=None, backend="auto",
     rubric = rubric_path.read_text(encoding="utf-8")
     files = collect_files(skill_dir, max_chars)
     prompt = build_prompt(rubric, files)
-    text, used = ask(prompt, backend, model, base_url, api_key, protocol)
+    text, used = _ask_retry(prompt, backend, model, base_url, api_key, protocol)
     payload = llm_layer.extract_json(text)
     errors = judge_runner.validate(payload) if payload is not None else ["模型输出里没有 JSON 对象"]
     if errors:
