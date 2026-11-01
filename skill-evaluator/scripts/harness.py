@@ -49,6 +49,9 @@ def _cmd(prompt: str, cwd: str | Path, *, skill_dir=None, no_skill=False,
     if early_exit:
         cmd.append("--early-exit")
     if model:
+        provider = _config.get_str("harness.provider", "").strip()
+        if provider and "/" not in model:
+            cmd += ["--provider", provider]
         cmd += ["--model", model]
     if thinking:
         cmd += ["--thinking", thinking]

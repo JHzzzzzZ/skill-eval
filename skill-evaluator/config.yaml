@@ -85,6 +85,8 @@ llm:
 harness:
   # T2+ 执行载体；当前唯一实现是 pi。单位：适配器名。
   adapter: pi
+  # pi 的 provider；模型只写 id 时用它消除多 provider 歧义（opencode-go）。
+  provider: opencode-go
   # 前端可选项；只显示已实现项。单位：适配器名列表。
   available: [pi]
 

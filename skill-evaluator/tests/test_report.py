@@ -402,7 +402,6 @@ def test_html_report_written(tmp_path):
     html = (tmp_path / "report.html").read_text(encoding="utf-8")
     assert (tmp_path / "report.json").is_file()  # 原有产物不丢
     assert "触发精准度" in html            # 中文指标名（#20）
-    assert "<svg" in html                 # 流程图（#43）
     assert "评测集" in html               # 审核页 tab（#38）
     assert html.count("<script") <= 1 and "http" not in html.split("<body")[1][:2000]  # 单文件、无外链
 
@@ -414,6 +413,10 @@ def test_html_report_with_evalset(tmp_path):
     (ev / "triggers" / "should" / "s1.json").write_text(json.dumps({"prompt": "帮我记个待办"}), encoding="utf-8")
     (ev / "cases").mkdir()
     (ev / "cases" / "k1.json").write_text(json.dumps({"prompt": "记 todo", "expect": "登记成功"}), encoding="utf-8")
+    (ev / "reviews").mkdir()
+    (ev / "reviews" / "review.json").write_text(json.dumps({
+        "items": [{"file": "triggers/should/s1.json", "verdict": "approve", "note": ""}]
+    }, ensure_ascii=False), encoding="utf-8")
     r = subprocess.run([sys.executable, str(SCRIPT), str(tmp_path), "--html", "--evalset", str(ev)],
                        capture_output=True, text=True, encoding="utf-8", errors="replace")
     assert r.returncode == 0, r.stderr
@@ -442,7 +445,7 @@ def test_html_tab_script_balanced(tmp_path):
     html = (tmp_path / "report.html").read_text(encoding="utf-8")
     script = html.split("<script>")[1].split("</script>")[0]
     assert script.count("{") == script.count("}")
-    assert "t-flow" in html and "t-evalset" in html
+    assert "t-flow" not in html and "t-evalset" in html
 
 
 def test_evalset_review_ui(tmp_path):
@@ -453,13 +456,18 @@ def test_evalset_review_ui(tmp_path):
     (ev / "triggers" / "should" / "s1.json").write_text(json.dumps({"prompt": "帮我记个待办"}), encoding="utf-8")
     (ev / "cases").mkdir()
     (ev / "cases" / "k1.json").write_text(json.dumps({"prompt": "记 todo", "expect": "登记成功"}), encoding="utf-8")
+    (ev / "reviews").mkdir()
+    (ev / "reviews" / "review.json").write_text(json.dumps({
+        "items": [{"file": "triggers/should/s1.json", "verdict": "approve", "note": ""}]
+    }, ensure_ascii=False), encoding="utf-8")
     r = subprocess.run([sys.executable, str(SCRIPT), str(tmp_path), "--html", "--evalset", str(ev)],
                        capture_output=True, text=True, encoding="utf-8", errors="replace")
     assert r.returncode == 0, r.stderr
     html = (tmp_path / "report.html").read_text(encoding="utf-8")
     # 每条用例带审核控件与定位信息
     assert "class='card rv-item'" in html
-    assert "data-group='应触发'" in html and "data-file='s1.json'" in html
+    assert "data-group='应触发'" in html and "data-file='triggers/should/s1.json'" in html
+    assert "data-verdict='approve'" in html
     assert "通过" in html and "驳回" in html
     # 审核标准说明（教人怎么审）
     assert "审核标准" in html

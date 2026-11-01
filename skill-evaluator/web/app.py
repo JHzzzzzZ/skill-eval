@@ -212,6 +212,25 @@ def _rerun_report(run) -> dict:
     return json.loads((run["results"] / "report.json").read_text(encoding="utf-8"))
 
 
+def _refresh_reports_for_evalset(evalset: Path) -> None:
+    """审核写盘后刷新同一评测集的报告，保证报告页与审核页同步。"""
+    target = evalset.resolve()
+    seen = set()
+    candidates = [run["results"] for run in ACTIVE.values()]
+    candidates += [p.parent for p in RUNS.glob("*/results/run-meta.json")]
+    for results in candidates:
+        if results in seen or not (results / "report.json").is_file():
+            continue
+        seen.add(results)
+        try:
+            meta = json.loads((results / "run-meta.json").read_text(encoding="utf-8"))
+            if not meta.get("evalset") or Path(meta["evalset"]).resolve() != target:
+                continue
+            _rerun_report({"results": results})
+        except Exception:
+            continue
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "skill-evaluator-web/2.0"
 
@@ -406,6 +425,17 @@ class Handler(BaseHTTPRequestHandler):
                                                  encoding="utf-8")
             with (reviews / "audit.jsonl").open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(payload, ensure_ascii=False) + "\n")
+            if items and all(i.get("verdict") == "approve" for i in items):
+                meta_path = evalset / "meta.json"
+                try:
+                    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    meta = None
+                if isinstance(meta, dict):
+                    meta["reviewed_by"] = "human"
+                    meta["reviewed_at"] = payload["reviewed_at"]
+                    meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+            _refresh_reports_for_evalset(evalset)
             return _send_json(self, 200, {"ok": True, "path": str(reviews / "review.json")})
         if path == "/api/llm/test":
             data = _json_body(self)

@@ -215,6 +215,12 @@ def _cases(evalset: Path) -> list:
     return out
 
 
+def _env_error(trace: dict) -> bool:
+    """pi/载体级失败不算“未触发”，否则 P/R 会被环境错误打成 0。"""
+    markers = ("pi 退出码", "pi CLI", "运行超时", "worktree", "provider")
+    return any(any(m in str(e) for m in markers) for e in (trace.get("errors") or []))
+
+
 def _metric(trace: dict, case: str) -> dict:
     return {"case": case, "tool_calls": int(trace.get("tool_calls") or 0),
             "tokens": int(trace.get("tokens") or 0),
@@ -358,8 +364,12 @@ def run(args) -> int:
                     progress.emit("case", stage="T2A", index=idx, total=total, label=item["file"])
                     trace_path = results / "triggers" / f"{key}-{idx}.json"
                     try:
-                        run_case(item["prompt"], sandbox, skill_dir=sandbox, adapter=args.harness,
-                                 early_exit=True, model=model, out=trace_path)
+                        trace = run_case(item["prompt"], sandbox, skill_dir=sandbox, adapter=args.harness,
+                                         early_exit=True, model=model, out=trace_path)
+                        if _env_error(trace):
+                            progress.emit("warn", stage="T2A", label=item["file"],
+                                          error="载体失败，跳过该 case：" + str(trace.get("errors"))[:200])
+                            continue
                         jout = results / "trigger-judge" / f"{key}-{idx}.json"
                         _run("trigger_judge.py", ["--skill", sandbox / "SKILL.md",
                                                   "--trace", trace_path, "--out", jout,

@@ -127,6 +127,15 @@ def test_build_command_with_model(tmp_path):
     assert cmd[cmd.index("--thinking") + 1] == "low"
 
 
+def test_build_command_with_provider_for_bare_model(tmp_path):
+    out = json.loads(run_trace(["--build-only", "--worktree", "/w", "--prompt", "hi",
+                                "--model", "deepseek-v4.1-flash",
+                                "--provider", "opencode-go"]).stdout)
+    cmd = out["command"]
+    assert cmd[cmd.index("--provider") + 1] == "opencode-go"
+    assert cmd[cmd.index("--model") + 1] == "deepseek-v4.1-flash"
+
+
 def test_build_command_model_via_env_default(tmp_path):
     # 环境变量 SKILL_EVAL_MODEL 作为默认，--model 显式传参覆盖
     import os

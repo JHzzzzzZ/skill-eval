@@ -741,6 +741,12 @@ def _skill_meta(skill_arg=None, evalset_dir=None):
 def _evalset_html(evalset_dir, skill_meta=None) -> str:
     if not evalset_dir or not evalset_dir.is_dir():
         return "<p class='hint'>未指定评测集目录（--evalset），审核视图不可用。</p>"
+    review = load(evalset_dir, "reviews/review.json") or {}
+    decisions = {}
+    if isinstance(review, dict):
+        for item in review.get("items") or []:
+            if isinstance(item, dict) and item.get("file"):
+                decisions[str(item["file"])] = item
     rows = []
     idx = 0
     for group, sub in (("应触发", "triggers/should"), ("不应触发", "triggers/should-not"),
@@ -756,8 +762,13 @@ def _evalset_html(evalset_dir, skill_meta=None) -> str:
                 continue
             expect = j.get("expect")
             idx += 1
+            rel = f.relative_to(evalset_dir).as_posix()
+            decision = decisions.get(rel) or decisions.get(f.name) or {}
+            verdict = str(decision.get("verdict") or "")
+            note = str(decision.get("note") or "")
             items.append(
-                f"<div class='card rv-item' data-group='{group}' data-file='{f.name}' data-idx='{idx}' "
+                f"<div class='card rv-item' data-group='{group}' data-file='{rel}' data-idx='{idx}' "
+                f"data-verdict='{_esc(verdict)}' data-note='{_esc(note)}' "
                 f"data-prompt='{_esc(j.get('prompt', ''))}' data-expect='{_esc(expect or '')}'>"
                 f"<div><code>{_esc(j.get('prompt', ''))}</code>"
                 + (f" → 期望：{_esc(expect)}" if expect else "") +
@@ -765,7 +776,7 @@ def _evalset_html(evalset_dir, skill_meta=None) -> str:
                 f"<div class='rv-ctrl'>"
                 f"<button type='button' class='rv-ok' onclick='rv(this,&quot;approve&quot;)'>✓ 通过</button> "
                 f"<button type='button' class='rv-bad' onclick='rv(this,&quot;reject&quot;)'>✗ 驳回</button> "
-                f"<input class='rv-note' placeholder='驳回原因（驳回必填）'"
+                f"<input class='rv-note' value='{_esc(note)}' placeholder='驳回原因（驳回必填）'"
                 f" oninput='this.closest(&quot;.rv-item&quot;).dataset.note=this.value'>"
                 f"</div></div>")
         if items:
@@ -845,12 +856,11 @@ details pre{max-height:420px}
 <nav><button data-t="report" class="on" onclick="tab('report')">报告</button>
 <button data-t="advice" onclick="tab('advice')">优化建议</button>
 <button data-t="evalset" onclick="tab('evalset')">评测集审核</button>
-<button data-t="flow" onclick="tab('flow')">评估流程</button></nav>
+</nav>
 <main>
 <section class="tab on" id="t-report">__CARDS__</section>
 <section class="tab" id="t-advice">__ADVICE__</section>
 <section class="tab" id="t-evalset">__EVALSET__</section>
-<section class="tab" id="t-flow">__FLOW__</section>
 </main>
 <script>function tab(n){document.querySelectorAll('.tab').forEach(
  e=>e.classList.toggle('on',e.id==='t-'+n));
@@ -900,7 +910,8 @@ function rvSubmit(){var root=document.getElementById('rv-root');if(!root)return;
     if(el){el.style.color='#b23b3b';el.style.fontWeight='600';
      el.textContent='✗ 保存失败：'+((err&&err.message)||err||'未知错误')+'（可用复制/下载兑底）';}});}
  else{rvDownload(text);
-  rvDone(fname+'（浏览器不支持直接落盘，已下载，请移到 evalsets/'+root.dataset.name+'/reviews/）');}}</script>
+  rvDone(fname+'（浏览器不支持直接落盘，已下载，请移到 evalsets/'+root.dataset.name+'/reviews/）');}}
+rvCount();</script>
 </body></html>'''
 
 
@@ -1325,7 +1336,7 @@ def render_html(report: dict, evalset_dir=None, skill_arg=None) -> str:
             .replace("__CARDS__", "".join(cards))
             .replace("__ADVICE__", _advice_html(report.get("advice") or []))
             .replace("__EVALSET__", _evalset_html(evalset_dir, _skill_meta(skill_arg, evalset_dir)))
-            .replace("__FLOW__", _flow_svg()))
+            )
 
 
 def render_md(report: dict) -> str:

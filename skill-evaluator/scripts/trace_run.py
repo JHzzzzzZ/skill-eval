@@ -226,7 +226,7 @@ def _revert_escape(repo: str, lines) -> list:
 
 
 def build_args(worktree: str, prompt: str, skill=None,
-               model: str = None, thinking: str = None) -> list:
+               model: str = None, thinking: str = None, provider: str = None) -> list:
     """pi CLI 命令。模型：--model 显式传参 > SKILL_EVAL_MODEL 环境变量 > pi 默认。
 
     skill 可为单个路径、路径列表或逗号分隔串；可重复传 --skill（补丁 B5）。
@@ -243,6 +243,8 @@ def build_args(worktree: str, prompt: str, skill=None,
         cmd += ["--skill", str(Path(s).resolve())]
     eff_model = model or os.environ.get(DEFAULT_MODEL_ENV)
     if eff_model:
+        if provider and "/" not in eff_model:
+            cmd += ["--provider", provider]
         cmd += ["--model", eff_model]
     if thinking:
         cmd += ["--thinking", thinking]
@@ -252,7 +254,7 @@ def build_args(worktree: str, prompt: str, skill=None,
 
 def main():
     args = sys.argv[1:]
-    worktree = prompt = model = thinking = out_path = None
+    worktree = prompt = model = thinking = provider = out_path = None
     skills = []
     guard_repos = []
     guard_revert = False
@@ -260,10 +262,10 @@ def main():
     # 位置参数形式（seam 声明）：trace_run.py <worktree> <prompt>
     positional = [a for i, a in enumerate(args) if a not in (
         "--events", "--build-only", "--worktree", "--prompt", "--skill", "--no-skill", "--early-exit",
-        "--out", "--model", "--thinking", "--guard-repo", "--guard-revert", "--")
+        "--out", "--model", "--thinking", "--provider", "--guard-repo", "--guard-revert", "--")
         and (i == 0 or args[i - 1] not in (
             "--events", "--worktree", "--prompt", "--skill", "--out", "--model", "--thinking",
-            "--guard-repo"))
+            "--provider", "--guard-repo"))
     ]
     i = 0
     while i < len(args):
@@ -287,6 +289,8 @@ def main():
             model = args[i + 1]; i += 2
         elif args[i] == "--thinking":
             thinking = args[i + 1]; i += 2
+        elif args[i] == "--provider":
+            provider = args[i + 1]; i += 2
         elif args[i] == "--guard-repo":
             guard_repos.append(args[i + 1]); i += 2
         elif args[i] == "--guard-revert":
@@ -295,7 +299,7 @@ def main():
             i += 1
 
     if build_only:
-        print(json.dumps({"command": build_args(worktree, prompt, skills, model, thinking)}, ensure_ascii=False))
+        print(json.dumps({"command": build_args(worktree, prompt, skills, model, thinking, provider)}, ensure_ascii=False))
         return
 
     if events_file:
@@ -318,7 +322,7 @@ def main():
               file=sys.stderr)
         sys.exit(2)
 
-    cmd = build_args(worktree, prompt, None if no_skill else skills, model, thinking)
+    cmd = build_args(worktree, prompt, None if no_skill else skills, model, thinking, provider)
     # Windows 上 pi 是 pi.cmd，subprocess 不解析 PATHEXT，需显式解析绝对路径
     resolved = shutil.which("pi") or shutil.which("pi.cmd") or shutil.which("pi.exe")
     if not resolved:
@@ -361,6 +365,7 @@ def main():
             trace["seconds"] = round(elapsed, 2)
             if proc.returncode != 0 and not trace["errors"]:
                 trace["errors"].append(f"pi 退出码 {proc.returncode}: {proc.stderr[-300:]}")
+                trace["passed"] = False
         else:
             # ADR-0007 early-exit：流式消费事件流，检测到 skill 已使用即 kill
             proc = subprocess.Popen(cmd, cwd=worktree, stdout=subprocess.PIPE,
@@ -408,6 +413,7 @@ def main():
                 trace["passed"] = False
             elif proc.returncode not in (0, None) and not trace["errors"] and not agg.stop:
                 trace["errors"].append(f"pi 退出码 {proc.returncode}: {stderr[-300:]}")
+                trace["passed"] = False
     except subprocess.TimeoutExpired:
         trace = parse_events([])
         trace["errors"] = ["运行超时（600s）"]
