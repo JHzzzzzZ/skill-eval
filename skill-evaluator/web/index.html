@@ -848,7 +848,8 @@ function listen(id){
       const dur = fmtDur(ev.elapsed_s);
       const who = ev.stage ? label(ev.stage) : "文档语义评审";
       const what = ev.metric || "判定";
-      log(`[${who}] ${what} ${st}` + (dur? " · "+dur : "") + (ev.error? " · "+ev.error:""), at);
+      const loaded = ev.loaded === true ? " · 已加载 SKILL.md" : ev.loaded === false ? " · 未加载 SKILL.md" : "";
+      log(`[${who}] ${what} ${st}` + (dur? " · "+dur : "") + loaded + (ev.error? " · "+ev.error:""), at);
     } else if(ev.type==="warn"){
       log(`⚠ ${label(ev.stage||"")} ${ev.label||""} ${ev.error||""}`, at);
     } else if(ev.type==="error"){

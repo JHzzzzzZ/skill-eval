@@ -492,9 +492,10 @@ def run(args) -> int:
                             # 已读到 SKILL.md：按“加载即触发”直接裁决，不再花一次 LLM
                             judged[key].append(True)
                             progress.emit("judge", stage="T2A", metric=item["file"],
-                                          status="done", elapsed_s=0.0, short_circuit=True)
+                                          status="done", elapsed_s=0.0, loaded=True)
                             continue
                         jout = results / "trigger-judge" / f"{key}-{idx}.json"
+                        judge_started = time.monotonic()
                         _run("trigger_judge.py", ["--skill", sandbox / "SKILL.md",
                                                   "--trace", trace_path, "--out", jout,
                                                   "--model", model or "",
@@ -502,6 +503,9 @@ def run(args) -> int:
                                                   "--api-key", args.api_key or "",
                                                   "--llm-protocol", args.llm_protocol or ""])
                         judged[key].append(bool((_read_json(jout, {}) or {}).get("triggered")))
+                        progress.emit("judge", stage="T2A", metric=item["file"],
+                                      status="done", loaded=False,
+                                      elapsed_s=round(time.monotonic() - judge_started, 2))
                     except subprocess.TimeoutExpired:
                         # 外层兜底超时：跳过而不是记成“未触发”，否则 should-not 会被误判
                         progress.emit("warn", stage="T2A", label=item["file"],
