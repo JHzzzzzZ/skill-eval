@@ -540,6 +540,14 @@ class Handler(BaseHTTPRequestHandler):
             cmd += ["--rerun-t0"]
         if data.get("rerun_t1"):
             cmd += ["--rerun-t1"]
+        if data.get("rerun_t2a"):
+            cmd += ["--rerun-t2a"]
+        if data.get("rerun_t2b"):
+            cmd += ["--rerun-t2b"]
+        if data.get("rerun_t3"):
+            cmd += ["--rerun-t3"]
+        if data.get("no_cache"):
+            cmd += ["--no-cache"]
         real = str(data.get("real_input") or "").strip()
         if real:
             rf = rdir / "real-input.json"

@@ -25,7 +25,8 @@ import report as report_mod
 
 SCRIPTS = Path(__file__).resolve().parent
 ROOT = SCRIPTS.parent
-CACHE = ROOT.parent / ".skill-eval-cache" / "t0t1"
+CACHE_ROOT = ROOT.parent / ".skill-eval-cache"
+CACHE = CACHE_ROOT / "t0t1"
 TIERS = ("t0", "t1", "t2a", "t2b", "t3")
 TIER_RANK = {name: i for i, name in enumerate(TIERS)}
 EXCLUDE = {"tests", "evalsets", "uploads", "attic", ".git", "node_modules",
@@ -156,6 +157,26 @@ def _cache_match(old: dict, skill_sha: str, eval_sha, judge_key: dict | None = N
     return True
 
 
+def _dir_digest(root: Path) -> str:
+    h = hashlib.sha256()
+    for p in sorted(root.rglob("*")):
+        if not p.is_file():
+            continue
+        rel = p.relative_to(root)
+        if any(part in {"reviews", "results", "__pycache__"} for part in rel.parts):
+            continue
+        h.update(rel.as_posix().encode("utf-8"))
+        h.update(b"\x00")
+        h.update(p.read_bytes())
+    return h.hexdigest()
+
+
+def _stage_cache(name: str, *parts) -> Path:
+    digest = hashlib.sha256(json.dumps(parts, ensure_ascii=False, sort_keys=True)
+                            .encode("utf-8")).hexdigest()[:32]
+    return CACHE_ROOT / name / digest
+
+
 def _cache_dir(skill_sha: str, eval_sha: str, judge_key: dict | None = None) -> Path:
     raw = f"{skill_sha}:{eval_sha or 'unknown'}"
     if judge_key is not None:
@@ -267,7 +288,7 @@ def run(args) -> int:
 
     # T0 静态检查：同 skill + 同评估器才复用，否则重跑
     static = _read_json(static_path, {}) or {}
-    reuse_static = (not args.rerun_t0 and bool(static)
+    reuse_static = (not args.no_cache and not args.rerun_t0 and bool(static)
                     and isinstance(static.get("passed"), bool)
                     and (static_from_cache or _cache_match(old_meta, skill_sha, eval_sha)))
     if not reuse_static:
@@ -283,6 +304,7 @@ def run(args) -> int:
     evalset = Path(args.evalset).resolve() if args.evalset else _find_evalset(name)
     if evalset and not evalset.is_dir():
         raise RunnerError(f"评测集不存在: {evalset}")
+    evalset_sha = _dir_digest(evalset) if evalset else ""
     model = args.model or os.environ.get("SKILL_EVAL_MODEL") or None
     judge_backend = ("llm" if (args.base_url or args.api_key or args.llm_protocol) else args.backend)
     if judge_backend == "auto":
@@ -306,7 +328,7 @@ def run(args) -> int:
         judges_from_cache = False
         if not args.rerun_t1 and not _judges_ready(jdir):
             judges_from_cache = _copy_cache(cache_t1, results, (), ("judges", "raw/llm-judge"))
-        reuse_judges = (not args.rerun_t1 and _judges_ready(jdir)
+        reuse_judges = (not args.no_cache and not args.rerun_t1 and _judges_ready(jdir)
                         and (judges_from_cache or _cache_match(old_meta, skill_sha, eval_sha, judge_key)))
         if reuse_judges:
             progress.emit("stage", name="T1", status="done", cached=True)
@@ -347,7 +369,17 @@ def run(args) -> int:
 
     if TIER_RANK[tier] >= TIER_RANK["t2a"]:
         progress.emit("stage", name="T2A", status="start")
-        if human:
+        t2a_cache = _stage_cache("t2a", skill_sha, eval_sha, evalset_sha,
+                                 model or "", args.harness or "",
+                                 args.llm_protocol or "", args.base_url or "")
+        reuse_t2a = (not args.no_cache and not args.rerun_t2a
+                     and (t2a_cache / "triggers.json").is_file()
+                     and (t2a_cache / "score.json").is_file())
+        if reuse_t2a:
+            _copy_cache(t2a_cache, results, ("triggers.json", "score.json"),
+                        ("triggers", "trigger-judge"))
+            progress.emit("stage", name="T2A", status="done", cached=True)
+        elif human:
             progress.emit("stage", name="T2A", status="skipped",
                           reason="human 型：不跑触发评测")
         elif not evalset:
@@ -383,14 +415,27 @@ def run(args) -> int:
                         progress.emit("warn", stage="T2A", label=item["file"], error=str(exc))
             _write_json(results / "triggers.json", judged)
             _run("score.py", [results, "--out", results / "score.json"], check=False)
+            _copy_cache(results, t2a_cache, ("triggers.json", "score.json"),
+                        ("triggers", "trigger-judge"))
             progress.emit("stage", name="T2A", status="done",
                           should=sum(judged["should"]), total_should=len(judged["should"]))
 
     # T2B 真实场景 A/B
     t2b_score = None
+    real_input_sha = hashlib.sha256(Path(args.real_input).read_bytes()).hexdigest() if args.real_input else ""
     if TIER_RANK[tier] >= TIER_RANK["t2b"]:
         progress.emit("stage", name="T2B", status="start")
-        if not args.real_input:
+        t2b_cache = _stage_cache("t2b", skill_sha, eval_sha, evalset_sha, real_input_sha,
+                                 model or "", args.harness or "",
+                                 args.llm_protocol or "", args.base_url or "")
+        reuse_t2b = (not args.no_cache and not args.rerun_t2b and bool(real_input_sha)
+                     and (t2b_cache / "t2b" / "score.json").is_file())
+        if reuse_t2b:
+            _copy_cache(t2b_cache, results,
+                        ("real-input.meta.json", "golden.json"), ("t2b",))
+            t2b_score = results / "t2b" / "score.json"
+            progress.emit("stage", name="T2B", status="done", cached=True)
+        elif not args.real_input:
             progress.emit("stage", name="T2B", status="skipped", reason="未提供真实输入")
         else:
             from harness import run_case
@@ -423,17 +468,31 @@ def run(args) -> int:
             _write_json(t2b / "baseline.json", [_metric(b, label)])
             _run("score.py", [t2b, "--out", t2b / "score.json"])
             t2b_score = t2b / "score.json"
+            _copy_cache(results, t2b_cache,
+                        ("real-input.meta.json", "golden.json"), ("t2b",))
             progress.emit("stage", name="T2B", status="done", label=label)
 
     # T3 核心沙箱
     if TIER_RANK[tier] >= TIER_RANK["t3"]:
         progress.emit("stage", name="T3", status="start")
         cases = _cases(evalset) if evalset else []
-        if not cases:
+        repeat = max(1, _config.get_int("run.repeat", 3))
+        t3_cache = _stage_cache("t3", skill_sha, eval_sha, evalset_sha, real_input_sha,
+                                model or "", args.harness or "", args.llm_protocol or "",
+                                args.base_url or "", str(repeat))
+        reuse_t3 = (not args.no_cache and not args.rerun_t3
+                    and not args.rerun_t2a and not args.rerun_t2b
+                    and (t3_cache / "runs.json").is_file()
+                    and (t3_cache / "score.json").is_file())
+        if reuse_t3:
+            _copy_cache(t3_cache, results,
+                        ("runs.json", "idem.json", "compare.json", "golden.json", "score.json"),
+                        ("traces", "idem", "compare", "actual", "expected"))
+            progress.emit("stage", name="T3", status="done", cached=True)
+        elif not cases:
             progress.emit("stage", name="T3", status="skipped", reason="无 cases")
         else:
             from harness import run_case
-            repeat = max(1, _config.get_int("run.repeat", 3))
             runs = []
             traces = {}
             total = len(cases) * repeat
@@ -494,6 +553,9 @@ def run(args) -> int:
             if (results / "compare").is_dir():
                 _run("compare.py", ["--aggregate", results / "compare",
                                     "--out", results / "compare.json"], check=False)
+            _copy_cache(results, t3_cache,
+                        ("runs.json", "idem.json", "compare.json", "golden.json", "score.json"),
+                        ("traces", "idem", "compare", "actual", "expected"))
             progress.emit("stage", name="T3", status="done", cases=len(cases), runs=len(runs))
 
     if TIER_RANK[tier] == TIER_RANK["t2b"] and t2b_score:
@@ -521,7 +583,8 @@ def main():
         model = None; backend = "auto"; progress = None; version = None
         dry_run = False; sandbox = None; harness = None
         llm_protocol = None; base_url = None; api_key = None
-        rerun_t0 = False; rerun_t1 = False
+        rerun_t0 = False; rerun_t1 = False; rerun_t2a = False; rerun_t2b = False; rerun_t3 = False
+        no_cache = False
     i = 0
     while i < len(args):
         key = args[i]
@@ -537,12 +600,20 @@ def main():
             A.rerun_t0 = True; i += 1
         elif key == "--rerun-t1":
             A.rerun_t1 = True; i += 1
+        elif key == "--rerun-t2a":
+            A.rerun_t2a = True; i += 1
+        elif key == "--rerun-t2b":
+            A.rerun_t2b = True; i += 1
+        elif key == "--rerun-t3":
+            A.rerun_t3 = True; i += 1
+        elif key == "--no-cache":
+            A.no_cache = True; i += 1
         else:
             print(f"未知参数: {key}", file=sys.stderr); return 2
     if not A.skill:
         print("usage: runner.py --skill <dir> [--tier t0|t1|t2a|t2b|t3] "
               "[--evalset <dir>] [--real-input <file>] [--results <dir>] [--model m] "
-              "[--backend auto|llm|pi] [--harness pi] [--progress <file>] [--rerun-t0] [--rerun-t1] [--dry-run]", file=sys.stderr)
+              "[--backend auto|llm|pi] [--harness pi] [--progress <file>] [--rerun-t0] [--rerun-t1] [--rerun-t2a] [--rerun-t2b] [--rerun-t3] [--no-cache] [--dry-run]", file=sys.stderr)
         return 2
     try:
         return run(A)
