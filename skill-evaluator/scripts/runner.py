@@ -463,6 +463,12 @@ def run(args) -> int:
                             progress.emit("warn", stage="T2A", label=item["file"],
                                           error="载体失败，跳过该 case：" + str(trace.get("errors"))[:200])
                             continue
+                        if trace.get("early_exit"):
+                            # 已读到 SKILL.md：按“加载即触发”直接裁决，不再花一次 LLM
+                            judged[key].append(True)
+                            progress.emit("judge", stage="T2A", metric=item["file"],
+                                          status="done", elapsed_s=0.0, short_circuit=True)
+                            continue
                         jout = results / "trigger-judge" / f"{key}-{idx}.json"
                         _run("trigger_judge.py", ["--skill", sandbox / "SKILL.md",
                                                   "--trace", trace_path, "--out", jout,
