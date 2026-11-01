@@ -147,6 +147,18 @@ def _judges_ready(jdir: Path) -> bool:
     return True
 
 
+def _judge_ready(path: Path) -> bool:
+    data = _read_json(path, {})
+    if not isinstance(data, dict) or not isinstance(data.get("items"), list):
+        return False
+    score = data.get("score")
+    return not (isinstance(score, bool) or not isinstance(score, (int, float)) or not 0 <= score <= 1)
+
+
+def _ready_metrics(jdir: Path) -> set:
+    return {metric for metric in RUBRICS if _judge_ready(jdir / f"{metric}.json")}
+
+
 def _cache_match(old: dict, skill_sha: str, eval_sha, judge_key: dict | None = None) -> bool:
     if not isinstance(old, dict) or not eval_sha:
         return False
@@ -382,18 +394,22 @@ def run(args) -> int:
         jdir.mkdir(parents=True, exist_ok=True)
         cache_t1 = _cache_dir(skill_sha, eval_sha, judge_key)
         judges_from_cache = False
-        if not args.rerun_t1 and not _judges_ready(jdir):
+        if not args.rerun_t1:
+            # 先恢复已完成的部分；中断后只补缺失项，不重跑全部 rubric
             judges_from_cache = _copy_cache(cache_t1, results, (), ("judges", "raw/llm-judge"))
-        reuse_judges = (not args.no_cache and not args.rerun_t1 and _judges_ready(jdir)
+        ready = set() if (args.no_cache or args.rerun_t1) else _ready_metrics(jdir)
+        reuse_judges = (not args.no_cache and not args.rerun_t1
+                        and len(ready) == len(RUBRICS)
                         and (judges_from_cache or _cache_match(old_meta, skill_sha, eval_sha, judge_key)))
         if reuse_judges:
             progress.emit("stage", name="T1", status="done", cached=True)
         else:
+            to_run = [m for m in RUBRICS if args.no_cache or m not in ready]
             workers = max(1, _config.get_int("run.judge_concurrency", 4))
             with ThreadPoolExecutor(max_workers=workers) as pool:
                 futs = {}
                 judge_started = {}
-                for metric in RUBRICS:
+                for metric in to_run:
                     judge_started[metric] = time.monotonic()
                     futs[pool.submit(_run, "judge_run.py",
                                      ["--metric", metric, "--skill", skill,
@@ -406,6 +422,15 @@ def run(args) -> int:
                     elapsed = round(time.monotonic() - judge_started.get(metric, time.monotonic()), 2)
                     try:
                         fut.result()
+                        # 每个 rubric 一完成就落缓存：中断时已完成项不丢
+                        cj = cache_t1 / "judges"
+                        cr = cache_t1 / "raw" / "llm-judge"
+                        cj.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(jdir / f"{metric}.json", cj / f"{metric}.json")
+                        raw = results / "raw" / "llm-judge" / f"{metric}.json"
+                        if raw.is_file():
+                            cr.mkdir(parents=True, exist_ok=True)
+                            shutil.copy2(raw, cr / f"{metric}.json")
                         progress.emit("judge", metric=metric, status="done", elapsed_s=elapsed)
                     except Exception as exc:
                         progress.emit("judge", metric=metric, status="skipped", elapsed_s=elapsed,
