@@ -26,8 +26,12 @@ ROOT = WEB.parent
 RUNNER = ROOT / "scripts" / "runner.py"
 sys.path.insert(0, str(ROOT / "scripts"))
 import llm as llm_layer  # noqa: E402
+import runner as runner_mod  # noqa: E402
+import static_check  # noqa: E402
 RUNS = WEB / "runs"
 RUNS.mkdir(parents=True, exist_ok=True)
+WORKSPACES = WEB / "workspaces"
+WORKSPACES.mkdir(parents=True, exist_ok=True)
 ACTIVE = {}
 MAX_UPLOAD_BYTES = 1024 ** 3
 MAX_EXTRACTED_BYTES = 2 * 1024 ** 3
@@ -154,6 +158,64 @@ def _stop_run(run) -> None:
         pass
 
 
+def _slug(text: str) -> str:
+    value = re.sub(r"[^A-Za-z0-9._-]+", "-", str(text or "")).strip("-._").lower()
+    return value or "skill"
+
+
+def _evalset_for(name: str, sha: str) -> Path:
+    base = ROOT.parent / "evalsets"
+    slug = _slug(name) if _slug(name) != "skill" else f"skill-{sha[:8]}"
+    d = base / slug
+    versions = sorted((p for p in d.glob("v*") if p.is_dir()),
+                      key=lambda p: int(p.name[1:]) if p.name[1:].isdigit() else 0)
+    return versions[-1] if versions else d / "v1"
+
+
+def _workspace_meta(ws: Path) -> dict:
+    try:
+        meta = json.loads((ws / "workspace.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        meta = {}
+    meta["skill"] = str(ws / "skill")
+    return meta
+
+
+def _workspace_upsert(skill: Path, source: str = "") -> dict:
+    sha = runner_mod._skill_digest(skill)
+    meta, _ = static_check.parse_frontmatter((skill / "SKILL.md").read_text(encoding="utf-8", errors="replace"))
+    name = str(meta.get("name") or skill.name).strip() or skill.name
+    slug = _slug(name)
+    wid = f"{slug}-{sha[:8]}" if slug != "skill" else f"skill-{sha[:8]}"
+    ws = WORKSPACES / wid
+    if not (ws / "workspace.json").is_file() or not (ws / "skill" / "SKILL.md").is_file():
+        ws.mkdir(parents=True, exist_ok=True)
+        if (ws / "skill").exists():
+            shutil.rmtree(ws / "skill")
+        shutil.copytree(skill, ws / "skill")
+        payload = {"id": wid, "name": name, "skill_sha256": sha,
+                   "source": source, "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                   "last_used_at": time.strftime("%Y-%m-%dT%H:%M:%S")}
+        (ws / "workspace.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    else:
+        payload = _workspace_meta(ws)
+        payload["last_used_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+        (ws / "workspace.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {"workspace_id": wid, "workspace": name, "skill": str(ws / "skill"),
+            "evalset": str(_evalset_for(name, sha)), "skill_sha256": sha}
+
+
+def _workspaces() -> list:
+    out = []
+    for ws in sorted(WORKSPACES.iterdir()):
+        if ws.is_dir() and (ws / "workspace.json").is_file():
+            meta = _workspace_meta(ws)
+            meta["evalset"] = str(_evalset_for(meta.get("name") or ws.name,
+                                               str(meta.get("skill_sha256") or "")))
+            out.append(meta)
+    return out
+
+
 def _evalset_status(evalset: Path, skill: Path) -> dict:
     if not evalset.is_dir():
         raise ValueError(f"评测集目录不存在：{evalset}")
@@ -251,6 +313,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/llm/config":
             return _send_json(self, 200, llm_layer.status())
+        if path == "/api/workspaces":
+            return _send_json(self, 200, {"workspaces": _workspaces()})
         if path == "/api/evalset/status":
             q = parse_qs(urlparse(self.path).query)
             evalset = (q.get("evalset") or [""])[0]
@@ -349,12 +413,16 @@ class Handler(BaseHTTPRequestHandler):
                     try:
                         _safe_extract(zpath, dest)
                         skill = _skill_root(dest)
+                        filename = (parse_qs(urlparse(self.path).query).get("filename") or [""])[0]
+                        info = _workspace_upsert(skill, filename)
+                        info["upload_id"] = uid
+                        shutil.rmtree(dest, ignore_errors=True)
                     except Exception:
                         shutil.rmtree(dest, ignore_errors=True)
                         raise
                     finally:
                         zpath.unlink(missing_ok=True)
-                    return _send_json(self, 200, {"skill": str(skill), "upload_id": uid})
+                    return _send_json(self, 200, info)
                 except Exception as exc:
                     return _send_json(self, 400, {"error": str(exc)})
             # 兼容旧的 base64 JSON 小包上传
@@ -376,11 +444,15 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 _safe_extract(zpath, dest)
                 skill = _skill_root(dest)
+                info = _workspace_upsert(skill)
+                info["upload_id"] = uid
+                shutil.rmtree(dest, ignore_errors=True)
             except Exception as exc:
+                shutil.rmtree(dest, ignore_errors=True)
                 return _send_json(self, 400, {"error": str(exc)})
             finally:
                 zpath.unlink(missing_ok=True)
-            return _send_json(self, 200, {"skill": str(skill), "upload_id": uid})
+            return _send_json(self, 200, info)
         if path == "/api/evalset/generate":
             data = _json_body(self)
             skill = str(data.get("skill") or "")

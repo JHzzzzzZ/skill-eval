@@ -27,6 +27,7 @@ def test_ui_has_no_internal_adr_or_tier_jargon():
     assert "ADR" not in html
     assert "T2B" not in html
     assert 'id="stop"' in html
+    assert 'id="workspace"' in html and 'id="skill"' not in html
     assert 'id="reuse"' in html and 'id="rerunT0"' in html and 'id="rerunT1"' in html
     assert 'verdict-picker' in html and '选中调整' not in html
 
@@ -57,6 +58,21 @@ def test_copy_reuse_only_copies_t0_t1_artifacts(tmp_path):
     assert (dest / "judges" / "brevity.json").is_file()
     assert (dest / "raw" / "llm-judge" / "x.json").is_file()
     assert not (dest / "report.json").exists()
+
+
+def test_workspace_upsert_reuses_same_content(tmp_path, monkeypatch):
+    monkeypatch.setattr(web, "WORKSPACES", tmp_path / "workspaces")
+    skill = tmp_path / "skill"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text(
+        "---\nname: demo-skill\ndescription: demo\n---\nbody\n", encoding="utf-8")
+    first = web._workspace_upsert(skill, "a.zip")
+    second = web._workspace_upsert(skill, "b.zip")
+    assert first["workspace_id"] == second["workspace_id"]
+    assert first["skill"] == second["skill"]
+    assert (Path(first["skill"]) / "SKILL.md").is_file()
+    assert Path(first["evalset"]).parent.name == "demo-skill"
+    assert Path(first["evalset"]).name == "v1"
 
 
 def test_valid_zip_finds_skill_root(tmp_path):

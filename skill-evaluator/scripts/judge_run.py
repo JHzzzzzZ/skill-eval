@@ -24,7 +24,7 @@ JUDGES = EVALUATOR_ROOT / "judges"
 def default_max_chars() -> int:
     return _config.get_int("llm.max_input_chars", 60000)
 EXCLUDE_DIRS = {"tests", "evalsets", "uploads", "attic", ".git", "node_modules",
-                "__pycache__", ".sandbox", ".skillrepos", ".pytest_cache", "runs", "cache", "calibration"}
+                "__pycache__", ".sandbox", ".skillrepos", ".pytest_cache", "runs", "cache", "calibration", "workspaces"}
 SUFFIXES = {".md", ".py", ".sh", ".ps1", ".cmd", ".bat", ".txt", ".json", ".yaml", ".yml", ".toml"}
 RUBRICS = ("brevity", "redundancy", "fallback", "precheck", "contract", "deps", "pii")
 

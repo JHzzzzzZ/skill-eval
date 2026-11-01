@@ -296,8 +296,8 @@
           <div class="upload-state" id="uploadState">未上传</div>
         </div>
         <div class="field" style="margin-top:14px">
-          <label for="skill">本地 skill 路径 <span class="hint">（含 SKILL.md）</span></label>
-          <input id="skill" placeholder="C:\path\to\skill 或 /path/to/skill">
+          <label for="workspace">工作区 <span class="hint">（同一内容自动复用）</span></label>
+          <select id="workspace"><option value="">上传 zip 或选择已有工作区</option></select>
         </div>
       </section>
 
@@ -467,6 +467,7 @@ const TIER_LABELS = {T0:"基础检查", T1:"文档语义评审", [K2A]:"触发�
 const WEIGHT = {T0:5,T1:25,sandbox:30,[K2A]:40,[K2B]:50,T3:80,report:100};
 const STAGE_ORDER = ["T0","T1","sandbox",K2A,K2B,"T3","report"];
 let es = null, runId = null, report = null, stageStarted = {};
+let currentSkill = "", currentWorkspace = "";
 
 function label(name){ return STAGE_LABELS[name] || name; }
 function tierValue(){ const el = document.querySelector('input[name="tier"]:checked'); return el ? el.value : "t2a"; }
@@ -548,6 +549,27 @@ fetch("/api/llm/config").then(r=>r.json()).then(c=>{
     : "服务端未配置 LLM；填端点/模型/key，或继续用 pi";
 }).catch(()=>{ $("llmState").textContent = "读取服务端配置失败"; });
 
+// workspaces
+async function loadWorkspaces(selected){
+  try{
+    const r = await fetch("/api/workspaces");
+    const d = await r.json();
+    const sel = $("workspace");
+    sel.innerHTML = '<option value="">上传 zip 或选择已有工作区</option>' +
+      (d.workspaces||[]).map(w=>`<option value="${w.id}" data-skill="${w.skill}" data-evalset="${w.evalset||""}" data-name="${w.name||w.id}">${w.name||w.id} · ${w.id.slice(-8)}</option>`).join("");
+    if(selected) sel.value = selected;
+  }catch(e){ /* 首次启动/服务未就绪时静默 */ }
+}
+$("workspace").onchange = () => {
+  const opt = $("workspace").selectedOptions[0];
+  if(!opt || !opt.value){ currentSkill = ""; currentWorkspace = ""; return; }
+  currentSkill = opt.dataset.skill || "";
+  currentWorkspace = opt.value;
+  $("evalOut").value = opt.dataset.evalset || "";
+  $("uploadState").textContent = "工作区：" + (opt.dataset.name || opt.value);
+};
+loadWorkspaces();
+
 // upload
 const drop = $("dropzone");
 function uploadFile(file){
@@ -570,8 +592,11 @@ function uploadFile(file){
       toast(msg, "err");
       return;
     }
-    $("skill").value = d.skill;
-    $("uploadState").textContent = "已解压：" + d.skill;
+    currentSkill = d.skill;
+    currentWorkspace = d.workspace_id || "";
+    if(d.evalset) $("evalOut").value = d.evalset;
+    $("uploadState").textContent = "工作区：" + (d.workspace || d.workspace_id || "已创建");
+    loadWorkspaces(d.workspace_id);
     toast("压缩包已解压", "ok");
   };
   xhr.onerror = () => {
@@ -600,8 +625,8 @@ $("testLlm").onclick = async () => {
 
 // eval set
 $("genEval").onclick = async () => {
-  const skill = $("skill").value.trim(), out = $("evalOut").value.trim();
-  if(!skill || !out){ toast("先填 skill 路径与评测集目录", "err"); return; }
+  const skill = currentSkill, out = $("evalOut").value.trim();
+  if(!skill || !out){ toast("先上传或选择工作区，并确认评测集目录", "err"); return; }
   $("evalMsg").textContent = "生成中（会调用 LLM，可能较慢）…";
   try{
     const r = await fetch("/api/evalset/generate", {method:"POST", headers:{"Content-Type":"application/json"},
@@ -651,8 +676,8 @@ $("submitReview").onclick = async () => {
 
 // run
 $("run").onclick = async () => {
-  const skill = $("skill").value.trim();
-  if(!skill){ toast("先上传压缩包或填 skill 路径", "err"); return; }
+  const skill = currentSkill;
+  if(!skill){ toast("先上传压缩包或选择工作区", "err"); return; }
   setBusy(true); $("state").textContent = "运行中…"; $("log").textContent = "";
   runId = null; $("stages").innerHTML = ""; stageStarted = {}; setProgress(0); $("result").style.display = "none";
   const llm = {protocol:$("provider").value, base_url:$("base_url").value.trim(),

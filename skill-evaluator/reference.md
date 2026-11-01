@@ -128,6 +128,10 @@ T1 评审走 `llm` 接口层（ADR-0034）：模型 `--model` > `llm.model` > `S
 
 `scripts/harness.py` 是执行载体适配层：接口 `run_case(prompt, cwd, ...)`，当前只实现 `pi`（内部调用 `trace_run.py`，逐 case 一次 `pi --mode json --no-session`），触发评测带 `--early-exit`。`code_agent` 留接口不实现，前端只显示 `harness.available` 里的项。**不使用 subagent 机制**。
 
+## 工作区
+
+上传后按 `skill_sha256` 落到稳定工作区 `web/workspaces/<slug>-<hash8>/skill/`；同一内容重复上传复用同一路径，不再每次生成新 upload 目录。`workspace.json` 记录名称、hash、来源、创建/最近使用时间。UI 的工作区下拉可选择已有工作区，上传后自动填 `evalsets/<name>/v<N>`（已有取最新版本，否则 v1）；`web/workspaces/` 是本地态，gitignore。
+
 ## 前端与 runner（ADR-0036）
 
 `scripts/runner.py` 是确定性编排：按 `--tier` 调 T0→T1→T2A→T2B→T3，最后 `report.py`；进度以 NDJSON 输出，`--results` 指定产物目录，`--real-input` 给真实输入对比。
