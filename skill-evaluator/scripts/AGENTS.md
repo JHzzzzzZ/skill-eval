@@ -15,16 +15,16 @@ Generated: 2026-09-22T13:43:08.578Z
 | `harness.py` | 75 | 无 CLI；`run_case/available` | 执行载体适配（当前 pi） |
 | `judge_run.py` | 172 | `--metric --skill --out [--backend]` | T1 评审执行器 |
 | `evalset_gen.py` | 115 | `--skill --out [--count]` | 生成 T2A 评测集草稿 |
-| `runner.py` | 781 | `--skill --tier [--evalset] [--real-input]` | 确定性编排 + NDJSON 进度 |
+| `runner.py` | 818 | `--skill --tier [--evalset] [--real-input]` | 确定性编排 + NDJSON 进度 |
 | `report.py` | 1442 | `<results目录> [--html] [--evalset <vN>] [--skill <dir>] [--tier <t>]` | 汇总 16 条 + 优化建议 + 报告页 |
 | `static_check.py` | 714 | `<skill目录> [--exclude <p>]... [--no-default-excludes]` | #1/#3/#4 六组 + 可移植性闸门 + #12 依赖全面性 |
 | `trace_run.py` | 474 | `<沙箱目录> <prompt> [--skill\|--no-skill] [--early-exit] [--model] [--events] [--out] [--build-only]` | #10/#13/#11/#12/#15/#16 数据源 |
 | `evalset_check.py` | 180 | `<evalset目录> --skill <skill目录> [--out]` | #10 可信度（触发集质量） |
 | `evalset_count.py` | 111 | `<evalsets/<name>/vN> [--min*] [--out]` | #10 冻结前条数闸门 |
 | `model_robust.py` | 173 | `<results目录> [--out]` | #15 跨模型 |
-| `compare.py` | 151 | `--expect <f> --actual <f> [--aggregate <dir>] [--model] [--events] [--out] [--build-only]` | #14 |
+| `compare.py` | 188 | `--expect <f> --actual <f> [--aggregate <dir>] [--model] [--events] [--out] [--build-only]` | #14 |
 | `trigger_judge.py` | 101 | `--skill <SKILL.md> --trace <trace.json> [--model] [--events] [--out] [--build-only]` | #10 触发判定 |
-| `score.py` | 106 | `<results目录>` | #10/#13/#11 |
+| `score.py` | 143 | `<results目录>` | #10/#13/#11 |
 | `judge_runner.py` | 67 | `--validate <judge输出.json>` | rubric 契约门禁 |
 | `idem.py` | 41 | `<trace1.json> <trace2.json>` | #16 |
 | `pairwise.py` | 104 | `--prompt --a --b [--out] [--build-only]` | T2B 无标签 A/B 盲评 |

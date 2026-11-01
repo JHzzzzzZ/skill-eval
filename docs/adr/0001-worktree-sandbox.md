@@ -1,3 +1,5 @@
+> 注：当前实现已改为 `results/sandbox` 普通副本 + git 初始化；本文保留历史决策。
+
 # 沙箱用 git worktree，定义写在 reference.md 可替换
 
 评估被测 skill 需要隔离环境。决定：用 git worktree 作为沙箱，"沙箱"的精确定义只写在 `skill-evaluator/reference.md`，SKILL.md 只引用不内联。

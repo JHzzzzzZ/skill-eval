@@ -2,14 +2,24 @@
 
 Generated: 2026-09-22T13:43:08.578Z
 Snapshot: 2026-11-01 · Branch: feat/eval-v2
-最近一次在分支 `feat/report-advice-and-pii` 上做的更新（ADR-0029/0030/0031）：
-计数与结构已重算（340 tests / 40 ADR / 16 个 Python CLI + 5 个共享模块 + 8 份 rubric）。v2 设计与后续可用性改动（ADR-0032–0040）已落文档；工作区、缓存、触发上限、真实输入多 case 已实现。
+当前分支 `feat/eval-v2`。计数与结构已重算（340 tests / 40 ADR / 16 个 Python CLI + 5 个共享模块 + 8 份 rubric）。v2 与后续可用性改动（ADR-0032–0040）已落文档；工作区、缓存、触发上限、真实输入多 case 已实现。
+
+## IMPLEMENTATION WORKFLOW
+
+所有实现任务固定四步，不得跳步：
+
+1. **详细设计**：目标、数据模型、API/UI、边界、缓存/中断语义、验收标准。
+2. **实现方案**：改哪些文件/函数、兼容性、测试点、风险。
+3. **派子 agent 实现**：给一个明确写入范围；子 agent 不提交，不碰范围外文件。
+4. **父 agent 验收**：先看 diff，再跑单测、全量测试、`static_check.py`、必要冒烟；通过后才提交。
+
+设计或方案未写清时，不进入实现。多个待办先列清单，逐项推进，不写一个卡一个。
 
 ## OVERVIEW
 
 `skill-evaluator` —— 一个评估其他 skill 的 pi skill 包，按 16 条指标产出 `report.json` + `report.md`。不是服务，不是 Python 库：复制到 skills 目录，指向任意 skill 包即可跑。
 
-仓库 ≠ 产品。**230 个文件里只有 53 个被 git 跟踪**，其余全是 `evalsets/**` 下的评测集与历史运行产物，被 `.gitignore` 排除。
+仓库 ≠ 产品。大量文件是本地评测集、运行产物和缓存（`evalsets/**`、`web/runs/`、`.skill-eval-cache/`），被 `.gitignore` 排除；git 只跟踪产品、测试与文档。
 
 ## STRUCTURE
 
@@ -91,7 +101,7 @@ evalsets/               # ⚠ 被 gitignore：评测集 + 运行产物，本地�
 跨目录生效的硬禁令。每条都有仓库实证：
 
 - **不 `git add .`**：`.gitignore:3` 的 `evalsets/` 匹配任意层级；`uploads/`、`prompt.txt`、`scratch/`、`wt-*/` 同为临时/敏感产物。误提交即把评测集与上传物发布出去。
-- **不重新生成已冻结的评测集**：冻结集跨版本复用是历史报告可比的前提（ADR-0002）。自动生成的集未经人工确认不得写 `meta.json`，且不得进入第 5 步（`SKILL.md:22`）。
+- **不重新生成已冻结的评测集**：冻结集跨版本复用是历史报告可比的前提（ADR-0002）。自动生成的集未经人工确认不得写 `meta.json`，且不得进入第 5 步（`SKILL.md § 流程 第 4 步`）。
 - **不照抄 description 写 `should` prompt**（ADR-0002/0011），否则 precision 虚高。
 - **不用 subagent 或 self-simulation 代替 pi CLI 子进程**跑沙箱（ADR-0007 明写"禁止 self-simulation"）。
 - **不写死机器路径**，包括解释器路径（统一 `sys.executable`）——命中即触发可移植性闸门整体 fail（ADR-0008/0009）。

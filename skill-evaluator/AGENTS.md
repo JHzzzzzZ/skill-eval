@@ -6,7 +6,7 @@ Generated: 2026-11-01（v2 更新：ADR-0032–0040）
 
 评估器 skill 包本体：`SKILL.md`（入口/路由）+ `reference.md`（契约全集）+ `config.yaml`（阈值）+
 `scripts/`（CLI + runner + llm/harness）+ `judges/`（rubric）+ `web/`（本地前端）。
-评估一个 skill 包，产出 16 条指标（ADR-0032）的 `report.json` / `report.md` / `report.html`。
+评估一个 skill 包，产出 16 条指标（ADR-0032）的 `report.json` / `report.md` / `report.html`。实现流程见根 `AGENTS.md § IMPLEMENTATION WORKFLOW`。
 
 ## WHERE TO LOOK
 
