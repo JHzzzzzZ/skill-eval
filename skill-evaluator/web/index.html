@@ -194,9 +194,20 @@
   .badge.fail{background:var(--fail-soft);color:var(--fail)}
   .badge.skipped{background:var(--skip-soft);color:var(--skip)}
   .metric-note{color:var(--muted);max-width:640px}
-  .verdict-select{width:auto;min-width:88px;padding:5px 8px;border-radius:8px;font-size:12px;font-weight:650;background:var(--card-soft)}
-  .verdict-select.pass{color:var(--pass)} .verdict-select.warn{color:var(--warn)}
-  .verdict-select.fail{color:var(--fail)} .verdict-select.skipped{color:var(--skip)}
+  #result .table-wrap{overflow:visible}
+  .verdict-picker{position:relative;display:inline-block;min-width:96px}
+  .verdict-btn{display:inline-flex;align-items:center;justify-content:space-between;gap:8px;width:100%;padding:5px 8px;border-radius:8px;border:1px solid var(--line);font-size:12px;font-weight:650;cursor:pointer;background:var(--card-soft);color:var(--ink)}
+  .verdict-btn.pass{color:var(--pass);background:var(--pass-soft);border-color:color-mix(in srgb,var(--pass) 30%,var(--line))}
+  .verdict-btn.warn{color:var(--warn);background:var(--warn-soft);border-color:color-mix(in srgb,var(--warn) 30%,var(--line))}
+  .verdict-btn.fail{color:var(--fail);background:var(--fail-soft);border-color:color-mix(in srgb,var(--fail) 30%,var(--line))}
+  .verdict-btn.skipped{color:var(--skip);background:var(--skip-soft);border-color:color-mix(in srgb,var(--skip) 30%,var(--line))}
+  .verdict-btn .caret{font-size:10px;color:var(--muted)}
+  .verdict-menu{display:none;position:absolute;right:0;top:calc(100% + 5px);z-index:20;min-width:110px;padding:4px;border:1px solid var(--line);border-radius:10px;background:var(--card);box-shadow:var(--shadow)}
+  .verdict-picker.open .verdict-menu{display:block}
+  .verdict-option{display:block;width:100%;text-align:left;padding:6px 9px;border:0;border-radius:7px;background:transparent;font-size:12px;font-weight:650;cursor:pointer}
+  .verdict-option:hover{background:var(--card-soft)}
+  .verdict-option.pass{color:var(--pass)} .verdict-option.warn{color:var(--warn)}
+  .verdict-option.fail{color:var(--fail)} .verdict-option.skipped{color:var(--skip)}
   .override-box{display:flex;gap:8px;align-items:center;margin-top:14px;flex-wrap:wrap}
   .override-box input{flex:1;min-width:240px}
   .eval-table{max-height:360px;overflow:auto;border:1px solid var(--line);border-radius:12px;margin-top:10px}
@@ -741,28 +752,57 @@ async function showReport(id){
       rows += `<tr class="group"><td colspan="3">${TIER_LABELS[t]||t}</td></tr>`;
       for(const [k,v] of groups[t]){
         const opts = ["pass","warn","fail","skipped"].map(o =>
-          `<option value="${o}" ${o===v.verdict?"selected":""}>${o}</option>`).join("");
+          `<button type="button" class="verdict-option ${o}" data-value="${o}">${o}</button>`).join("");
         rows += `<tr><td><code>${k}</code></td>
-          <td><select class="verdict-select ${v.verdict}" data-metric="${k}" data-original="${v.verdict}">${opts}</select></td>
+          <td><div class="verdict-picker" data-metric="${k}" data-original="${v.verdict}" data-value="${v.verdict}">
+            <button type="button" class="verdict-btn ${v.verdict}" aria-haspopup="listbox" aria-expanded="false">${v.verdict} <span class="caret">▾</span></button>
+            <div class="verdict-menu" role="listbox">${opts}</div>
+          </div></td>
           <td class="metric-note">${publicText(v.note||"").replace(/</g,"&lt;")}</td></tr>`;
       }
     }
     $("metrics").innerHTML = rows + "</tbody>";
-    document.querySelectorAll(".verdict-select").forEach(sel=>{
-      sel.addEventListener("change", ()=>{ sel.className = "verdict-select " + sel.value; syncOverrideState(); });
+    document.querySelectorAll(".verdict-picker").forEach(picker=>{
+      const btn = picker.querySelector(".verdict-btn");
+      btn.addEventListener("click", (e)=>{
+        e.stopPropagation();
+        const open = picker.classList.contains("open");
+        document.querySelectorAll(".verdict-picker.open").forEach(p=>{
+          p.classList.remove("open");
+          p.querySelector(".verdict-btn").setAttribute("aria-expanded","false");
+        });
+        if(!open){ picker.classList.add("open"); btn.setAttribute("aria-expanded","true"); }
+      });
+      picker.querySelectorAll(".verdict-option").forEach(opt=>{
+        opt.addEventListener("click", (e)=>{
+          e.stopPropagation();
+          picker.dataset.value = opt.dataset.value;
+          btn.className = "verdict-btn " + opt.dataset.value;
+          btn.innerHTML = opt.dataset.value + ' <span class="caret">▾</span>';
+          picker.classList.remove("open");
+          btn.setAttribute("aria-expanded","false");
+          syncOverrideState();
+        });
+      });
     });
     syncOverrideState();
   }catch(e){ toast("读报告失败："+e.message, "err"); }
 }
+document.addEventListener("click", ()=>{
+  document.querySelectorAll(".verdict-picker.open").forEach(p=>{
+    p.classList.remove("open");
+    p.querySelector(".verdict-btn").setAttribute("aria-expanded","false");
+  });
+});
 function syncOverrideState(){
-  const changed = [...document.querySelectorAll(".verdict-select")].filter(s=>s.value !== s.dataset.original);
+  const changed = [...document.querySelectorAll(".verdict-picker")].filter(p=>p.dataset.value !== p.dataset.original);
   $("ovBtn").textContent = changed.length ? `应用 ${changed.length} 项调整` : "应用调整";
 }
 $("ovBtn").onclick = async () => {
   if(!runId){ toast("先跑一次评估", "err"); return; }
-  const changes = [...document.querySelectorAll(".verdict-select")]
-    .filter(s=>s.value !== s.dataset.original)
-    .map(s=>({metric:s.dataset.metric, to:s.value}));
+  const changes = [...document.querySelectorAll(".verdict-picker")]
+    .filter(p=>p.dataset.value !== p.dataset.original)
+    .map(p=>({metric:p.dataset.metric, to:p.dataset.value}));
   if(!changes.length){ toast("没有修改任何结果", "err"); return; }
   const reason = $("ovReason").value.trim();
   if(!reason){ toast("必须写调整理由", "err"); return; }
