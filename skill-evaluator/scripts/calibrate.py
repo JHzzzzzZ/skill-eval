@@ -102,12 +102,13 @@ def main() -> int:
         metric = None; cases = None; samples = 3; backend = "auto"
         model = None; base_url = None; api_key = None; protocol = None
         out = None; min_agreement = 0.8; min_accuracy = 0.9; timeout = 300; workers = 4
+        retries = 1
     i = 0
     while i < len(args):
         key = args[i]
         if key in ("--metric", "--cases", "--samples", "--backend", "--model",
                    "--base-url", "--api-key", "--protocol", "--out", "--min-agreement",
-                   "--min-accuracy", "--timeout", "--workers"):
+                   "--min-accuracy", "--timeout", "--workers", "--retries"):
             if i + 1 >= len(args):
                 print(f"{key} 缺值", file=sys.stderr); return 2
             name = key[2:].replace("-", "_")
@@ -116,13 +117,14 @@ def main() -> int:
             print(f"未知参数: {key}", file=sys.stderr); return 2
     if not A.metric:
         print("usage: calibrate.py --metric <name> [--cases <dir>] [--samples 3] "
-              "[--workers 4] [--backend auto|llm|pi] [--out <json>]", file=sys.stderr)
+              "[--workers 4] [--retries 1] [--backend auto|llm|pi] [--out <json>]", file=sys.stderr)
         return 2
     A.samples = max(1, int(A.samples))
     A.min_agreement = float(A.min_agreement)
     A.min_accuracy = float(A.min_accuracy)
     A.timeout = int(A.timeout)
     A.workers = max(1, int(A.workers))
+    A.retries = max(0, int(A.retries))
     base = Path(A.cases) if A.cases else DEFAULT_CASES / A.metric
     if not base.is_dir():
         print(f"校准集不存在: {base}", file=sys.stderr)
@@ -141,13 +143,16 @@ def main() -> int:
     errors = []
 
     def run_one(case, skill, sample):
-        try:
-            with tempfile.TemporaryDirectory() as td:
-                result = _run_judge(A.metric, skill, A, Path(td) / "judge.json")
-            got = {item.get("name"): item.get("pass") for item in result.get("items", [])}
-            return case.name, sample, got, None
-        except Exception as exc:
-            return case.name, sample, None, str(exc)
+        last = None
+        for attempt in range(A.retries + 1):
+            try:
+                with tempfile.TemporaryDirectory() as td:
+                    result = _run_judge(A.metric, skill, A, Path(td) / "judge.json")
+                got = {item.get("name"): item.get("pass") for item in result.get("items", [])}
+                return case.name, sample, got, None
+            except Exception as exc:
+                last = str(exc)
+        return case.name, sample, None, last
 
     with ThreadPoolExecutor(max_workers=A.workers) as pool:
         futures = [pool.submit(run_one, case, skill, sample)
@@ -169,7 +174,7 @@ def main() -> int:
                     "case_count": len(cases), "samples": A.samples,
                     "min_agreement": A.min_agreement, "min_accuracy": A.min_accuracy,
                     "backend": A.backend, "model": A.model or "",
-                    "workers": A.workers,
+                    "workers": A.workers, "retries": A.retries,
                     "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
                     "errors": errors})
     failed = [name for name, item in summary["items"].items()
@@ -184,7 +189,7 @@ def main() -> int:
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    print(f"校准 {A.metric}: {len(cases)} cases × {A.samples} samples, workers={A.workers}")
+    print(f"校准 {A.metric}: {len(cases)} cases × {A.samples} samples, workers={A.workers}, retries={A.retries}")
     for name, item in summary["items"].items():
         flag = "✓" if item["agreement"] >= A.min_agreement else "✗"
         print(f"  {flag} {name}: agreement={item['agreement']:.2f} "
