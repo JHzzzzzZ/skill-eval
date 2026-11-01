@@ -179,7 +179,7 @@ T1 评审走 `llm` 接口层（ADR-0034）：模型 `--model` > `llm.model` > `S
 
 ## Judge 校准
 
-`calibration/<metric>/<case>/skill/` 放最小被测包，`calibration/<metric>/<case>/expected.json` 放人工逐项标注（`{"items": {"检查点名": true/false}}`）。`scripts/calibrate.py --metric <name> --samples 3` 对同一 case 多次评审，算逐项一致率与标注准确率；任一项低于 `--min-agreement`（默认 0.8）退出码 1，结果写 `calibration/results/<metric>.json`（gitignore）。校准集是 rubric 的门禁，不是评估结论；当前种子集 brevity/precheck 各 8 例，目标扩到每项 20–30 例（10 pass / 10 fail / 5 边界）。
+`calibration/<metric>/<case>/skill/` 放最小被测包，`calibration/<metric>/<case>/expected.json` 放人工逐项标注（`{"items": {"检查点名": true/false}}`）。`scripts/calibrate.py --metric <name> --samples 3` 对同一 case 多次评审，算逐项一致率与标注准确率；任一项低于 `--min-agreement`（默认 0.8）或 `--min-accuracy`（默认 0.9）退出码 1，结果写 `calibration/results/<metric>.json`（gitignore）。校准集是 rubric 的门禁，不是评估结论；当前种子集 brevity/precheck 各 8 例，目标扩到每项 20–30 例（10 pass / 10 fail / 5 边界）。
 
 ## LLM 评审
 

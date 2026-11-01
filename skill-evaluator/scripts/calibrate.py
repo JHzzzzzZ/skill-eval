@@ -90,13 +90,13 @@ def main() -> int:
     class A:
         metric = None; cases = None; samples = 3; backend = "auto"
         model = None; base_url = None; api_key = None; protocol = None
-        out = None; min_agreement = 0.8; timeout = 300
+        out = None; min_agreement = 0.8; min_accuracy = 0.9; timeout = 300
     i = 0
     while i < len(args):
         key = args[i]
         if key in ("--metric", "--cases", "--samples", "--backend", "--model",
                    "--base-url", "--api-key", "--protocol", "--out", "--min-agreement",
-                   "--timeout"):
+                   "--min-accuracy", "--timeout"):
             if i + 1 >= len(args):
                 print(f"{key} 缺值", file=sys.stderr); return 2
             name = key[2:].replace("-", "_")
@@ -109,6 +109,7 @@ def main() -> int:
         return 2
     A.samples = max(1, int(A.samples))
     A.min_agreement = float(A.min_agreement)
+    A.min_accuracy = float(A.min_accuracy)
     A.timeout = int(A.timeout)
     base = Path(A.cases) if A.cases else DEFAULT_CASES / A.metric
     if not base.is_dir():
@@ -141,12 +142,17 @@ def main() -> int:
     summary = summarize(case_results, A.samples)
     summary.update({"metric": A.metric, "cases_dir": str(base),
                     "case_count": len(cases), "samples": A.samples,
-                    "min_agreement": A.min_agreement,
+                    "min_agreement": A.min_agreement, "min_accuracy": A.min_accuracy,
+                    "backend": A.backend, "model": A.model or "",
+                    "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
                     "errors": errors})
     failed = [name for name, item in summary["items"].items()
               if item["agreement"] < A.min_agreement]
+    failed_acc = [name for name, item in summary["items"].items()
+                  if item["accuracy"] < A.min_accuracy]
     summary["failed_items"] = failed
-    summary["passed"] = not failed and not errors
+    summary["failed_accuracy_items"] = failed_acc
+    summary["passed"] = not failed and not failed_acc and not errors
 
     out = Path(A.out) if A.out else ROOT / "calibration" / "results" / f"{A.metric}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -156,9 +162,10 @@ def main() -> int:
     for name, item in summary["items"].items():
         flag = "✓" if item["agreement"] >= A.min_agreement else "✗"
         print(f"  {flag} {name}: agreement={item['agreement']:.2f} "
-              f"accuracy={item['accuracy']} valid={item['valid']}/{A.samples}")
+              f"accuracy={item['accuracy']:.2f} valid={item['valid']}/{A.samples}")
     print(f"  overall agreement={summary['overall_agreement']:.2f} "
-          f"accuracy={summary['overall_accuracy']:.2f}")
+          f"accuracy={summary['overall_accuracy']:.2f} "
+          f"(thresholds {A.min_agreement:.2f}/{A.min_accuracy:.2f})")
     if errors:
         print(f"  errors={len(errors)}（首条：{errors[0]['error']}）")
     print(f"  -> {out}")

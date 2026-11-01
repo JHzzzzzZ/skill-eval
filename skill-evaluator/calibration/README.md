@@ -27,8 +27,9 @@ python scripts/calibrate.py --metric precheck --samples 3
 
 - `agreement`：同一 case 多次评审，逐项多数票的一致比例
 - `accuracy`：多数票是否等于 `expected.json`
-- 任一项 `agreement < --min-agreement`（默认 0.8）→ 退出码 1
+- 任一项 `agreement < --min-agreement`（默认 0.8）或 `accuracy < --min-accuracy`（默认 0.9）→ 退出码 1
 - 当前是种子集（brevity 8 例、precheck 8 例），目标扩到每项 20–30 例：10 个明确 pass、10 个明确 fail、5 个边界
+- 种子基线（8 cases × 3，2026-11-01）：brevity agreement 0.98 / accuracy 1.00；precheck 0.98 / 1.00。样本少且是人工构造，**只用于回归，不作为上线结论**。
 
 ## 注意
 
