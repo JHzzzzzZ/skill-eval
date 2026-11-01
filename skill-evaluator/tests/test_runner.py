@@ -3,6 +3,11 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+import pytest
+
+import sys
+sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
+from runner import RunnerError, _real_cases  # noqa: E402
 
 SCRIPT = Path(__file__).parent.parent / "scripts" / "runner.py"
 
@@ -159,3 +164,30 @@ def test_missing_skill_is_error(tmp_path):
                         "--tier", "t0", "--dry-run"],
                        capture_output=True, text=True, encoding="utf-8", errors="replace")
     assert r.returncode == 2
+
+
+def test_real_cases_jsonl_assigns_ids_and_optional_fields(tmp_path):
+    f = tmp_path / "real.jsonl"
+    f.write_text(
+        '{"prompt":"p1","label":"legacy"}\n'
+        '{"prompt":"p2","note":"备注","expect":"验收"}\n',
+        encoding="utf-8")
+    cases = _real_cases(f)
+    assert [c["id"] for c in cases] == ["c001", "c002"]
+    assert cases[0]["note"] == "legacy"
+    assert cases[1]["expect"] == "验收"
+    assert cases[1]["prompt"] == "p2"
+
+
+def test_real_cases_prompt_is_required(tmp_path):
+    f = tmp_path / "real.jsonl"
+    f.write_text('{"note":"只有备注"}\n', encoding="utf-8")
+    with pytest.raises(RunnerError, match="缺 prompt"):
+        _real_cases(f)
+
+
+def test_real_cases_limit_20(tmp_path):
+    f = tmp_path / "real.jsonl"
+    f.write_text("\n".join('{"prompt":"p"}' for _ in range(21)), encoding="utf-8")
+    with pytest.raises(RunnerError, match="最多 20"):
+        _real_cases(f)

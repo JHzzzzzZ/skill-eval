@@ -146,6 +146,14 @@
   details.advanced summary:after{content:"+";font-size:16px;color:var(--muted)}
   details.advanced[open] summary:after{content:"–"}
   details.advanced .adv-body{padding:0 0 14px;display:grid;gap:12px}
+  .real-list{display:grid;gap:10px}
+  .real-item{border:1px solid var(--line);border-radius:10px;padding:10px;background:var(--card-soft)}
+  .real-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:7px}
+  .real-head b{font-size:12px;color:var(--ink-2)}
+  .real-item textarea{min-height:64px}
+  .real-extra{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
+  .real-extra input{font-size:12px;padding:8px 10px}
+  .real-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px}
   .inline-note{font-size:11.5px;color:var(--muted);line-height:1.45}
   .inline-note code{font-family:var(--mono);font-size:11px;background:var(--card);padding:1px 5px;border-radius:5px;border:1px solid var(--line)}
 
@@ -268,7 +276,7 @@
     <div>
       <div class="eyebrow">Evaluation workspace</div>
       <h2>先看结构，再看语义，最后跑真实任务。</h2>
-      <p>上传 zip 或指向本地目录，选择评估深度。页面会实时显示进度；结果按评估阶段分组，失败项可人工复核。</p>
+      <p>上传 zip 或选择已有工作区，选择评估深度。页面会实时显示进度；结果按评估阶段分组，失败项可人工复核。</p>
     </div>
     <div class="hintbox">
       <strong>外部使用者</strong>
@@ -282,8 +290,8 @@
         <div class="card-head">
           <div>
             <div class="eyebrow">01 · 被测对象</div>
-            <h3>上传或指定 skill</h3>
-            <p>zip 会安全解压到本地工作目录；本地路径优先用于已检出的仓库。</p>
+            <h3>上传或选择 skill</h3>
+            <p>zip 会安全解压到工作区；同一内容重复上传会复用同一路径。</p>
           </div>
         </div>
         <div class="dropzone" id="dropzone">
@@ -377,10 +385,16 @@
           <summary>真实业务输入 <span class="muted" style="font-weight:400">（可选；只影响“真实输入对比”）</span></summary>
           <div class="adv-body">
             <div class="field">
-              <label for="real">一例真实输入</label>
-              <textarea id="real" placeholder='纯文本，或 {"prompt":"...","label":"..."}。留空则只跳过真实输入对比，其他检查继续。'></textarea>
+              <label>真实输入 <span class="hint">（每条只需填 prompt；可加可减）</span></label>
+              <div class="real-list" id="realList"></div>
+              <div class="real-actions">
+                <button class="btn btn-ghost btn-sm" id="addReal" type="button">添加一条</button>
+                <button class="btn btn-ghost btn-sm" id="importReal" type="button">导入 .jsonl</button>
+                <input id="realFile" type="file" accept=".jsonl,.json,application/json" hidden>
+                <span class="inline-note" id="realSummary">0 条</span>
+              </div>
             </div>
-            <div class="inline-note">会存到本地 <code>uploads/</code>，报告只回显哈希与标签，不回显正文。</div>
+            <div class="inline-note">只有 prompt 必填；验收标准用于匹配率，备注只做显示。会存到本地 <code>uploads/</code>，报告不回显正文。</div>
           </div>
         </details>
 
@@ -678,10 +692,91 @@ $("submitReview").onclick = async () => {
   }catch(e){ $("evalMsg").textContent = "✗ " + e.message; toast(e.message, "err"); }
 };
 
+// real input rows
+function realRows(){
+  return [...document.querySelectorAll("#realList .real-item")];
+}
+function addRealRow(data={}){
+  const item = document.createElement("div");
+  item.className = "real-item";
+  item.innerHTML = '<div class="real-head"><b></b><button class="btn btn-ghost btn-sm" type="button">删除</button></div>' +
+    '<textarea class="real-prompt" placeholder="必填：真实输入 prompt"></textarea>' +
+    '<div class="real-extra"><input class="real-expect" placeholder="选填：验收标准（用于匹配率）">' +
+    '<input class="real-note" placeholder="选填：备注（只做显示）"></div>';
+  item.querySelector(".real-prompt").value = data.prompt || "";
+  item.querySelector(".real-expect").value = data.expect || "";
+  item.querySelector(".real-note").value = data.note || "";
+  item.querySelector("button").onclick = () => { item.remove(); if(!realRows().length) addRealRow(); refreshRealRows(); };
+  item.querySelectorAll("textarea,input").forEach(el => el.addEventListener("input", refreshRealRows));
+  $("realList").appendChild(item);
+  refreshRealRows();
+}
+function refreshRealRows(){
+  const rows = realRows();
+  rows.forEach((row, i) => { row.querySelector(".real-head b").textContent = "第 " + (i+1) + " 条"; });
+  const filled = rows.filter(r => r.querySelector(".real-prompt").value.trim());
+  const withExpect = filled.filter(r => r.querySelector(".real-expect").value.trim()).length;
+  $("realSummary").textContent = filled.length
+    ? `共 ${filled.length} 条 · 有验收标准 ${withExpect} · 无验收标准 ${filled.length - withExpect}`
+    : "0 条";
+}
+function realPayload(){
+  const out = [];
+  realRows().forEach((row, i) => {
+    const prompt = row.querySelector(".real-prompt").value.trim();
+    const expect = row.querySelector(".real-expect").value.trim();
+    const note = row.querySelector(".real-note").value.trim();
+    if(!prompt && (expect || note)) throw new Error(`第 ${i+1} 条填了验收标准或备注，但缺 prompt`);
+    if(prompt) out.push({prompt, expect, note});
+  });
+  if(out.length > 20) throw new Error("真实输入最多 20 条");
+  return out;
+}
+$("addReal").onclick = () => addRealRow();
+$("importReal").onclick = () => $("realFile").click();
+$("realFile").onchange = async () => {
+  const file = $("realFile").files[0];
+  if(!file) return;
+  try{
+    const text = await file.text();
+    let rows = null;
+    try{
+      const data = JSON.parse(text);
+      if(Array.isArray(data)) rows = data;
+      else if(data && typeof data === "object") rows = [data];
+    }catch(e){ /* JSONL */ }
+    if(!rows){
+      rows = [];
+      for(const [i, line] of text.split(/\r?\n/).entries()){
+        if(!line.trim()) continue;
+        try{ rows.push(JSON.parse(line)); }
+        catch(e){ throw new Error(`第 ${i+1} 行不是合法 JSON`); }
+      }
+    }
+    if(!rows.length) throw new Error("文件里没有输入");
+    if(rows.length > 20) throw new Error("真实输入最多 20 条");
+    const clean = rows.map((row, i) => {
+      if(!row || typeof row !== "object") throw new Error(`第 ${i+1} 条不是对象`);
+      const prompt = String(row.prompt || "").trim();
+      if(!prompt) throw new Error(`第 ${i+1} 条缺 prompt`);
+      return {prompt, expect:String(row.expect || "").trim(),
+              note:String(row.note || row.label || "").trim()};
+    });
+    $("realList").innerHTML = "";
+    clean.forEach(addRealRow);
+    refreshRealRows();
+    toast(`已导入 ${clean.length} 条`, "ok");
+  }catch(e){ toast(e.message, "err"); }
+  finally{ $("realFile").value = ""; }
+};
+addRealRow();
+
 // run
 $("run").onclick = async () => {
   const skill = currentSkill;
   if(!skill){ toast("先上传压缩包或选择工作区", "err"); return; }
+  let realCases = [];
+  try{ realCases = realPayload(); }catch(e){ toast(e.message, "err"); return; }
   setBusy(true); $("state").textContent = "运行中…"; $("log").textContent = "";
   runId = null; $("stages").innerHTML = ""; stageStarted = {}; setProgress(0); $("result").style.display = "none";
   const llm = {protocol:$("provider").value, base_url:$("base_url").value.trim(),
@@ -690,7 +785,7 @@ $("run").onclick = async () => {
     const r = await fetch("/api/run", {method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify({skill, tier:tierValue(), harness:$("harness").value,
         model:llm.model, evalset:$("evalOut").value.trim(), backend:$("backend").value,
-        real_input:$("real").value.trim(), llm,
+        real_cases: realCases, llm,
         rerun_t0: $("rerunT0").checked, rerun_t1: $("rerunT1").checked,
         rerun_t2a: $("rerunTrigger").checked, rerun_t2b: $("rerunReal").checked,
         rerun_t3: $("rerunFull").checked})});
@@ -731,18 +826,22 @@ function listen(id){
         const started = stageStarted[ev.name] || performance.now();
         const dur = fmtDur(ev.elapsed_s != null ? ev.elapsed_s : (performance.now()-started)/1000);
         const verb = ev.cached ? "复用" : "完成";
-        markStep(ev.name, "ok", verb + (!ev.cached && dur? " · "+dur : ""));
+        const detail = ev.cases != null ? ` · ${ev.valid||0}/${ev.cases} 有效` : "";
+        markStep(ev.name, "ok", verb + (!ev.cached && dur? " · "+dur : "") + detail);
         setProgress(WEIGHT[ev.name]||0);
-        log(`[${label(ev.name)}] ${verb}` + (!ev.cached && dur? " · "+dur : ""), at);
+        log(`[${label(ev.name)}] ${verb}` + (!ev.cached && dur? " · "+dur : "") + detail, at);
       }
       if(ev.status==="skipped"){
         markStep(ev.name, "skip", "未运行" + (ev.reason? " · "+ev.reason : ""));
         log(`[${label(ev.name)}] 跳过` + (ev.reason? " · "+ev.reason : ""), at);
       }
     } else if(ev.type==="case"){
-      log(`[${label(ev.stage)}] ${ev.index}/${ev.total} ${ev.label||""}`, at);
+      const armLabel = ev.arm === "with" ? "有 skill" : ev.arm === "baseline" ? "无 skill" : "";
+      log(`[${label(ev.stage)}] ${ev.index}/${ev.total} ${ev.label||""}${armLabel ? " · " + armLabel : ""}`, at);
       const base = ev.stage===K2A ? 25 : 50, span = ev.stage===K2A ? 15 : 30;
-      setProgress(base + span * (ev.index/Math.max(1,ev.total)));
+      const arm = ev.arm === "baseline" ? 0.5 : 0;
+      const done = Math.max(0, (ev.index - 1) + arm);
+      setProgress(base + span * (done / Math.max(1,ev.total)));
     } else if(ev.type==="judge"){
       const st = ev.status === "done" ? "完成" : "跳过";
       const dur = fmtDur(ev.elapsed_s);

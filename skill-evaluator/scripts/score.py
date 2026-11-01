@@ -120,10 +120,17 @@ def main():
     cost_by_case = ({c: {k: stats(rs, k) for k in ("tool_calls", "tokens", "seconds")}
                      for c, rs in sorted(groups.items())} if groups else None)
     necessity_out = necessity(runs, baseline)
+    # T2B 真实输入：有 expect 的匹配率；无标签的 A/B 偏好胜率（不是 accuracy）
+    matched = load_json(d / "compare.json")
+    preference = load_json(d / "pairwise.json")
     # passed = 本轮至少有一项真实测量（全部 skipped 则本轮评估无效）
     measured = [trigger != "skipped"] + [v != "skipped" for v in cost.values()]
     out = {"trigger": trigger, "cost": cost, "necessity": necessity_out,
            "passed": any(measured)}
+    if isinstance(matched, dict):
+        out["match"] = matched
+    if isinstance(preference, dict):
+        out["preference"] = preference
     if cost_by_case:
         out["cost_by_case"] = cost_by_case  # 缺 case 字段时不产出（旧产物/旧 harness 保持原样）
     text = json.dumps(out, ensure_ascii=False)

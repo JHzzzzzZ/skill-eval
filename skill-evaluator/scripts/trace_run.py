@@ -1,4 +1,4 @@
-"""运行引擎（#10/#13/#11/#12/#15/#16 的数据源）。Seam: python trace_run.py <worktree> <prompt> [--skill <path>|--no-skill]
+"""运行引擎（#10/#13/#11/#12/#15/#16 的数据源）。Seam: python trace_run.py <沙箱目录> <prompt> [--skill <path>|--no-skill]
 
 实跑模式调用 pi CLI --mode json --no-session 采集事件流，聚合为 trace JSON 输出。
 --events <jsonl>  : 离线解析已采集的事件流（测试/重算用），跳过实跑
@@ -449,7 +449,7 @@ def main():
         trace["errors"] = ["运行超时（600s）"]
         trace["passed"] = False
     if guard_before:
-        # 越界写入检测（ADR-0027）：worktree 只限定 cwd，不限定写权限——实测 agent 会走出沙箱
+        # 越界写入检测（ADR-0027）：沙箱副本只限定 cwd，不限定写权限——实测 agent 会走出沙箱
         # 改真实仓库（README.md、judges/*.md、自己造 scratch/）。run 前后各拍一次 git 脏状态，
         # 新增条目即越界；--guard-revert 才回退（默认只报告，避免覆盖并行编辑）。
         guard = {"repos": [], "escaped_writes": [], "reverted": []}

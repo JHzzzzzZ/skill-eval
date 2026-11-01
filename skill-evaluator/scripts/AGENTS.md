@@ -4,7 +4,7 @@ Generated: 2026-09-22T13:43:08.578Z
 
 ## OVERVIEW
 
-14 个确定性 Python CLI + 5 个共享模块（`_config`/`_console`/`_subprocess`/`llm`/`harness`）+ `check-deps.sh` 前置自检，扁平单层。另有 3 个 T4 脚本在 `attic/scripts/`（不进包、不跑测试）。每个脚本 = 一个有文档的 CLI seam：输出 stdout JSON 或落盘中间产物。测量脚本之间无 subprocess 调用；runner/harness 是编排层例外。
+16 个确定性 Python CLI + 5 个共享模块（`_config`/`_console`/`_subprocess`/`llm`/`harness`）+ `check-deps.sh` 前置自检，扁平单层。另有 3 个 T4 脚本在 `attic/scripts/`（不进包、不跑测试）。每个脚本 = 一个有文档的 CLI seam：输出 stdout JSON 或落盘中间产物。测量脚本之间无 subprocess 调用；runner/harness 是编排层例外。
 
 ## WHERE TO LOOK
 
@@ -15,18 +15,20 @@ Generated: 2026-09-22T13:43:08.578Z
 | `harness.py` | 75 | 无 CLI；`run_case/available` | 执行载体适配（当前 pi） |
 | `judge_run.py` | 172 | `--metric --skill --out [--backend]` | T1 评审执行器 |
 | `evalset_gen.py` | 115 | `--skill --out [--count]` | 生成 T2A 评测集草稿 |
-| `runner.py` | 403 | `--skill --tier [--evalset] [--real-input]` | 确定性编排 + NDJSON 进度 |
-| `report.py` | 1342 | `<results目录> [--html] [--evalset <vN>] [--skill <dir>] [--tier <t>]` | 汇总 16 条 + 优化建议 + 报告页 |
-| `static_check.py` | 621 | `<skill目录> [--exclude <p>]... [--no-default-excludes]` | #1/#3/#4 六组 + 可移植性闸门 + #12 依赖全面性 |
-| `trace_run.py` | 245 | `<worktree> <prompt> [--skill\|--no-skill] [--early-exit] [--model] [--events] [--out] [--build-only]` | #10/#13/#11/#12/#15/#16 数据源 |
+| `runner.py` | 781 | `--skill --tier [--evalset] [--real-input]` | 确定性编排 + NDJSON 进度 |
+| `report.py` | 1442 | `<results目录> [--html] [--evalset <vN>] [--skill <dir>] [--tier <t>]` | 汇总 16 条 + 优化建议 + 报告页 |
+| `static_check.py` | 714 | `<skill目录> [--exclude <p>]... [--no-default-excludes]` | #1/#3/#4 六组 + 可移植性闸门 + #12 依赖全面性 |
+| `trace_run.py` | 474 | `<沙箱目录> <prompt> [--skill\|--no-skill] [--early-exit] [--model] [--events] [--out] [--build-only]` | #10/#13/#11/#12/#15/#16 数据源 |
 | `evalset_check.py` | 180 | `<evalset目录> --skill <skill目录> [--out]` | #10 可信度（触发集质量） |
 | `evalset_count.py` | 111 | `<evalsets/<name>/vN> [--min*] [--out]` | #10 冻结前条数闸门 |
 | `model_robust.py` | 173 | `<results目录> [--out]` | #15 跨模型 |
-| `compare.py` | 145 | `--expect <f> --actual <f> [--aggregate <dir>] [--model] [--events] [--out] [--build-only]` | #14 |
+| `compare.py` | 151 | `--expect <f> --actual <f> [--aggregate <dir>] [--model] [--events] [--out] [--build-only]` | #14 |
 | `trigger_judge.py` | 101 | `--skill <SKILL.md> --trace <trace.json> [--model] [--events] [--out] [--build-only]` | #10 触发判定 |
-| `score.py` | 94 | `<results目录>` | #10/#13/#11 |
+| `score.py` | 106 | `<results目录>` | #10/#13/#11 |
 | `judge_runner.py` | 67 | `--validate <judge输出.json>` | rubric 契约门禁 |
 | `idem.py` | 41 | `<trace1.json> <trace2.json>` | #16 |
+| `pairwise.py` | 104 | `--prompt --a --b [--out] [--build-only]` | T2B 无标签 A/B 盲评 |
+| `calibrate.py` | 207 | `--metric <name> [--cases] [--samples] [--workers]` | Judge 校准（agreement/accuracy） |
 | `check-deps.sh` | — | `bash scripts/check-deps.sh`（退出码 0/1） | #7 前置自检，非 Python |
 
 ## SYMBOL MAP
@@ -43,11 +45,13 @@ Generated: 2026-09-22T13:43:08.578Z
 - `score.py` — `load_json`(16) `prf1`(24) `stats`(40) `necessity`(53) `main`(75)
 - `judge_runner.py` — `score_of_items`(14) `validate`(20) `main`(52)
 - `idem.py` — `load_trace`(12) `main`(22)
+- `pairwise.py` — `build_prompt`(20) `_read`(33) `main`(40)
+- `calibrate.py` — `_majority`(32) `summarize`(41) `_run_judge`(84) `main`(99)
 
 ## CONVENTIONS
 
 - **同目录导入靠 `sys.path.insert(0, Path(__file__).parent)`**（每个 `main()` 里）。因此脚本必须以 `scripts/` 为基准被调用。
-- **argv 手写解析**（`while i < len(args)`），不用 argparse。11 个脚本各写一遍——加参数时跟随既有写法。
+- **argv 手写解析**（`while i < len(args)`），不用 argparse。16 个脚本各写一遍——加参数时跟随既有写法。
 - **stdout 契约字段恒输出**：输入缺失或非法 → 输出 `"skipped"`，**不崩溃、不打 0 分**（`score.py`、`report.py` 均如此）。
 - **LLM 调用两条路径**：T1 走 `llm.py`（OpenAI-compatible/Anthropic，无 tools）；T2+ 走 `harness.py`（当前 pi CLI）。旧 `_subprocess` 形态只在 `--backend pi` 回退时用。
 - **离线 seam 三件套**：`--build-only`（只打印将执行的命令）、`--events <jsonl>`（离线解析已采集事件流）、`--out <file>`。测试全靠它们，改这三个 flag 会同时打断多个测试。

@@ -29,24 +29,24 @@ skill-evaluator/
 ├── judges/             # LLM 评审 rubric（结构化 JSON 输出，固定单发 prompt）
 ├── scripts/            # CLI + runner + llm/harness 适配层；check-deps.sh = 前置自检（#7）
 ├── web/                # 本地前端（stdlib HTTP + SSE + 原生 JS）
-└── tests/              # 335 个测试，全部走 subprocess seam
-docs/adr/               # 38 条架构决策记录
+└── tests/              # 340 个测试，全部走 subprocess seam
+docs/adr/               # 40 条架构决策记录
 ```
 
-评估器**自闭环**：脚本与测试全部在 skill 包内（ADR-0006）。评估产物（评测集、报告）放 `skill-evaluator/evalsets/<skill名>/`，按版本冻结——重跑不重新生成。
+评估器**自闭环**：脚本与测试全部在 skill 包内（ADR-0006）。评估产物（评测集、报告）放 `evalsets/<skill名>/`，按版本冻结——重跑不重新生成。
 
 ## 使用
 
 1. 安装：把 `skill-evaluator/` 复制到 `~/.pi/agent/skills/`
 2. 前置自检：`bash scripts/check-deps.sh`（python ≥ 3.9 / git / pytest / pi CLI / config.yaml 可解析）
-3. 会话里说：*"评估这个 skill：`<路径>`"*；外部人员可在本地 UI 上传 `.zip`。
+3. 会话里说：*"评估这个 skill：`<路径>`"*；外部人员可在本地 UI 上传 `.zip`。上传按内容 hash 落到工作区，同内容复用；评测集路径自动填好。
 4. 或直接用确定性流水线 / 本地前端：
    ```bash
    python scripts/runner.py --skill <路径> --tier t2a
    python web/app.py    # http://127.0.0.1:8765
    ```
 5. 拿到结果目录下的 `report.json` + `report.md` + `report.html` + `meta.json`
-6. 页面里可检查/生成/审核评测集、测试 LLM 连接，并把 `fail` 人工降为 `warn`（写审计原因）
+6. 页面里可选工作区、检查/生成/审核评测集、填 1–20 条真实输入（只有 `prompt` 必填）、测试 LLM 连接，并人工调整裁决（写审计原因）
 
 可选：
 
@@ -54,7 +54,7 @@ docs/adr/               # 38 条架构决策记录
 - T1 直连 LLM：页面字段 > `config.yaml`（`llm.base_url` / `llm.model` / `llm.api_key_env`）> 标准环境变量（`OPENAI_API_KEY` / `ANTHROPIC_API_KEY`、`OPENAI_BASE_URL` / `ANTHROPIC_BASE_URL`、`SKILL_EVAL_MODEL`）> 官方端点；页面 key 只用于本次运行，不落盘；本机 pi 可用 `llm.api_key_file` + `llm.api_key_provider` 从 `~/.pi/agent/auth.json` 读 key，不复制到 config。`--backend pi` 回退旧路径
 - `SKILL_EVAL_REVIEW_MODEL=<provider/id>`：评测集 AI 审核用的模型（必须与生成阶段不同源；不设则首次运行交互选择）
 
-档位入口：`--tier <t0|t1|t2a|t2b|t3>`（默认 T2A），高档复用低档产物（按被测 skill 的 content_sha256 判定）。
+档位入口：`--tier <t0|t1|t2a|t2b|t3>`（默认 T2A），高档复用低档产物（按被测 skill 的 content_sha256 判定）；默认复用缓存，勾选对应阶段或“全部重跑”才重算。
 
 ## 关键契约
 
@@ -68,7 +68,7 @@ docs/adr/               # 38 条架构决策记录
 
 ```bash
 cd skill-evaluator
-python -m pytest tests        # 335 个测试全绿
+python -m pytest tests        # 340 个测试全绿
 ```
 
 设计决策及理由见 `docs/adr/`。英文版见 `README.md`。

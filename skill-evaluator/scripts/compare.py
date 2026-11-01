@@ -130,11 +130,14 @@ def main():
                 continue
         if not per:
             out = {"mean_score": None, "match": None, "per_case": [],
+                   "matched": 0, "valid": 0, "match_rate": None,
                    "note": "无有效裁决文件"}
         else:
             mean = sum(p["score"] for p in per) / len(per)
             matched = sum(1 for p in per if p.get("match"))
             out = {"mean_score": mean, "match": matched * 2 > len(per),
+                   "matched": matched, "valid": len(per),
+                   "match_rate": round(matched / len(per), 3),
                    "per_case": per, "note": f"{matched}/{len(per)} case 匹配"}
         if out_path:
             _console.write_text(out_path, json.dumps(out, ensure_ascii=False, indent=2))

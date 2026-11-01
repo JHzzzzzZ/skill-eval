@@ -29,24 +29,24 @@ skill-evaluator/
 ├── judges/             # LLM-judge rubrics (structured JSON output, fixed single-shot prompt)
 ├── scripts/            # CLI + runner + llm/harness adapters; check-deps.sh = preflight (#7)
 ├── web/                # local UI (stdlib HTTP + SSE + vanilla JS)
-└── tests/              # 335 tests, subprocess-seam based
-docs/adr/               # 38 architecture decisions
+└── tests/              # 340 tests, subprocess-seam based
+docs/adr/               # 40 architecture decisions
 ```
 
-The evaluator is **self-contained**: all scripts and tests live inside the skill package (ADR-0006). Evaluation artifacts (eval sets, reports) live in `skill-evaluator/evalsets/<skill-name>/` and are frozen per version — never regenerated on re-runs.
+The evaluator is **self-contained**: all scripts and tests live inside the skill package (ADR-0006). Evaluation artifacts (eval sets, reports) live in `evalsets/<skill-name>/` and are frozen per version — never regenerated on re-runs.
 
 ## Usage
 
 1. Install: copy `skill-evaluator/` into `~/.pi/agent/skills/`
 2. Preflight: `bash scripts/check-deps.sh` (python >= 3.9, git, pytest, pi CLI, config.yaml parses)
-3. Say: *"evaluate this skill: <path>"* — or open the local UI and upload a `.zip` (external users).
+3. Say: *"evaluate this skill: <path>"* — or open the local UI and upload a `.zip`. The upload is stored in a content-hash workspace; re-uploading the same content reuses it, and the eval-set path is filled automatically.
 4. Or run the deterministic pipeline / local UI:
    ```bash
    python scripts/runner.py --skill <path> --tier t2a
    python web/app.py    # http://127.0.0.1:8765
    ```
 5. Get `report.json` + `report.md` + `report.html` + `meta.json` under the results directory.
-6. In the UI: check/generate/review an eval set, test the LLM connection, and manually downgrade a `fail` to `warn` with an audit reason.
+6. In the UI: choose a workspace, check/generate/review an eval set, add 1–20 real-input cases (only `prompt` required), test the LLM connection, and manually adjust a verdict with an audit reason.
 
 Optional:
 
@@ -54,7 +54,7 @@ Optional:
 - T1 direct LLM: UI fields > `config.yaml` (`llm.base_url` / `llm.model` / `llm.api_key_env`) > standard env (`OPENAI_API_KEY` / `ANTHROPIC_API_KEY`, `OPENAI_BASE_URL` / `ANTHROPIC_BASE_URL`, `SKILL_EVAL_MODEL`) > official endpoint. The UI key is used for this run only and is never written to disk. For a local pi install, `llm.api_key_file` + `llm.api_key_provider` can read the key from `~/.pi/agent/auth.json` without copying it into config. `--backend pi` falls back to the old path.
 - `SKILL_EVAL_REVIEW_MODEL=<provider/id>`: model for AI review of eval sets (must differ from the generation model; if unset, picked interactively on first run).
 
-Tier entry: `--tier <t0|t1|t2a|t2b|t3>` (default T2A); higher tiers reuse lower-tier artifacts (validated against the evaluated skill's content hash).
+Tier entry: `--tier <t0|t1|t2a|t2b|t3>` (default T2A); higher tiers reuse lower-tier artifacts (validated against the evaluated skill's content hash). Cached stages are reused by default; tick a stage or “rerun all” to force recomputation.
 
 ## Key contracts
 
@@ -68,7 +68,7 @@ Tier entry: `--tier <t0|t1|t2a|t2b|t3>` (default T2A); higher tiers reuse lower-
 
 ```bash
 cd skill-evaluator
-python -m pytest tests        # 335 tests, all green
+python -m pytest tests        # 340 tests, all green
 ```
 
 Design decisions and their reasoning live in `docs/adr/`. See `README_CN.md` for the Chinese version.

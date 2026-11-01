@@ -217,3 +217,21 @@ def test_out_writes_utf8_file(tmp_path):
     assert r.returncode == 0, r.stderr
     assert json.loads(r.stdout)["trigger"]["f1"] == 1.0
     assert json.loads(out_file.read_text(encoding="utf-8"))["passed"] is True
+
+
+def test_t2b_match_and_preference_pass_through(tmp_path):
+    (tmp_path / "runs.json").write_text(json.dumps([{"case": "c001", "tool_calls": 2,
+                                                      "tokens": 10, "seconds": 1}]), encoding="utf-8")
+    (tmp_path / "baseline.json").write_text(json.dumps([{"case": "c001", "tool_calls": 3,
+                                                          "tokens": 12, "seconds": 1.5}]), encoding="utf-8")
+    (tmp_path / "compare.json").write_text(json.dumps({"matched": 1, "valid": 1,
+                                                        "match_rate": 1.0, "per_case": []}), encoding="utf-8")
+    (tmp_path / "pairwise.json").write_text(json.dumps({"valid": 2, "with_skill_wins": 1,
+                                                         "baseline_wins": 1, "ties": 0,
+                                                         "win_rate": 0.5, "cases": []}), encoding="utf-8")
+    r = subprocess.run([sys.executable, str(SCRIPT), str(tmp_path)],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
+    assert r.returncode == 0, r.stderr
+    out = json.loads(r.stdout)
+    assert out["match"]["match_rate"] == 1.0
+    assert out["preference"]["win_rate"] == 0.5

@@ -28,6 +28,7 @@ def test_ui_has_no_internal_adr_or_tier_jargon():
     assert "T2B" not in html
     assert 'id="stop"' in html
     assert 'id="workspace"' in html and 'id="skill"' not in html
+    assert 'id="realList"' in html and 'id="real"' not in html
     assert 'id="rerunT0"' in html and 'id="rerunT1"' in html and 'id="rerunAll"' in html
     assert 'id="reuse"' not in html
     assert 'verdict-picker' in html and '选中调整' not in html

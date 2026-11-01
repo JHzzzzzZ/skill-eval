@@ -1,6 +1,6 @@
 # PROJECT KNOWLEDGE BASE — skill-evaluator
 
-Generated: 2026-09-22T13:43:08.578Z（v2 更新：ADR-0032–0037）
+Generated: 2026-11-01（v2 更新：ADR-0032–0040）
 
 ## OVERVIEW
 
@@ -26,7 +26,7 @@ Generated: 2026-09-22T13:43:08.578Z（v2 更新：ADR-0032–0037）
 | 改扫描口径/六组规则 | ADR-0012/0029 + `static_check.py` |
 | 改依赖全面性 | ADR-0031 + `static_check.py::collect_deps` |
 | 改阈值 | `config.yaml`（ADR-0035）；解析器 `scripts/_config.py` |
-| 改 UI / 进度 | `web/app.py` + `web/index.html` + `runner.py` 的 NDJSON 进度（ADR-0036） |
+| 改 UI / 进度 | `web/app.py` + `web/index.html` + `runner.py` 的 NDJSON 进度（ADR-0036）；工作区见 0039，真实输入多 case 见 0040 |
 
 ## PIPELINE
 
@@ -35,7 +35,7 @@ runner 按档位增量执行（ADR-0033）：
 - **T0**：`static_check.py` → `static.json`（#1/#2/#3/#4/#12 的静态面）
 - **T1**：`judge_run.py`（默认 `llm`，可 `--backend pi`）→ `judges/<metric>.json`（#2/#5/#6/#7/#8/#9，`contract` 一份服务 #8/#9）
 - **T2A**：`trace_run.py --early-exit` + `trigger_judge.py` → `triggers.json` → `score.py`（#10）；human 型跳过
-- **T2B**：一例真实输入跑 golden + baseline → `t2b/score.json`（#11/#12）；n<3 最高 warn
+- **T2B**：1–20 条真实输入逐条跑 golden + baseline → `t2b/score.json`（#11/#12）；有 expect 算匹配率，无 expect 双向 A/B 偏好；n<3 最高 warn
 - **T3**：cases golden ×N + `idem.py` + `compare.py` → `runs.json`/`idem.json`/`compare.json`（#13/#14/#15/#16）
 - **report**：`report.py --tier <t> --html` → `report.json`（schema 2 + legacy_id_map）+ md/html/meta
 
@@ -52,6 +52,7 @@ runner 按档位增量执行（ADR-0033）：
 | `contract.md` | #8/#9 | 输入声明、输出路径、输出格式稳定（一份 rubric 服务两个指标） |
 | `deps.md` | #12 语义面 | 依赖已声明、无未打包外部环境依赖、凭据走 fallback、声明清单完整 |
 | `pii.md` | #4 语义面 | 无真实个人标识、无公司内部标识、示例数据全为占位、无未脱敏日志样本 |
+| `trigger.md` | #10 | 触发判定：是否加载被测 skill（`trigger_judge.py`） |
 
 `deps.md` / `pii.md` 不在 `report.py` 的 judges 映射表里：#12 三源合成（trace 报错优先 + `judges/deps.json` + `deps_missing`），#4 = 静态六组 + 闸门与 `judges/pii.json` 取较差者。统一 JSON：
 

@@ -41,11 +41,11 @@ if [ -n "$PY" ]; then
   fi
 fi
 
-# --- git（沙箱 = git worktree，ADR-0001）---
+# --- git（沙箱 = results/sandbox 的 git 副本，ADR-0001）---
 if command -v git >/dev/null 2>&1; then
   ok "git $(git --version | awk '{print $3}')"
 else
-  bad "找不到 git（沙箱运行需要 git worktree）"
+  bad "找不到 git（沙箱运行需要 git 副本）"
 fi
 
 # --- pytest（仅测试用）---

@@ -620,16 +620,36 @@ class Handler(BaseHTTPRequestHandler):
             cmd += ["--rerun-t3"]
         if data.get("no_cache"):
             cmd += ["--no-cache"]
-        real = str(data.get("real_input") or "").strip()
-        if real:
-            rf = rdir / "real-input.json"
-            try:
-                json.loads(real)
-                rf.write_text(real, encoding="utf-8")
-            except json.JSONDecodeError:
-                rf.write_text(json.dumps({"prompt": real, "label": "real-input"},
-                                         ensure_ascii=False), encoding="utf-8")
-            cmd += ["--real-input", str(rf)]
+        real_cases = data.get("real_cases")
+        if isinstance(real_cases, list):
+            rows = []
+            for i, row in enumerate(real_cases, 1):
+                if not isinstance(row, dict):
+                    return _send_json(self, 400, {"error": f"真实输入第 {i} 条不是对象"})
+                prompt = str(row.get("prompt") or "").strip()
+                if not prompt:
+                    return _send_json(self, 400, {"error": f"真实输入第 {i} 条缺 prompt"})
+                rows.append({"id": f"c{i:03d}", "prompt": prompt,
+                             "note": str(row.get("note") or row.get("label") or "").strip(),
+                             "expect": str(row.get("expect") or "").strip()})
+            if len(rows) > 20:
+                return _send_json(self, 400, {"error": "真实输入最多 20 条"})
+            if rows:
+                rf = rdir / "real-input.jsonl"
+                rf.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n",
+                              encoding="utf-8")
+                cmd += ["--real-input", str(rf)]
+        else:
+            real = str(data.get("real_input") or "").strip()
+            if real:
+                rf = rdir / "real-input.json"
+                try:
+                    json.loads(real)
+                    rf.write_text(real, encoding="utf-8")
+                except json.JSONDecodeError:
+                    rf.write_text(json.dumps({"prompt": real, "label": "real-input"},
+                                             ensure_ascii=False), encoding="utf-8")
+                cmd += ["--real-input", str(rf)]
         log = (rdir / "run.log").open("w", encoding="utf-8")
         popen_kwargs = {"cwd": ROOT, "stdout": log, "stderr": subprocess.STDOUT,
                         "text": True, "encoding": "utf-8", "errors": "replace"}

@@ -413,7 +413,12 @@ def build(d: Path, evalset_dir: Path | None = None) -> dict:
             detail = "、".join(f"{k} {v['improvement']*100:+.1f}%" for k, v in comps.items())
             caveat = (f"；样本 n={sample_n}，少于 3 例，结论最高 warn"
                       if sample_n is not None and sample_n < 3 else "")
-            m["#11"] = {"verdict": verdict, "method": METHOD_RUN, "data": n,
+            data = dict(n)
+            if isinstance(score.get("match"), dict):
+                data["match"] = score["match"]
+            if isinstance(score.get("preference"), dict):
+                data["preference"] = score["preference"]
+            m["#11"] = {"verdict": verdict, "method": METHOD_RUN, "data": data,
                        "note": f"三分量多数票（{up}/{len(comps)} 改善）：{detail}{caveat}"}
     # #10 人调用型（#3 resolved=human）不适用触发评测：pi 的 formatSkillsForPrompt 会把
     # disable-model-invocation=true 的 skill 从提示中滤除（实测：--skill 加载后模型答
@@ -1184,6 +1189,21 @@ def _tables(metric: str, data, allow_generic=True) -> list:
             if rows:
                 out.append(("有 skill（golden）对比无 skill（baseline）",
                             ["分量", "有 skill 均值", "无 skill 基线", "提升率"], rows))
+            pref = data.get("preference")
+            if isinstance(pref, dict) and pref.get("valid"):
+                out.append((f"无标签 A/B 盲评（{pref.get('valid')} 例；胜率不是 accuracy）",
+                            ["结果", "数量"],
+                            [["有 skill 胜", _fmt(pref.get("with_skill_wins"))],
+                             ["无 skill 胜", _fmt(pref.get("baseline_wins"))],
+                             ["平局", _fmt(pref.get("ties"))],
+                             ["有 skill 胜率", _fmt(pref.get("win_rate"))]]))
+            match = data.get("match")
+            if isinstance(match, dict) and match.get("valid"):
+                out.append((f"有验收标准：匹配 {match.get('matched')}/{match.get('valid')}",
+                            ["case", "匹配", "分数", "理由"],
+                            [[p.get("name"), "是" if p.get("match") else "否",
+                              _fmt(p.get("score")), _cell(p.get("reason"))]
+                             for p in (match.get("per_case") or [])]))
         elif metric == "#12":
             rows = [["依赖类报错", _cell(e)] for e in data.get("dependency_errors") or []]
             rows += [["忽略的报错（agent 自身路径笔误）", _cell(e)]

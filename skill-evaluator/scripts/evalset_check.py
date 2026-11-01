@@ -33,7 +33,7 @@ import _config
 
 NGRAM = 3
 
-# 沙箱外路径（ADR-0027）：worktree 只限定 cwd，不限定写权限——实测 prompt 里带真实仓库路径时
+# 沙箱外路径（ADR-0027）：沙箱副本只限定 cwd，不限定写权限——实测 prompt 里带真实仓库路径时
 # agent 会走出沙箱改真实仓库。绝对路径 / ~ / .. 逃逸都算。
 ABS_PATH_RE = re.compile(r"(?:[A-Za-z]:[\\/]|~/|/(?:home|Users|tmp|mnt|var|opt)/)")
 ESCAPE_RE = re.compile(r"(?:^|[\s\"'=])\.\.[\\/]")
@@ -178,7 +178,7 @@ def check(evalset_dir: Path, skill_dir: Path) -> dict:
         if conflicts:
             problems.append(f"{len(conflicts)} 组同句同时出现在 should 与 should-not")
         if oos:
-            problems.append(f"{len(oos)} 条 prompt 引用沙箱外路径（agent 会走出 worktree 改真实仓库）")
+            problems.append(f"{len(oos)} 条 prompt 引用沙箱外路径（agent 会走出沙箱改真实仓库）")
         clean = not problems
         note = (f"检查 {checked} 条 prompt：无照抄/重复/冲突" if clean
                 else f"检查 {checked} 条 prompt：" + "；".join(problems) + "——#10 指标可能虚高，建议改写触发集")

@@ -4,7 +4,7 @@ Generated: 2026-09-22T13:43:08.578Z
 
 ## OVERVIEW
 
-24 个测试文件 / 335 个 test，全部走 subprocess seam：把脚本当 CLI 跑，不 import 被测脚本（`test_trace_run.py` 例外，它 import `EventAggregator` 做增量消费断言；`test_config.py` 直接 import 纯解析模块 `_config.py`）。
+25 个测试文件 / 340 个 test，全部走 subprocess seam：把脚本当 CLI 跑，不 import 被测脚本（`test_trace_run.py` 例外，它 import `EventAggregator` 做增量消费断言；`test_config.py` 直接 import `_config.py`；`test_runner.py` 直接 import `_real_cases` 做解析断言）。
 
 ## WHERE TO LOOK
 
@@ -16,13 +16,13 @@ Generated: 2026-09-22T13:43:08.578Z
 | `test_web.py` | `web/app.py`（zip 上传安全边界 / UI 术语 / 停止进程 / 复用拷贝 / 工作区） | 6 |
 | `test_llm.py` | `scripts/llm.py`（协议/无 tools/JSON 提取） | 5 |
 | `test_judge_run.py` | `scripts/judge_run.py`（文件收集/prompt/SKILL.md 优先） | 5 |
-| `test_runner.py` | `scripts/runner.py`（dry-run/T0 端到端 / 进度计时 / T0-T1 复用与跨目录缓存） | 8 |
+| `test_runner.py` | `scripts/runner.py`（dry-run/T0 端到端 / 进度计时 / T0-T1 复用与跨目录缓存 / 真实输入解析） | 11 |
 | `test_report.py` | `report.py` 16-key 契约基线 | 50 |
-| `test_trace_run.py` | `scripts/trace_run.py` | 41 |
+| `test_trace_run.py` | `scripts/trace_run.py` | 44 |
 | `test_report3.py` | `report.py` 元数据/指纹批次（ADR-0010/0011）+ data 渲染层 | 21 |
 | `test_report4.py` | `report.py` 报告可用性（表格化/折叠/闸门可见/建议/✓✗/依赖全面性/PII，ADR-0029/0030/0031） | 19 |
 | `test_report5.py` | 报告页徽章对比度回归 | 6 |
-| `test_score.py` | `scripts/score.py` | 15 |
+| `test_score.py` | `scripts/score.py` | 16 |
 | `test_judge_runner.py` | `scripts/judge_runner.py` | 13 |
 | `test_evalset_check.py` | `scripts/evalset_check.py`（触发集质量） | 13 |
 | `test_model_robust.py` | `scripts/model_robust.py` | 12 |
@@ -34,8 +34,9 @@ Generated: 2026-09-22T13:43:08.578Z
 | `test_idem.py` | `scripts/idem.py` | 4 |
 | `test_console.py` | `scripts/_console.py`（GBK 控制台降级） | 4 |
 | `test_calibrate.py` | `scripts/calibrate.py`（一致率/准确率统计 / 校准集结构） | 3 |
+| `test_pairwise.py` | `scripts/pairwise.py`（A/B prompt 匿名化） | 1 |
 
-`scripts/` 11 个 Python CLI + 3 个共享模块全覆盖，无缺口；T4 的 3 个测试已随脚本移入 `attic/tests/`。`report.py` 是唯一拆成 4 个文件覆盖的脚本。`check-deps.sh` 无 Python 测试（前置自检靠实跑验证）。
+`scripts/` 16 个 Python CLI + 5 个共享模块全覆盖，无缺口；T4 的 3 个测试已随脚本移入 `attic/tests/`。`report.py` 是唯一拆成 4 个文件覆盖的脚本。`check-deps.sh` 无 Python 测试（前置自检靠实跑验证）。
 
 ## CONVENTIONS
 

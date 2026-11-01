@@ -18,41 +18,38 @@ SKILL.md 的细则层。16 条指标编号见 ADR-0032（按档位连续）。�
 
 ## 沙箱
 
-沙箱 = **git worktree**。被测 skill 的副本仓库上 `git worktree add`，运行在 worktree 内进行，评估产物不落回副本主目录。未来若替换为 Docker，只改本节定义，SKILL.md 流程不变。
+沙箱 = `results/sandbox` 的**普通副本 + git 初始化**：runner 把被测 skill 复制到结果目录，`git init` 后提交一次快照；运行 cwd 固定在该副本内。不建 git worktree，也不在每次 run 前清理副本。未来若替换为 Docker，只改本节定义，SKILL.md 流程不变。
 
-每次 run 前重置工作树（ADR-0018）：触发/沙箱 run 共用同一个 worktree 时，前一个 run 写下的文件会被后一个 run 读到（实测并发探针里，一条 run 写的 `scratch/scan_all.py` 被另一条 run 当成仓库内容分析）。跑之前 `git -C <worktree> clean -fdx`，或每个 run 单独 `git worktree add`。
-
-prompt 不写沙箱外路径（ADR-0018/0027）：worktree 只限定 cwd，不限定 agent 的写权限——实测一条带真实仓库路径的探针 prompt 让 agent 走出 worktree，改了评估器仓库自己的 `README.md`（已回滚）。评测集里的 prompt 只能引用沙箱内路径；`evalset_check.py` 会把绝对路径 / `..` 逃逸报成 `out_of_sandbox`（clean=false）。
+隔离边界（ADR-0018/0027）：副本只限定 cwd，不限定 agent 的写权限——实测带真实仓库路径的 prompt 会让 agent 走出副本，改了评估器仓库自己的 `README.md`（已回滚）。评测集里的 prompt 只能引用沙箱内路径；`evalset_check.py` 会把绝对路径 / `..` 逃逸报成 `out_of_sandbox`（clean=false）。
 
 越界检测（ADR-0027）：跑 run 时带上 `--guard-repo <评估器仓库>`（可重复），trace 里会多出 `guard.escaped_writes`（run 前后 `git status` 的新增条目）；`--guard-revert` 才回退（未跟踪→删、已跟踪改动→`git checkout --`）。默认只报告，避免吃掉并行写入者的改动。
 
 Windows 上杀 pi 子进程树用 `taskkill /T`（`_subprocess.py` 的硬依赖，仅在 Windows 生效；POSIX 走 `killpg`）。
 
-权限边界（#4）：worktree 方案下只能做到静态扫描 + trace 审计（看 trace 里是否出现了不该有的命令），做不到强制拦截。扫描规则见 `scripts/static_check.py` 内的六组正则（ADR-0013/0029）：危险命令 / 硬编码凭据 / 注入指令 / 数据外发 / 混淆 / 个人信息。前四组命中即 fail，后两组仅 warn。
+权限边界（#4）：副本沙箱下只能做到静态扫描 + trace 审计（看 trace 里是否出现了不该有的命令），做不到强制拦截。扫描规则见 `scripts/static_check.py` 内的六组正则（ADR-0013/0029）：危险命令 / 硬编码凭据 / 注入指令 / 数据外发 / 混淆 / 个人信息。前四组命中即 fail，后两组仅 warn。
 
 依赖全面性（#12 静态面，ADR-0031）：`static_check.py` 报「用了什么 vs 声明了什么」——`deps_used`（shebang 解释器 / python import / `subprocess` 字面量 argv[0]）、`deps_declared`（SKILL.md 正文 + reference.md + `requirements.txt` + `check-deps.sh` 里出现过的名字，**任意出现即算声明，含随口提到——偏宽，漏报方向**）、`deps_missing`（差集）。缺声明只把 #12 降到 warn。已知漏检：argv 由变量拼时取不到 argv[0]；声明面是同义词不敏感的子串匹配（“Python3” 与 “python” 会漏判）。宿主基座（python/bash/sh/cmd/powershell…）不算未声明。
 
 已知漏检（如实告知，不要当成"扫过就是安全"）：自造格式的高熵 token、改写的语义注入、跨段拼接的注入、无读取动词的 `.env` 引用。混淆与个人信息类命中仅警告，需人工复核。PII 静态面的边界：只能认格式化的个人标识（邮箱/手机号/身份证/银行卡/公网 IP，带 Luhn 与证件校验位），自造示例（如真实号段格式的假号码）会误报、工号与客户名会漏报——后者靠 `judges/pii.md` 四项检查点补。
 
-扫描口径（ADR-0012）：默认排除 `tests/`、`evalsets/`、`runs/`、`cache/`、`calibration/` 与扫描器自身源码（`--no-default-excludes` 关闭默认排除）；`--exclude <路径>` 的相对路径按 **skill 目录**解析；单行末尾加 `static-check:ignore` 可抑制命中，被抑制项记入 `ignored` 字段（不静默丢）。
+扫描口径（ADR-0012）：默认排除 `tests/`、`evalsets/`、`uploads/`、`runs/`、`cache/`、`calibration/`、`workspaces/`、`.sandbox/`、`.skillrepos/` 与扫描器自身源码（`--no-default-excludes` 关闭默认排除）；`--exclude <路径>` 的相对路径按 **skill 目录**解析；单行末尾加 `static-check:ignore` 可抑制命中，被抑制项记入 `ignored` 字段（不静默丢）。
 
 ## 版本号
 
 1. 被测 skill 自带 `.git` → `git rev-parse --short HEAD`
-2. 裸文件夹 → 只读存档原始上传（`uploads/<name>-<时间戳>/`），副本 `git init + commit`，版本号 = `auto-<副本短 hash>`
+2. 裸文件夹 → 工作区 `web/workspaces/<slug>-<hash8>/skill/` 作为只读快照；runner 复制到 `results/sandbox` 后 `git init + commit`，版本号 = `auto-<副本短 hash>`
 3. 副本的 `meta.json` 记录 `content_sha256` 兜底；results 目录另有同名 `meta.json`（内容不同，靠 `schema` 字段区分，ADR-0010）
 
-换行保真（ADR-0019）：副本、副本内的 worktree 必须与存档**字节一致**，否则同一份上传会产出两个
+换行保真（ADR-0019）：工作区快照、`results/sandbox` 副本必须与上传内容**字节一致**，否则同一份上传会产出两个
 `content_sha256`，ADR-0003/0010 的指纹就认不出“评的是哪份内容”（实测 Windows `core.autocrlf=true`
 时 51 个文件里 15 个被重写成 CRLF）。副本 repo 一律先关转换再开始干活：
 
 ```bash
-mkdir <副本> && tar -cf - -C <存档> . | tar -xf - -C <副本>   # 字节拷贝，别用 git clone
+mkdir <副本> && tar -cf - -C <工作区> . | tar -xf - -C <副本>   # 字节拷贝，别用 git clone
 cd <副本> && git init -q && git config core.autocrlf false && git add -A && git commit -qm snapshot
-git worktree add <沙箱目录> HEAD                                # worktree 继承副本的本地 config
 ```
 
-校验：对存档与 worktree 逐个文件比字节，必须 0 处不同（实测修复前 51 个里 15 个不同）。
+校验：对工作区快照与 `results/sandbox` 副本逐个文件比字节，必须 0 处不同（实测修复前 51 个里 15 个不同）。
 
 注意区分两个号：本包 SKILL.md frontmatter 的 `version`（给人看的发布号）与报告里的 `auto-<sha256>` 评估器指纹（ADR-0010，用来判定两份报告能不能横向比）。不要互相替代。
 
@@ -60,7 +57,7 @@ git worktree add <沙箱目录> HEAD                                # worktree �
 
 ## 评测集冻结
 
-位置：`evalsets/<skill-name>/v<N>/`，在**评估器目录**，不放被测 skill。
+位置：仓库根 `evalsets/<skill-name>/v<N>/`（`ROOT.parent/evalsets`，与 Web 自动填路径一致），不放被测 skill。
 
 ```
 evalsets/<name>/v1/
@@ -91,15 +88,15 @@ evalsets/<name>/v1/
 
 ## 运行场景
 
-档位（tier）定义增量递进的评估深度（ADR-0033），入口参数 `--tier <t0|t1|t2a|t2b|t3>`（也接受 `T0`–`T3`），**默认 T2A**。高档复用低档产物：结果目录里各中间产物记录生成时的 skill content_sha256、评估器指纹与评审模型，一致则复用，不一致则作废重跑；`--rerun-t0` / `--rerun-t1` 强制重跑对应档，Web 对应“重跑基础检查 / 重跑文档评审”。低档先行、后续增量补跑（staged）不重做已完成档；各档产物持久缓存到 `.skill-eval-cache/<stage>/<key>/`（仓库根，gitignore），key 含 skill/evaluator/评测集/真实输入/模型/载体；跨 run / 重启仍可复用，`--rerun-t0|t1|t2a|t2b|t3` 才强制重算，`--no-cache` 关闭全部复用。T4 不开放（ADR-0032）。
+档位（tier）定义增量递进的评估深度（ADR-0033），入口参数 `--tier <t0|t1|t2a|t2b|t3>`（也接受 `T0`–`T3`），**默认 T2A**。高档复用低档产物：结果目录里各中间产物记录生成时的 skill content_sha256、评估器指纹与评审模型，一致则复用，不一致则作废重跑；`--rerun-t0` / `--rerun-t1` 强制重跑对应档，Web 提供五个阶段勾选与“全部重跑”（只勾当前档及以下），默认复用持久缓存，页面不再发送 `reuse_from`/`no_cache`；`--no-cache` 只在 CLI/API 保留。低档先行、后续增量补跑（staged）不重做已完成档；各档产物持久缓存到 `.skill-eval-cache/<stage>/<key>/`（仓库根，gitignore），key 含 skill/evaluator/评测集/真实输入/模型/载体；跨 run / 重启仍可复用，`--rerun-t0|t1|t2a|t2b|t3` 才强制重算，`--no-cache` 关闭全部复用。T4 不开放（ADR-0032）。
 
 | 档 | 场景 | 做什么 | 服务指标 |
 |---|---|---|---|
 | T0 | 静态检查 | static_check.py | #1 #3 #4 #2（行数主源，150 warn / 500 fail） |
 | T1 | LLM 评审 | 逐项按 judges/ rubric 评审（4 并发） | #2（语义两项，辅证） #5 #6 #7 #8 #9 |
 | T2A | 触发评测 | 三组 prompt 各跑一次，带 `--early-exit`（ADR-0007 修订、ADR-0018）：事件流出现**首次指向被测 SKILL.md 的工具调用**（渐进式披露下 = agent 决定加载 skill）即终止该次运行省 token——判定按**路径解析**（相对路径按同串 `cd` 目标/运行 cwd 解析），不是绝对路径子串；未出现该调用的 run 跑完整，其行为正是 precision 的证据；单 case 受三层上限约束（`run.trigger_timeout_s` 默认 90s、`run.trigger_max_steps` 默认 30、`run.trigger_max_tokens` 默认 120000），触限杀进程树并**跳过该 case**（不记未触发）；**triggered 由 `trigger_judge.py` 用 LLM 判定**，判定口径与 early-exit 同步：**加载即触发，不要求任务实际完成**，截断运行（回答为空）按已执行步骤裁决（trace_run.triggered 仅作粗筛），环境故障的 case 不计入 P/R 分母。**`#3 resolved=human` 时整档不跑**：#10 记 `skipped`（载体测不到“按 description 触发”，ADR-0018） | #10 |
-| T2B | 真实场景 A/B | 用户提供 ≥1 例真实输入；同 cwd、同输入跑 golden（加载 skill）与 baseline（不加载）两臂；#11 报告样本数 n，n<3 时最高 warn；#12 用 golden 臂 trace + 静态声明面；真实输入存 `uploads/`，报告只回显哈希 + 标签（ADR-0033）。未提供输入 → 整档 skipped | #11 #12 |
-| T3 | 主运行 Golden Run | 干净 worktree + 加载 skill，跑冻结 cases，采 trace | #13 成本 / #14 结果可验证 |
+| T2B | 真实场景 A/B | 用户提供 1–20 条真实输入（动态表单或 `.jsonl`；`prompt` 必填，`note`/`expect` 选填，后端自动编号 c001…）；同 cwd、同输入逐条跑 golden（加载 skill）与 baseline（不加载）两臂；#11 报告样本数 n，n<3 时最高 warn；有 `expect` 用 `compare.py` 算匹配率，无 `expect` 用双向 A/B 盲评算偏好胜率（不叫 accuracy）；#12 用 golden 臂 trace + 静态声明面；真实输入存 `uploads/`，报告只回显哈希 + 备注。未提供输入 → 整档 skipped | #11 #12 |
+| T3 | 主运行 Golden Run | `results/sandbox` 副本 + 加载 skill，跑冻结 cases，采 trace | #13 成本 / #14 结果可验证 |
 | T3 | 重复运行 ×N | 主运行重复 N 次，每次 trace 存档 | #15（组内）/#16 |
 | T3 | 跨模型运行（可选，默认不跑） | 同批 cases 换 `--model` 再跑，trace 落 `models/<模型名>/`，model_robust.py 出一致率 | #15（跨模型） |
 
@@ -130,16 +127,18 @@ T1 评审走 `llm` 接口层（ADR-0034）：模型 `--model` > `llm.model` > `S
 
 ## 工作区
 
-上传后按 `skill_sha256` 落到稳定工作区 `web/workspaces/<slug>-<hash8>/skill/`；同一内容重复上传复用同一路径，不再每次生成新 upload 目录。`workspace.json` 记录名称、hash、来源、创建/最近使用时间。UI 的工作区下拉可选择已有工作区，上传后自动填 `evalsets/<name>/v<N>`（已有取最新版本，否则 v1）；`web/workspaces/` 是本地态，gitignore。
+上传先解压到临时目录，再按 `skill_sha256` 落到稳定工作区 `web/workspaces/<slug>-<hash8>/skill/`；同一内容重复上传复用同一路径，内容变化新建工作区。`workspace.json` 记录 `id`/`name`/`skill_sha256`/`source`/`created_at`/`last_used_at`；`GET /api/workspaces` 返回列表。UI 的工作区下拉可选择已有工作区，上传后自动填 `evalsets/<name>/v<N>`（已有取最新版本，否则 v1）；`web/workspaces/` 是本地态，gitignore。旧 `web/runs/uploads/` 保留只读，不迁移。
 
 ## 前端与 runner（ADR-0036）
 
 `scripts/runner.py` 是确定性编排：按 `--tier` 调 T0→T1→T2A→T2B→T3，最后 `report.py`；进度以 NDJSON 输出，`--results` 指定产物目录，`--real-input` 给真实输入对比。
 
 `web/app.py` 是 stdlib HTTP 入口（只绑 `127.0.0.1`）：
-- `POST /api/upload`：浏览器直接以 `application/zip` 流式上传（不再 base64），安全解压到 `web/runs/uploads/`，返回 skill 路径；拒绝 `..`/绝对路径/符号链接，限制 1GB 压缩包、2GB 解压体积、20000 个文件。
+- `POST /api/upload`：浏览器直接以 `application/zip` 流式上传，安全解压到临时目录后复制进工作区；返回 `workspace_id`/`workspace`/`skill`/`evalset`/`skill_sha256`；拒绝 `..`/绝对路径/符号链接，限制 1GB 压缩包、2GB 解压体积、20000 个文件。旧 base64 分支仅兼容，UI 不使用。
+- `GET /api/workspaces`：返回 `{"workspaces": [{id,name,skill_sha256,skill,evalset,...}]}`，供工作区下拉。
 - `GET /api/llm/config`、`POST /api/llm/test`：返回非敏感默认配置 / 测试连接。
-- `POST /api/run`：启动 runner；可带 `llm`（protocol/base_url/model/api_key）与 `real_input`。
+- `POST /api/run`：启动 runner；可带 `llm`（protocol/base_url/model/api_key）与 `real_cases`（数组，每条 `{prompt,note,expect}`；也兼容旧 `real_input` 字符串）。
+- `POST /api/stop`：终止当前 runner；`GET /api/status` 返回当前运行状态。
 - `GET /api/events?id=`：SSE 进度；`GET /api/report?id=`：报告 JSON；`GET /report?id=`：报告页。
 - `GET /api/evalset/status|items`、`POST /api/evalset/generate|review`：评测集检查、生成草稿、逐条审核（写 `reviews/review.json` + `audit.jsonl`）。
 - `POST /api/override`：支持一次提交多条裁决调整（`changes: [{metric,to}]`），统一写 `overrides.json` + `manual-overrides.jsonl`，重出报告。
@@ -160,11 +159,14 @@ T1 评审走 `llm` 接口层（ADR-0034）：模型 `--model` > `llm.model` > `S
 - `triggers.json`：`{"should": [bool...], "should_not": [...], "confusable": [...]}`，布尔值 = 该 prompt 是否实际触发
 - `runs.json`：`[{"case", "tool_calls", "tokens", "seconds"}, ...]`，golden（有 skill）各次运行；`case` 可选，**全条目都带**时 score.py 产出 `cost_by_case`（#15 组内口径的数据源，ADR-0016）；缺一条即不产出
 - `baseline.json`：T2B 的基线（无 skill）运行；T3 不写它（necessity 只来自 T2B）
-- `t2b/runs.json` + `t2b/baseline.json`：T2B 两臂的原始统计；`t2b/score.json` 的 `necessity` 由 runner 合并进根 `score.json`
-- `real-input.meta.json`：`{"sha256", "label"}`；正文存评估器 `uploads/real-input/<sha>.json`（gitignore，报告不回显）
-- `trace-<序号>.json`：`{"steps": [{"tool", "args", "args_hash"}, ...], "answer", "tokens", "seconds", "triggered", "errors", "host": {"model", "pi", "platform"}}`（trace_run.py 落盘，--out；host 为宿主 pin，事后归因/复现用；离线 --events 重算时仅记 model 意图）
+- `t2b/runs.json` + `t2b/baseline.json`：T2B 两臂的原始统计（逐 case 带 `case`）；`t2b/score.json` 的 `necessity` 由 runner 合并进根 `score.json`
+- `t2b/cases/<id>/`：每条真实输入的 `with.json`/`baseline.json`/`prompt.txt`/`case.json`；有 `expect` 时另有 `actual.txt`/`expect.txt`，无 `expect` 时另有 `pairwise-1.json`/`pairwise-2.json`
+- `t2b/compare.json`：有 `expect` 的匹配聚合（`matched`/`valid`/`match_rate`/`per_case`）；逐 case 裁决在 `t2b/compare/<id>.json`
+- `t2b/pairwise.json`：无标签双向盲评聚合（`valid`/`with_skill_wins`/`baseline_wins`/`ties`/`win_rate`/`cases`）
+- `real-input.meta.json`：`{"sha256", "note", "count", "cases": [{"id","note","has_expect"}]}`；正文存评估器 `uploads/real-input/<sha>.json`（gitignore，报告不回显）
+- `trace-<序号>.json`：`{"steps": [{"tool", "args", "args_hash"}, ...], "answer", "tokens", "seconds", "triggered", "errors", "host": {"model", "pi", "platform"}, "limit_hit"?}`；触发评测触限时 `limit_hit` 为“步数/token 上限”，同时写入 `errors`（trace_run.py 落盘，--out；host 为宿主 pin，事后归因/复现用；离线 --events 重算时仅记 model 意图）
 - `static.json`：static_check.py --out（脚本自写 UTF-8；stdout 同步回显。禁 shell 重定向——GBK 控制台会产 GBK 文件）。全部脚本入口接 `scripts/_console.py::fix()`：GBK 控制台下回显不可编码字符降级为替换符，不崩、退出码 0；`--out` 文件不受影响。含 #4 的六组（`dangerous`/`secrets`/`injection`/`exfil`/`obfuscation`/`pii`）+ 出站网络 `egress`（GET/内网/socket/ssh 都算，仅警告）、`hardcoded`、`excluded`/`ignored`（ADR-0012）、`scan_excluded_dirs`（ADR-0012：运行面之外）、`stale_refs`（依赖新鲜度，ADR-0009 延伸：SKILL.md 声明但包内不存在的路径引用，warning 级）、`deps_used`/`deps_declared`/`deps_missing`（依赖全面性，ADR-0031，warning 级）、`skill_md_body_lines`/`skill_md_body_warn_lines`/`skill_md_body_fail_lines`（#2 行数主源与两档阈值，ADR-0017：口径 = frontmatter 之后全文行数，含空行与代码块；旧 `skill_md_body_max_lines` 只作历史产物兼容读取，新产物不再输出）<!-- static-check:ignore -->
-- `score.json`：score.py --out（同上）；含 `cost`（多次运行汇总）+ `cost_by_case`（逐 case，仅全条目带 case 时出现）+ `necessity`（T2B 合并进来；每分量带 `n`）
+- `score.json`：score.py --out（同上）；含 `cost`（多次运行汇总）+ `cost_by_case`（逐 case，仅全条目带 case 时出现）+ `necessity`（T2B 合并进来；每分量带 `n`）；T2B 另有 `match`（有 expect）与 `preference`（无标签 A/B），作为 #11 辅助证据，不合成总分
 - `idem.json`：多次 idem.py --out 结果的聚合 `{"ratio", "idempotent", "pairs", "idempotent_pairs", "per_pair"}`
 - `golden.json`：主运行的 golden trace（#12 的数据源之一）；同时存在 `traces/golden-*.json` 时，
   #12 取**全部** golden trace 的报错并集（`data.sources` 记录条数，ADR-0025）
@@ -254,7 +256,7 @@ evalsets/<name>/results/<version>/
 | 缺 pi CLI 或模型（自检仅 warn） | 只能跑静态检查；沙箱类指标标 `skipped`，报告注明原因 |
 | 未配置 `llm.base_url`/模型 | T1 `--backend auto` 回落 pi；显式 `--backend llm` 报错，该指标 skipped |
 | T2B 未提供真实输入 | #11/#12 标 `skipped`，不自动生成“真实”输入 |
-| worktree 创建失败 | 换临时目录 + 提示隔离降级，继续跑 |
+| 沙箱复制失败 | 换临时目录 + 提示隔离降级，继续跑 |
 | 沙箱运行崩溃 | 降级（fallback）到最近一个已完成的低档：报告标注缺失指标与原因，不静默丢指标 |
 | 审核模型不可用 | 评测集保持未冻结状态，提示人工审核路径，不阻塞已完成的低档位报告 |
 | 评测集未审核 | #10/#11/#14 标 `skipped`，其余照常 |

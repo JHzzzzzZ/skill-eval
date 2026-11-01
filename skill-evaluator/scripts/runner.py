@@ -226,6 +226,62 @@ def _prompts(evalset: Path) -> dict:
     return out
 
 
+MAX_REAL_CASES = 20
+
+
+def _real_cases(path: Path) -> list:
+    """解析真实输入：JSONL（一行一条）/ JSON 数组 / 单对象 / 纯文本。
+
+    只有 prompt 必填；id 一律由后端重编为 c001…，避免用户手填 ID。
+    note 是展示用备注；expect 是验收标准，可选。
+    """
+    raw = path.read_text(encoding="utf-8", errors="replace")
+    rows = None
+    try:
+        data = json.loads(raw)
+        if isinstance(data, dict):
+            rows = [data]
+        elif isinstance(data, list):
+            rows = data
+        else:
+            rows = [{"prompt": raw}]
+    except json.JSONDecodeError:
+        parsed = []
+        bad = None
+        for lineno, line in enumerate(raw.splitlines(), 1):
+            if not line.strip():
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError as exc:
+                bad = (lineno, str(exc))
+                break
+            parsed.append(obj)
+        if bad:
+            # 不是 JSONL 的纯文本按单条处理；只有看起来像 JSON 的坏行才报错
+            if raw.lstrip().startswith(("{", "[")):
+                raise RunnerError(f"真实输入第 {bad[0]} 行不是合法 JSON：{bad[1]}")
+            rows = [{"prompt": raw}]
+        else:
+            rows = parsed or [{"prompt": raw}]
+    if not isinstance(rows, list) or not rows:
+        raise RunnerError("真实输入为空")
+    if len(rows) > MAX_REAL_CASES:
+        raise RunnerError(f"真实输入最多 {MAX_REAL_CASES} 条，当前 {len(rows)} 条")
+    cases = []
+    for i, row in enumerate(rows, 1):
+        if not isinstance(row, dict):
+            raise RunnerError(f"真实输入第 {i} 条不是对象")
+        prompt = str(row.get("prompt") or "").strip()
+        if not prompt:
+            raise RunnerError(f"真实输入第 {i} 条缺 prompt")
+        note = str(row.get("note") or row.get("label") or "").strip()
+        expect = str(row.get("expect") or "").strip()
+        cases.append({"id": f"c{i:03d}", "prompt": prompt,
+                      "note": note, "expect": expect})
+    return cases
+
+
 def _cases(evalset: Path) -> list:
     out = []
     for f in sorted((evalset / "cases").glob("*.json")):
@@ -447,38 +503,129 @@ def run(args) -> int:
             progress.emit("stage", name="T2B", status="skipped", reason="未提供真实输入")
         else:
             from harness import run_case
-            raw = Path(args.real_input).read_text(encoding="utf-8", errors="replace")
-            try:
-                data = json.loads(raw)
-            except json.JSONDecodeError:
-                data = {"prompt": raw}
-            prompt = str(data.get("prompt") or "").strip()
-            label = str(data.get("label") or Path(args.real_input).stem)
-            if not prompt:
-                raise RunnerError("真实输入缺少 prompt")
-            digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16]
-            store = ROOT / "uploads" / "real-input" / f"{digest}.json"
-            _write_json(store, {"prompt": prompt, "label": label})
-            _write_json(results / "real-input.meta.json", {"sha256": digest, "label": label})
-            gold = prompt if not human else f"/skill:{name} {prompt}"
+            cases = _real_cases(Path(args.real_input))
             t2b = results / "t2b"
-            t2b.mkdir(parents=True, exist_ok=True)
-            gt = t2b / "golden.json"
-            bt = t2b / "baseline-trace.json"
-            run_case(gold, sandbox, skill_dir=sandbox, model=model, out=gt, adapter=args.harness,
-                     guard_repo=GUARD)
-            run_case(prompt, sandbox, no_skill=True, model=model, out=bt, adapter=args.harness,
-                     guard_repo=GUARD)
-            g = _read_json(gt, {}) or {}
-            b = _read_json(bt, {}) or {}
-            _write_json(results / "golden.json", g)
-            _write_json(t2b / "runs.json", [_metric(g, label)])
-            _write_json(t2b / "baseline.json", [_metric(b, label)])
+            cases_dir = t2b / "cases"
+            cases_dir.mkdir(parents=True, exist_ok=True)
+            digest = real_input_sha[:16]
+            _write_json(results / "real-input.meta.json", {
+                "sha256": real_input_sha, "note": cases[0]["note"],
+                "count": len(cases),
+                "cases": [{"id": c["id"], "note": c["note"],
+                           "has_expect": bool(c["expect"])} for c in cases],
+            })
+            _write_json(ROOT / "uploads" / "real-input" / f"{digest}.json",
+                        {"cases": cases})
+            runs, baselines, compared, pairs = [], [], [], []
+            valid = 0
+            first_golden = None
+            arm_timeout = max(1, _config.get_int("run.timeout_s", 300))
+
+            def _map_winner(rec, first_is_with):
+                winner = str((rec or {}).get("winner") or "").lower()
+                if not (rec or {}).get("valid") or winner not in ("a", "b", "tie"):
+                    return None
+                if winner == "tie":
+                    return "tie"
+                return "with_skill" if (winner == "a") == first_is_with else "baseline"
+
+            for idx, case in enumerate(cases, 1):
+                cdir = cases_dir / case["id"]
+                cdir.mkdir(parents=True, exist_ok=True)
+                _write_json(cdir / "case.json", {
+                    "id": case["id"], "note": case["note"],
+                    "has_expect": bool(case["expect"]),
+                })
+                (cdir / "prompt.txt").write_text(case["prompt"], encoding="utf-8")
+                display = case["id"] + (" · " + case["note"] if case["note"] else "")
+                progress.emit("case", stage="T2B", index=idx, total=len(cases),
+                              label=display, arm="with")
+                gt = cdir / "with.json"
+                bt = cdir / "baseline.json"
+                gold = case["prompt"] if not human else f"/skill:{name} {case['prompt']}"
+                try:
+                    g = run_case(gold, sandbox, skill_dir=sandbox, model=model,
+                                 out=gt, adapter=args.harness, guard_repo=GUARD,
+                                 timeout=arm_timeout)
+                    progress.emit("case", stage="T2B", index=idx, total=len(cases),
+                                  label=display, arm="baseline")
+                    b = run_case(case["prompt"], sandbox, no_skill=True, model=model,
+                                 out=bt, adapter=args.harness, guard_repo=GUARD,
+                                 timeout=arm_timeout)
+                except subprocess.TimeoutExpired:
+                    progress.emit("warn", stage="T2B", label=display,
+                                  error=f"运行超时（>{arm_timeout}s），跳过该 case")
+                    continue
+                except Exception as exc:
+                    progress.emit("warn", stage="T2B", label=display, error=str(exc))
+                    continue
+                valid += 1
+                if first_golden is None:
+                    first_golden = g
+                runs.append(_metric(g, case["id"]))
+                baselines.append(_metric(b, case["id"]))
+                if case["expect"]:
+                    actual = cdir / "actual.txt"
+                    expect = cdir / "expect.txt"
+                    actual.write_text(str(g.get("answer") or ""), encoding="utf-8")
+                    expect.write_text(case["expect"], encoding="utf-8")
+                    cout = t2b / "compare" / f"{case['id']}.json"
+                    cout.parent.mkdir(parents=True, exist_ok=True)
+                    _run("compare.py", ["--expect", str(expect), "--actual", str(actual),
+                                        "--out", str(cout), "--model", model or "",
+                                        "--base-url", args.base_url or "",
+                                        "--api-key", args.api_key or "",
+                                        "--llm-protocol", args.llm_protocol or ""],
+                         check=False)
+                    rec = _read_json(cout, {}) or {}
+                    if isinstance(rec.get("match"), bool):
+                        compared.append({"id": case["id"], **rec})
+                else:
+                    p1 = cdir / "pairwise-1.json"
+                    p2 = cdir / "pairwise-2.json"
+                    common = ["--prompt", str(cdir / "prompt.txt")]
+                    _run("pairwise.py", common + ["--a", str(gt), "--b", str(bt),
+                                                   "--out", str(p1), "--model", model or "",
+                                                   "--base-url", args.base_url or "",
+                                                   "--api-key", args.api_key or "",
+                                                   "--llm-protocol", args.llm_protocol or ""],
+                         check=False)
+                    _run("pairwise.py", common + ["--a", str(bt), "--b", str(gt),
+                                                   "--out", str(p2), "--model", model or "",
+                                                   "--base-url", args.base_url or "",
+                                                   "--api-key", args.api_key or "",
+                                                   "--llm-protocol", args.llm_protocol or ""],
+                         check=False)
+                    m1 = _map_winner(_read_json(p1, {}) or {}, True)
+                    m2 = _map_winner(_read_json(p2, {}) or {}, False)
+                    if m1 and m2:
+                        pairs.append({"id": case["id"],
+                                      "winner": m1 if m1 == m2 else "tie",
+                                      "judgment_1": m1, "judgment_2": m2})
+
+            _write_json(t2b / "runs.json", runs)
+            _write_json(t2b / "baseline.json", baselines)
+            if compared:
+                _run("compare.py", ["--aggregate", str(t2b / "compare"),
+                                    "--out", str(t2b / "compare.json")], check=False)
+            if pairs:
+                with_wins = sum(1 for p in pairs if p["winner"] == "with_skill")
+                base_wins = sum(1 for p in pairs if p["winner"] == "baseline")
+                ties = sum(1 for p in pairs if p["winner"] == "tie")
+                _write_json(t2b / "pairwise.json", {
+                    "valid": len(pairs), "with_skill_wins": with_wins,
+                    "baseline_wins": base_wins, "ties": ties,
+                    "win_rate": round(with_wins / len(pairs), 3),
+                    "cases": pairs,
+                })
+            if first_golden is not None:
+                _write_json(results / "golden.json", first_golden)
             _run("score.py", [t2b, "--out", t2b / "score.json"])
             t2b_score = t2b / "score.json"
             _copy_cache(results, t2b_cache,
                         ("real-input.meta.json", "golden.json"), ("t2b",))
-            progress.emit("stage", name="T2B", status="done", label=label)
+            progress.emit("stage", name="T2B", status="done",
+                          cases=len(cases), valid=valid)
 
     # T3 核心沙箱
     if TIER_RANK[tier] >= TIER_RANK["t3"]:
