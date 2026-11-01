@@ -28,7 +28,7 @@ def build_prompt(skill_text: str, count: int) -> str:
 - confusable：{count} 条容易误判的边界请求（可能该触发，也可能不该；用于测 precision）。
 - cases：{count} 条真实任务，每条含 prompt 与可验证的 expect（期望产物/行为描述）。
 
-只输出 JSON：
+只输出一个 JSON 对象；不要 Markdown 代码围栏、不要解释、不要输出数组：
 {{"should":[{{"prompt":"..."}}],"should_not":[{{"prompt":"..."}}],
  "confusable":[{{"prompt":"..."}}],"cases":[{{"prompt":"...","expect":"..."}}]}}
 
@@ -53,17 +53,29 @@ def generate(skill_dir: Path, out: Path, count: int, *, model=None, backend="aut
     skill_md = skill_dir / "SKILL.md"
     if not skill_md.is_file():
         raise ValueError(f"缺 SKILL.md: {skill_dir}")
-    text, _used = judge_run.ask(build_prompt(skill_md.read_text(encoding="utf-8"), count),
-                                backend, model, base_url, api_key, protocol)
+    out.mkdir(parents=True, exist_ok=True)
+    raw_dir = out / "raw" / "evalset-gen"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    prompt = build_prompt(skill_md.read_text(encoding="utf-8"), count)
+    max_tokens = max(4096, min(16384, count * 800))
+    text, _used = judge_run.ask(prompt, backend, model, base_url, api_key, protocol,
+                                max_tokens=max_tokens)
+    (raw_dir / "response-1.txt").write_text(text, encoding="utf-8")
     payload = llm_layer.extract_json(text)
     if not isinstance(payload, dict):
-        raise ValueError("模型输出不是 JSON 对象")
+        retry = (prompt + "\n\n上一次输出不是合法 JSON 对象（可能是 Markdown 围栏、解释文字或被截断）。"
+                 "这次只输出一个完整 JSON 对象，不要任何其他内容。")
+        text2, _used = judge_run.ask(retry, backend, model, base_url, api_key, protocol,
+                                     max_tokens=max_tokens)
+        (raw_dir / "response-2.txt").write_text(text2, encoding="utf-8")
+        payload = llm_layer.extract_json(text2)
+    if not isinstance(payload, dict):
+        raise ValueError(f"模型输出不是 JSON 对象（原始输出已存 {raw_dir}）")
     groups = {k: _items(payload.get(k)) for k in ("should", "should_not", "confusable")}
     cases = _items(payload.get("cases"), "prompt")
     cases = [c for c in cases if isinstance(c.get("expect"), str) and c["expect"].strip()]
     if not groups["should"]:
         raise ValueError("生成结果没有 should 项")
-    out.mkdir(parents=True, exist_ok=True)
     for group, sub in (("should", "should"), ("should_not", "should-not"),
                        ("confusable", "confusable")):
         d = out / "triggers" / sub

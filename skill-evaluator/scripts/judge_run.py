@@ -96,12 +96,14 @@ def _pi_text(events_text: str) -> str:
 
 
 def ask(prompt: str, backend: str, model: str | None, base_url: str | None,
-        api_key: str | None, protocol: str | None = None) -> tuple[str, str]:
+        api_key: str | None, protocol: str | None = None,
+        max_tokens: int | None = None) -> tuple[str, str]:
     if backend == "auto":
         backend = "llm" if llm_layer.configured() else "pi"
     if backend == "llm":
         text = llm_layer.ask(prompt, model=model, base_url_override=base_url,
-                             api_key_override=api_key, protocol_override=protocol)
+                             api_key_override=api_key, protocol_override=protocol,
+                             max_tokens=max_tokens)
         return text, "llm"
     events = _subprocess.ask_json(_subprocess.build_mode_args(
         model or _config.get_str("llm.model", "") or None), prompt)

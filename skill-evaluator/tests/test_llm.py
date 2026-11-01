@@ -48,6 +48,7 @@ def test_openai_request_has_no_tools_and_extracts_text():
     assert out["text"] == "答案"
     assert seen["url"] == "http://local/v1/chat/completions"
     assert "tools" not in seen["body"] and seen["body"]["temperature"] == 0
+    assert seen["body"]["max_tokens"] >= 4096
     assert seen["body"]["messages"][-1] == {"role": "user", "content": "问题"}
 
 

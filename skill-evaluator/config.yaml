@@ -79,6 +79,8 @@ llm:
   model: "deepseek-v4.1-flash"
   # 单次评审 prompt 的被测文件总字符上限；超过截断并标注。单位：字符。默认 60000。
   max_input_chars: 60000
+  # 单次 LLM 输出 token 上限；评测集生成一次要 40+ 条，太小会截断成非 JSON。默认 8192。
+  max_tokens: 8192
 
 harness:
   # T2+ 执行载体；当前唯一实现是 pi。单位：适配器名。

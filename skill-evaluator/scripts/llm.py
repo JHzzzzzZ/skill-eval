@@ -111,15 +111,17 @@ def _endpoint(proto: str, root: str) -> str:
     return root if root.endswith("/chat/completions") else root + "/chat/completions"
 
 
-def _request_body(proto: str, model: str, prompt: str, system: str | None) -> dict:
+def _request_body(proto: str, model: str, prompt: str, system: str | None,
+                  max_tokens: int = 8192) -> dict:
     messages = [{"role": "user", "content": prompt}]
     if proto == "anthropic":
-        body = {"model": model, "max_tokens": 4096, "temperature": 0,
+        body = {"model": model, "max_tokens": max_tokens, "temperature": 0,
                 "messages": messages}
         if system:
             body["system"] = system
         return body
-    body = {"model": model, "messages": ([{"role": "system", "content": system}] if system else []) + messages,
+    body = {"model": model, "max_tokens": max_tokens,
+            "messages": ([{"role": "system", "content": system}] if system else []) + messages,
             "temperature": 0, "stream": False}
     return body
 
@@ -163,13 +165,15 @@ def _extract_text(proto: str, payload) -> str:
 
 def chat(prompt: str, *, model: str | None = None, system: str | None = None,
          api_key_override: str | None = None, base_url_override: str | None = None,
-         timeout: int | None = None, opener=None, protocol_override: str | None = None) -> dict:
+         timeout: int | None = None, opener=None, protocol_override: str | None = None,
+         max_tokens: int | None = None) -> dict:
     """单次无工具对话，返回 {text, model, protocol, request, response}。"""
     proto = protocol(protocol_override)
     root = base_url(base_url_override, proto)
     model_id = default_model(model)
     key = api_key(api_key_override, proto)
-    body = _request_body(proto, model_id, prompt, system)
+    max_tokens = max_tokens or _config.get_int("llm.max_tokens", 8192)
+    body = _request_body(proto, model_id, prompt, system, max_tokens)
     url = _endpoint(proto, root)
     req = urllib.request.Request(url, data=json.dumps(body, ensure_ascii=False).encode("utf-8"),  # static-check:ignore
                                  headers=_headers(proto, key, root), method="POST")
