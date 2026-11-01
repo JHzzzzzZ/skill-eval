@@ -34,7 +34,7 @@ Windows 上杀 pi 子进程树用 `taskkill /T`（`_subprocess.py` 的硬依赖�
 
 已知漏检（如实告知，不要当成"扫过就是安全"）：自造格式的高熵 token、改写的语义注入、跨段拼接的注入、无读取动词的 `.env` 引用。混淆与个人信息类命中仅警告，需人工复核。PII 静态面的边界：只能认格式化的个人标识（邮箱/手机号/身份证/银行卡/公网 IP，带 Luhn 与证件校验位），自造示例（如真实号段格式的假号码）会误报、工号与客户名会漏报——后者靠 `judges/pii.md` 四项检查点补。
 
-扫描口径（ADR-0012）：默认排除 `tests/`、`evalsets/`、`runs/`、`cache/` 与扫描器自身源码（`--no-default-excludes` 关闭默认排除）；`--exclude <路径>` 的相对路径按 **skill 目录**解析；单行末尾加 `static-check:ignore` 可抑制命中，被抑制项记入 `ignored` 字段（不静默丢）。
+扫描口径（ADR-0012）：默认排除 `tests/`、`evalsets/`、`runs/`、`cache/`、`calibration/` 与扫描器自身源码（`--no-default-excludes` 关闭默认排除）；`--exclude <路径>` 的相对路径按 **skill 目录**解析；单行末尾加 `static-check:ignore` 可抑制命中，被抑制项记入 `ignored` 字段（不静默丢）。
 
 ## 版本号
 
@@ -176,6 +176,10 @@ T1 评审走 `llm` 接口层（ADR-0034）：模型 `--model` > `llm.model` > `S
 - `raw/llm-judge/<metric>.json`：T1 直连 LLM 的 request/response（含 prompt，不含密钥）；`--backend pi` 时原始事件流仍存 `raw/judge-events/<metric>.events.jsonl`
 
 `score.py <results目录>` 读同目录三件套；`idem.py <trace1> <trace2>` 出幂等比例。统计口径：均值/标准差/n/min/max（#13/#28）；必要性为 tokens/tool_calls/seconds 三分量各自提升率，每分量带 `n`（#11）。
+
+## Judge 校准
+
+`calibration/<metric>/<case>/skill/` 放最小被测包，`calibration/<metric>/<case>/expected.json` 放人工逐项标注（`{"items": {"检查点名": true/false}}`）。`scripts/calibrate.py --metric <name> --samples 3` 对同一 case 多次评审，算逐项一致率与标注准确率；任一项低于 `--min-agreement`（默认 0.8）退出码 1，结果写 `calibration/results/<metric>.json`（gitignore）。校准集是 rubric 的门禁，不是评估结论；当前种子集 brevity/precheck 各 8 例，目标扩到每项 20–30 例（10 pass / 10 fail / 5 边界）。
 
 ## LLM 评审
 

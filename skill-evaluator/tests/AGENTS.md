@@ -4,7 +4,7 @@ Generated: 2026-09-22T13:43:08.578Z
 
 ## OVERVIEW
 
-23 个测试文件 / 326 个 test，全部走 subprocess seam：把脚本当 CLI 跑，不 import 被测脚本（`test_trace_run.py` 例外，它 import `EventAggregator` 做增量消费断言；`test_config.py` 直接 import 纯解析模块 `_config.py`）。
+24 个测试文件 / 328 个 test，全部走 subprocess seam：把脚本当 CLI 跑，不 import 被测脚本（`test_trace_run.py` 例外，它 import `EventAggregator` 做增量消费断言；`test_config.py` 直接 import 纯解析模块 `_config.py`）。
 
 ## WHERE TO LOOK
 
@@ -33,6 +33,7 @@ Generated: 2026-09-22T13:43:08.578Z
 | `test_compare.py` | `scripts/compare.py` | 6 |
 | `test_idem.py` | `scripts/idem.py` | 4 |
 | `test_console.py` | `scripts/_console.py`（GBK 控制台降级） | 4 |
+| `test_calibrate.py` | `scripts/calibrate.py`（一致率/准确率统计） | 2 |
 
 `scripts/` 11 个 Python CLI + 3 个共享模块全覆盖，无缺口；T4 的 3 个测试已随脚本移入 `attic/tests/`。`report.py` 是唯一拆成 4 个文件覆盖的脚本。`check-deps.sh` 无 Python 测试（前置自检靠实跑验证）。
 

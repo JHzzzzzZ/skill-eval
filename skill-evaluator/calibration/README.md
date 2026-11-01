@@ -1,0 +1,37 @@
+# Judge 校准集
+
+用途：测 LLM 评审的**逐项一致率**和**相对人工标注的准确率**，不是测被测 skill 本身。
+
+## 目录格式
+
+```
+calibration/<metric>/<case>/
+├── skill/              # 被测 skill 的最小包（SKILL.md + 可选 reference/scripts）
+└── expected.json       # {"items": {"检查点名": true/false}}
+```
+
+`expected.json` 放在 `skill/` 外层，避免被 `judge_run.collect_files` 当评审材料发给模型。
+
+## 跑法
+
+```bash
+cd skill-evaluator
+python scripts/calibrate.py --metric brevity --samples 3
+python scripts/calibrate.py --metric precheck --samples 3
+```
+
+需要真实 LLM 配置（页面/`config.yaml`/环境变量，同 T1）。结果默认写
+`calibration/results/<metric>.json`（gitignore）。
+
+## 判定
+
+- `agreement`：同一 case 多次评审，逐项多数票的一致比例
+- `accuracy`：多数票是否等于 `expected.json`
+- 任一项 `agreement < --min-agreement`（默认 0.8）→ 退出码 1
+- 当前是种子集（brevity 8 例、precheck 8 例），目标扩到每项 20–30 例：10 个明确 pass、10 个明确 fail、5 个边界
+
+## 注意
+
+- 不要用校准集反向调 rubric 到“全过”；先看 disagreement 的具体检查点，再改定义。
+- 校准集不参与评估器指纹，改标注不会让历史报告变 `comparable=false`。
+- 不提交 `calibration/results/`。
