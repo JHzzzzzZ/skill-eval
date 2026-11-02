@@ -143,10 +143,11 @@ T1 评审走 `llm` 接口层（ADR-0034）：模型 `--model` > `llm.model` > `S
 - `POST /api/upload`：浏览器直接以 `application/zip` 流式上传，安全解压到临时目录后复制进工作区；返回 `workspace_id`/`workspace`/`skill`/`evalset`/`evalset_version`/`evalset_versions`/`skill_sha256`；拒绝 `..`/绝对路径/符号链接，限制 1GB 压缩包、2GB 解压体积、20000 个文件。旧 base64 分支仅兼容，UI 不使用。
 - `GET /api/workspaces`：返回 `{"workspaces": [{id,name,skill_sha256,skill,evalset,evalset_version,evalset_versions}]}`，供工作区与评测集版本下拉。
 - `GET /api/llm/config`、`POST /api/llm/test`：返回非敏感默认配置 / 测试连接。
-- `POST /api/run`：启动 runner；可带 `llm`（protocol/base_url/model/api_key）与 `real_cases`（数组，每条 `{prompt,note,expect}`；也兼容旧 `real_input` 字符串）。启动时写 `web/runs/<id>/run.json`（skill 名/tier/评测集/创建时间），供重启后历史列表。
+- `POST /api/run`：启动 runner；可带 `llm`（protocol/base_url/model/api_key）与 `real_cases`（数组，每条 `{prompt,note,expect}`；也兼容旧 `real_input` 字符串）。T2A/T2B/T3 必须带有效 `X-Skill-Eval-Token`，否则 401 且不启动；T0/T1 游客或 token 都可创建。`reuse_from`（复用另一个活动 run 的已完成产物）先校验该 run 归属，不匹配返回 403 并审计 `reuse_denied`，且不建新 run 目录。启动时写 `web/runs/<id>/run.json`（skill 名/tier/评测集/创建时间/skill_sha256/owner_kind/owner_id/owner_name/protected），供重启后历史列表与归属校验。
 - `POST /api/stop`：终止当前 runner 后按产物做一次完成度判定，取**最高完整阶段**生成局部报告（`report.py --partial --completed-stages ...`，档位 = 该阶段）；响应带 `report`/`partial`/`completed_stages`/`error`。连 T0 都没完成时不生成空报告。
+- `GET /api/token/check`：校验 `X-Skill-Eval-Token`，返回 `{ok,id,name}`；无/未知/停用一律 401（不区分“格式错”与“不存在”，避免枚举），也不返回 hash。
 - `GET /api/status?id=`：先查活动 run，再回退 `web/runs/<id>/results/` 磁盘产物；返回 `running`/`returncode`/`stopped`/`partial`/`completed_stages`/`results`/`report`/`log`。
-- `GET /api/runs?limit=20`：扫描 `web/runs/*/results/run-meta.json`，返回 `id`/`skill_name`/`tier`/`created_at`/`conclusion`/`partial`/`stopped`/`running`/`has_report`，按时间倒序；含活动 run。
+- `GET /api/runs?limit=20`：扫描 `web/runs/*/results/run-meta.json`，返回 `id`/`skill_name`/`tier`/`created_at`/`conclusion`/`partial`/`stopped`/`running`/`has_report`，按时间倒序；含活动 run。列表按身份过滤：游客只看自己 guest cookie 创建的 run，token 用户只看自己 token 的 run；没有 owner 的旧 run 标 `legacy`，只在 token 库为空（单用户迁移期）时列出。
 - `GET /api/log?id=`：返回 `run.log` 尾部 200 行；活动 run 与磁盘旧 run 都可读。
 - `GET /api/events?id=`：SSE 进度，无硬截止；每 15 秒发注释心跳，进程结束/停止才收尾；`stopped` 事件带 `report` 地址。
 - `GET /api/report?id=` / `GET /report?id=`：先查活动 run，再回退磁盘 `results/`；只有两边都没有才 404。`/api/report` 在返回的 JSON 上附加 `run_id` 与 `run_meta`（不写回 `report.json`）。
@@ -155,6 +156,17 @@ T1 评审走 `llm` 接口层（ADR-0034）：模型 `--model` > `llm.model` > `S
 - `GET /api/evalset/status|items`、`POST /api/evalset/generate|review`：评测集检查、生成草稿、逐条审核（写 `reviews/review.json` + `audit.jsonl`；`reviewer` 必填）。
 - `GET /api/evalset/export?evalset=`、`POST /api/evalset/import?filename=`：评测集 zip 导出/导入（见 § 评测集冻结）。
 - `POST /api/override`：支持一次提交多条裁决调整（`changes: [{metric,to}]`），统一写 `overrides.json` + `manual-overrides.jsonl`，重出报告；`reviewer` 必填，空值 400（不再写死 `web`）。
+
+## 访问控制与审计
+
+访问矩阵：T0/T1 游客可跑；T2A/T2B/T3 必须带有效 token；评测集接口只对 token 开放；管理员不登录网页，只用 CLI 发/停 token。token 是**访问控制**，不是执行沙箱——`trace_run` 仍继承宿主环境、只限定 cwd。
+
+- 持久 token：`web/token_admin.py` 读写 `web/tokens.json`（gitignore），结构 `{"tokens":[{id,name,note,hash,created_at,active}]}`；只存 `sha256(token)`，明文只在 `issue` 时打印一次。格式 `se_<urlsafe 32 bytes>`。路径只来自模块常量与 CLI 全局参数 `--tokens-file` / `--audit-file`（默认 `web/tokens.json` / `web/audit.jsonl`），不新增环境变量。
+- CLI（无网页注册，全局参数写在子命令前）：`python web/token_admin.py [--tokens-file PATH] [--audit-file PATH] issue --name "张三" [--note "申请表 #12"]` / `list` / `revoke --id tok_ab12cd34`。停用后下一次校验立即失败；`list` 不显示 hash 与明文。
+- 游客身份：首次请求发 `se_guest` cookie（UUID、HttpOnly、SameSite=Strict、Path=/、30 天），只用于历史归属，不是安全身份。
+- run 归属：`run.json` 的 `owner_kind` = `guest`/`token`/`legacy`（目录存在但没有 `run.json`，或缺字段，按 legacy）；`protected` = tier ∈ {t2a,t2b,t3}。按 run id 的接口（`/api/status`、`/api/report`、`/report`、`/api/log`、`/api/export`、`/api/compare`、`/api/stop`、`/api/override`、`/api/events`）先校验归属：kind 与 id 都必须匹配；legacy 只在 token 库为空时放行（一旦有任意 token，旧 run 对谁都不可见也不可读）；不存在仍 404，无权 403。`/api/compare` 双方都校验。
+- 审计：追加写 `web/audit.jsonl`（gitignore，尽量 0600），一行一事件，字段固定为 `ts`/`ip`/`x_forwarded_for`/`user_agent`/`actor_kind`/`actor_id`/`actor_name`/`action`/`method`/`path`/`status`/`run_id`/`tier`/`skill_sha256`/`detail`。IP 取 `client_address[0]`；`X-Forwarded-For` 只原样记录、不参与授权；不记录 token、API key、prompt/回答正文（`path` 去掉查询串）。写失败只告警 stderr，不阻断主流程。必记事件：token 校验、run 启动/拒绝/停止、report·log·export 读取、compare、override、评测集 review/import/export；评测集其余接口的 401 也各记一笔。
+- 前端：顶栏 token 输入存 `localStorage["se-token"]`，启动与点「验证」都调 `/api/token/check`，失效即清空并回到游客；所有需鉴权请求带 `X-Skill-Eval-Token`（进度流用 fetch 读 SSE，因为 EventSource 不能带请求头）；报告与 zip 导出走 fetch + blob；复制链接只带 `?run=<id>`，不带 token。游客隐藏评测集卡；T2/T3 可显示但标注需申请 token，无有效 token 时点击不启动。
 
 前端不重算指标。页面启动解析 `?run=<id>`（刷新/深链恢复），运行开始时用 `history.replaceState` 写 URL 并存 `localStorage`；右栏「最近报告」来自 `/api/runs`。SSE 断线不直接收尾：先查 `/api/status`，仍在跑就指数退避重连并显示常驻错误条，已结束则加载报告。错误条与日志弹层常驻，不自动消失。
 
@@ -193,7 +205,7 @@ T1 评审走 `llm` 接口层（ADR-0034）：模型 `--model` > `llm.model` > `S
 - `compare.json`：compare.py --aggregate 裁决（#14）；逐 case 文件在 `compare/`
 - `actual/` + `expected/`：T3 每 case 的实际回答与期望（compare.py 输入）
 - `overrides.json`：人工复核 `{metric: {from, to, reason, reviewer, at}}`；from/to 必须是 pass|warn|fail|skipped，报告按 from 匹配当前裁决后应用
-- `run.json`（在 `web/runs/<id>/`，不属 results）：前端运行元数据 `{id,skill,skill_name,workspace,tier,evalset,created_at,stopped?,stopped_at?}`，重启后历史列表/深链靠它恢复
+- `run.json`（在 `web/runs/<id>/`，不属 results）：前端运行元数据 `{id,skill,skill_name,workspace,tier,evalset,skill_sha256,owner_kind,owner_id,owner_name,protected,created_at,stopped?,stopped_at?}`，重启后历史列表/深链/归属校验靠它恢复
 - `run-meta.json`（在 `results/`）：runner 写的运行元数据 `{skill,skill_name,tier,evalset,model,harness,created_at,skill_sha256,evaluator_sha256,evaluator_version,judge}`；`/api/runs`、`/api/report` 的 `run_meta`、`/api/compare` 的 `skill_same` 都读它
 - `manual-overrides.jsonl`：人工调整的追加审计日志（前端 `/api/override` 写入）
 - `evalset.json`：evalset_check.py stdout（触发集质量，#10 降级依据）

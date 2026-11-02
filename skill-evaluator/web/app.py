@@ -19,6 +19,7 @@ import sys
 import time
 import uuid
 import zipfile
+from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -27,9 +28,11 @@ WEB = Path(__file__).resolve().parent
 ROOT = WEB.parent
 RUNNER = ROOT / "scripts" / "runner.py"
 sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(WEB))
 import llm as llm_layer  # noqa: E402
 import runner as runner_mod  # noqa: E402
 import static_check  # noqa: E402
+import token_admin  # noqa: E402
 RUNS = WEB / "runs"
 RUNS.mkdir(parents=True, exist_ok=True)
 WORKSPACES = WEB / "workspaces"
@@ -41,6 +44,10 @@ MAX_UPLOAD_FILES = 20000
 MAX_EVALSET_BYTES = 50 * 1024 ** 2
 MAX_EVALSET_FILES = 500
 EVALSETS = ROOT.parent / "evalsets"
+GUEST_COOKIE = "se_guest"
+GUEST_MAX_AGE = 30 * 24 * 3600
+TOKEN_HEADER = "X-Skill-Eval-Token"
+PROTECTED_TIERS = ("t2a", "t2b", "t3")
 
 
 def _json_body(handler) -> dict:
@@ -53,12 +60,21 @@ def _json_body(handler) -> dict:
         return {}
 
 
+def _send_headers(handler, extra: list | None = None) -> None:
+    """统一发头：首次见到的游客在这里拿 `se_guest` cookie。"""
+    for key, value in extra or []:
+        handler.send_header(key, value)
+    for key, value in _guest_headers(handler):
+        handler.send_header(key, value)
+    handler.end_headers()
+
+
 def _send_json(handler, code: int, payload):
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     handler.send_response(code)
     handler.send_header("Content-Type", "application/json; charset=utf-8")
     handler.send_header("Content-Length", str(len(body)))
-    handler.end_headers()
+    _send_headers(handler)
     handler.wfile.write(body)
 
 
@@ -68,7 +84,7 @@ def _send_bytes(handler, code: int, body: bytes, content_type: str, filename: st
     handler.send_header("Content-Length", str(len(body)))
     if filename:
         handler.send_header("Content-Disposition", f'attachment; filename="{filename}"')
-    handler.end_headers()
+    _send_headers(handler)
     handler.wfile.write(body)
 
 
@@ -77,6 +93,114 @@ def _load_json(path: Path, default=None):
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return default
+
+
+def _cookie_value(handler, name: str) -> str:
+    jar = SimpleCookie()
+    try:
+        jar.load(handler.headers.get("Cookie") or "")
+    except CookieError:
+        return ""
+    morsel = jar.get(name)
+    return morsel.value if morsel else ""
+
+
+def _guest_id(handler) -> str:
+    """游客 id：来自 cookie 或本次新发；只用于历史归属，不是安全身份。"""
+    gid = getattr(handler, "_guest_id", "")
+    if gid:
+        return gid
+    gid = _cookie_value(handler, GUEST_COOKIE)
+    if not re.fullmatch(r"[A-Za-z0-9-]{8,64}", gid or ""):
+        gid = str(uuid.uuid4())
+        handler._guest_new = True
+    handler._guest_id = gid
+    return gid
+
+
+def _guest_headers(handler) -> list:
+    if not getattr(handler, "_guest_id", ""):
+        _guest_id(handler)          # 首次请求就发 cookie（含页面本身）
+    if not getattr(handler, "_guest_new", False):
+        return []
+    return [("Set-Cookie", f"{GUEST_COOKIE}={_guest_id(handler)}; HttpOnly; "
+                           f"SameSite=Strict; Path=/; Max-Age={GUEST_MAX_AGE}")]
+
+
+def _token_record(handler):
+    return token_admin.verify(handler.headers.get(TOKEN_HEADER) or "")
+
+
+def _actor(handler) -> dict:
+    record = _token_record(handler)
+    if record:
+        return {"kind": "token", "id": record["id"], "name": record.get("name") or ""}
+    return {"kind": "guest", "id": _guest_id(handler), "name": "游客"}
+
+
+def _run_owner(rid: str):
+    """run 归属；目录存在但没有 run.json 的旧 run 按 legacy。"""
+    rdir = _run_dir(rid)
+    if not rdir or not rdir.is_dir():
+        return None
+    data = _run_json(rdir)
+    return {"kind": str(data.get("owner_kind") or "legacy"),
+            "id": str(data.get("owner_id") or ""),
+            "name": str(data.get("owner_name") or "")}
+
+
+def _owner_matches(actor: dict, owner: dict) -> bool:
+    """legacy run 只在完全没有 token 的单用户迁移期放行。
+
+    一旦 token 库里有任意记录，多用户模式即成立：没有 owner 的旧 run 不属于
+    任何身份，给谁看都是跨用户泄漏。
+    """
+    if owner["kind"] == "legacy":
+        return not token_admin.has_tokens()
+    return owner["kind"] == actor["kind"] and owner["id"] == actor["id"]
+
+
+def _run_access(handler, rid: str):
+    """True 放行 / False 拒绝 / None 不存在（由调用方给 404）。"""
+    owner = _run_owner(rid)
+    if owner is None:
+        return None
+    return _owner_matches(_actor(handler), owner)
+
+
+def _audit(handler, action: str, status: int, *, run_id: str = "", tier: str = "",
+           skill_sha256: str = "", detail: str = "") -> None:
+    """追加一行审计；不写 token / API key / prompt 正文。IP 取 client_address。"""
+    actor = _actor(handler)
+    try:
+        ip = str(handler.client_address[0])
+    except (AttributeError, IndexError, TypeError):
+        ip = ""
+    record = {
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "ip": ip,
+        "x_forwarded_for": handler.headers.get("X-Forwarded-For") or "",
+        "user_agent": handler.headers.get("User-Agent") or "",
+        "actor_kind": actor["kind"], "actor_id": actor["id"], "actor_name": actor["name"],
+        "action": action, "method": getattr(handler, "command", "") or "",
+        "path": urlparse(getattr(handler, "path", "") or "").path,
+        "status": int(status), "run_id": str(run_id), "tier": str(tier),
+        "skill_sha256": str(skill_sha256), "detail": str(detail)[:300],
+    }
+    token_admin.append_audit(record)
+
+
+def _require_token(handler, action: str) -> bool:
+    """评测集接口的 token 门禁；拒绝时统一 401，不区分格式错与不存在。"""
+    if _token_record(handler):
+        return True
+    _audit(handler, action, 401, detail="需要 token")
+    _send_json(handler, 401, {"ok": False, "error": "该接口需要访问 token"})
+    return False
+
+
+def _deny_run(handler, rid: str, action: str = "run_denied") -> None:
+    _audit(handler, action, 403, run_id=rid, detail="不属于当前身份")
+    _send_json(handler, 403, {"error": "无权访问该运行"})
 
 
 def _safe_extract(zip_path: Path, dest: Path, *, max_zip_bytes: int = MAX_UPLOAD_BYTES,
@@ -431,11 +555,14 @@ def _status_payload(rid: str, run: dict | None) -> dict:
     return disk
 
 
-def _runs(limit: int = 20) -> list:
+def _runs(limit: int = 20, actor: dict | None = None) -> list:
     entries = []
     for rdir in RUNS.iterdir():
         if not rdir.is_dir() or rdir.name in ("uploads", "eval-uploads"):
             continue
+        owner = _run_owner(rdir.name)
+        if owner is not None and actor is not None and not _owner_matches(actor, owner):
+            continue    # 历史列表按身份过滤：游客只看自己的 run，token 用户只看自己的
         # ACTIVE 的运行还在跑：磁盘上没有 report/stopped 状态，_disk_status 会
         # 误报 running=false；优先用进程态，同时保留 has_report/conclusion。
         run = ACTIVE.get(rdir.name)
@@ -464,7 +591,6 @@ def _tail_log(rid: str, lines: int = 200) -> str:
         raise ValueError("日志不存在")
     text = path.read_text(encoding="utf-8", errors="replace")
     return "\n".join(text.splitlines()[-max(1, int(lines)):])
-
 
 
 def _workspace_meta(ws: Path) -> dict:
@@ -788,7 +914,9 @@ class Handler(BaseHTTPRequestHandler):
         sys.stderr.write("%s - %s\n" % (self.address_string(), fmt % args))
 
     def do_GET(self):
+        self._guest_id, self._guest_new = "", False
         path = self.path.split("?", 1)[0]
+        q = parse_qs(urlparse(self.path).query)
         if path in ("/", "/index.html"):
             html = (WEB / "index.html").read_text(encoding="utf-8")
             body = html.encode("utf-8")
@@ -796,29 +924,40 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
+            _send_headers(self)
             self.wfile.write(body)
             return
+        if path == "/api/token/check":
+            record = _token_record(self)
+            _audit(self, "token_check", 200 if record else 401,
+                   detail="ok" if record else "invalid")
+            if not record:
+                return _send_json(self, 401, {"ok": False, "error": "token 无效或已停用"})
+            return _send_json(self, 200, {"ok": True, "id": record["id"],
+                                          "name": record.get("name") or ""})
         if path == "/api/llm/config":
             return _send_json(self, 200, llm_layer.status())
         if path == "/api/workspaces":
             return _send_json(self, 200, {"workspaces": _workspaces()})
         if path == "/api/runs":
-            q = parse_qs(urlparse(self.path).query)
             try:
                 limit = int((q.get("limit") or ["20"])[0])
             except ValueError:
                 limit = 20
-            return _send_json(self, 200, {"runs": _runs(limit)})
+            return _send_json(self, 200, {"runs": _runs(limit, _actor(self))})
         if path == "/api/log":
-            q = parse_qs(urlparse(self.path).query)
             rid = (q.get("id") or [""])[0]
+            if _run_access(self, rid) is False:
+                return _deny_run(self, rid)
             try:
-                return _send_json(self, 200, {"id": rid, "log": _tail_log(rid)})
+                text = _tail_log(rid)
             except ValueError as exc:
                 return _send_json(self, 404, {"error": str(exc)})
+            _audit(self, "log_read", 200, run_id=rid)
+            return _send_json(self, 200, {"id": rid, "log": text})
         if path == "/api/evalset/export":
-            q = parse_qs(urlparse(self.path).query)
+            if not _require_token(self, "evalset_export"):
+                return
             evalset = (q.get("evalset") or [""])[0]
             if not evalset:
                 return _send_json(self, 400, {"error": "需要 evalset"})
@@ -826,9 +965,11 @@ class Handler(BaseHTTPRequestHandler):
                 filename, blob = _evalset_export_zip(Path(evalset))
             except Exception as exc:
                 return _send_json(self, 400, {"error": str(exc)})
+            _audit(self, "evalset_export", 200, detail=Path(evalset).name)
             return _send_bytes(self, 200, blob, "application/zip", filename)
         if path == "/api/evalset/status":
-            q = parse_qs(urlparse(self.path).query)
+            if not _require_token(self, "evalset_status"):
+                return
             evalset = (q.get("evalset") or [""])[0]
             skill = (q.get("skill") or [""])[0]
             if not evalset or not skill:
@@ -838,7 +979,8 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 return _send_json(self, 400, {"error": str(exc)})
         if path == "/api/evalset/items":
-            q = parse_qs(urlparse(self.path).query)
+            if not _require_token(self, "evalset_items"):
+                return
             evalset = (q.get("evalset") or [""])[0]
             if not evalset or not Path(evalset).is_dir():
                 return _send_json(self, 400, {"error": "评测集目录不存在"})
@@ -863,39 +1005,50 @@ class Handler(BaseHTTPRequestHandler):
                                   "prompt": data["prompt"], "expect": data.get("expect") or ""})
             return _send_json(self, 200, {"items": items})
         if path == "/api/events":
-            q = parse_qs(urlparse(self.path).query)
-            rid = (q.get("id") or [""])[0]
-            return self._events(rid)
+            return self._events((q.get("id") or [""])[0])
         if path == "/api/status":
-            q = parse_qs(urlparse(self.path).query)
             rid = (q.get("id") or [""])[0]
+            if _run_access(self, rid) is False:
+                return _deny_run(self, rid)
             payload = _status_payload(rid, ACTIVE.get(rid))
             if not payload:
                 return _send_json(self, 404, {"error": "run not found"})
             return _send_json(self, 200, payload)
         if path == "/api/report":
-            q = parse_qs(urlparse(self.path).query)
             rid = (q.get("id") or [""])[0]
+            if _run_access(self, rid) is False:
+                return _deny_run(self, rid)
             code, payload = _report_payload(rid)
+            if code == 200:
+                _audit(self, "report_read", 200, run_id=rid)
             return _send_json(self, code, payload)
         if path == "/api/compare":
-            q = parse_qs(urlparse(self.path).query)
-            code, payload = _compare_reports((q.get("base") or [""])[0],
-                                             (q.get("target") or [""])[0])
+            base = (q.get("base") or [""])[0]
+            target = (q.get("target") or [""])[0]
+            for rid in (base, target):
+                if _run_access(self, rid) is False:
+                    return _deny_run(self, rid, "compare_denied")
+            code, payload = _compare_reports(base, target)
+            if code == 200:
+                _audit(self, "compare", 200, run_id=target,
+                       detail=f"{base}->{target}")
             return _send_json(self, code, payload)
         if path == "/api/export":
-            q = parse_qs(urlparse(self.path).query)
             rid = (q.get("id") or [""])[0]
+            if _run_access(self, rid) is False:
+                return _deny_run(self, rid)
             try:
                 filename, blob = _export_zip(rid)
             except FileNotFoundError as exc:
                 return _send_json(self, 404, {"error": str(exc)})
             except ValueError as exc:
                 return _send_json(self, 400, {"error": str(exc)})
+            _audit(self, "export", 200, run_id=rid)
             return _send_bytes(self, 200, blob, "application/zip", filename)
         if path == "/report":
-            q = parse_qs(urlparse(self.path).query)
             rid = (q.get("id") or [""])[0]
+            if _run_access(self, rid) is False:
+                return _deny_run(self, rid)
             results = _results_dir(rid)
             html_path = results / "report.html" if results else None
             if html_path is None or not html_path.is_file():
@@ -904,16 +1057,20 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
+            _send_headers(self)
             self.wfile.write(body)
+            _audit(self, "report_read", 200, run_id=rid)
             return
         return _send_json(self, 404, {"error": "not found"})
 
     def do_POST(self):
+        self._guest_id, self._guest_new = "", False
         path = self.path.split("?", 1)[0]
         if path == "/api/stop":
             data = _json_body(self)
             rid = str(data.get("id") or "")
+            if _run_access(self, rid) is False:
+                return _deny_run(self, rid)
             run = ACTIVE.get(rid)
             if not run:
                 return _send_json(self, 404, {"error": "run not found"})
@@ -949,11 +1106,15 @@ class Handler(BaseHTTPRequestHandler):
                         fh.write(json.dumps(event, ensure_ascii=False) + "\n")
                 except OSError:
                     pass
+            _audit(self, "run_stop", 200, run_id=rid,
+                   tier=run.get("tier") or "", detail="用户终止评估")
             return _send_json(self, 200, {"ok": True, "id": rid,
                                           "running": run["proc"].poll() is None,
                                           "stopped": bool(run.get("stopped")),
                                           **result})
         if path == "/api/evalset/import":
+            if not _require_token(self, "evalset_import"):
+                return
             try:
                 uid, dest, zpath = _receive_zip(self, max_bytes=MAX_EVALSET_BYTES,
                                                 subdir="eval-uploads")
@@ -964,6 +1125,7 @@ class Handler(BaseHTTPRequestHandler):
                     root = _evalset_import_root(dest)
                     info = _import_evalset(root, filename)
                     info["upload_id"] = uid
+                    _audit(self, "evalset_import", 200, detail=info.get("name") or "")
                 finally:
                     shutil.rmtree(dest, ignore_errors=True)
                     zpath.unlink(missing_ok=True)
@@ -1019,6 +1181,8 @@ class Handler(BaseHTTPRequestHandler):
                 zpath.unlink(missing_ok=True)
             return _send_json(self, 200, info)
         if path == "/api/evalset/generate":
+            if not _require_token(self, "evalset_generate"):
+                return
             data = _json_body(self)
             skill = str(data.get("skill") or "")
             out = str(data.get("out") or "")
@@ -1042,6 +1206,8 @@ class Handler(BaseHTTPRequestHandler):
                 _stamp_evalset_meta(Path(out), Path(skill), _skill_name(Path(skill)))
             return _send_json(self, 200, payload)
         if path == "/api/evalset/review":
+            if not _require_token(self, "evalset_review"):
+                return
             data = _json_body(self)
             evalset = Path(str(data.get("evalset") or ""))
             decisions = data.get("decisions") or []
@@ -1080,6 +1246,7 @@ class Handler(BaseHTTPRequestHandler):
                     meta["reviewed_at"] = payload["reviewed_at"]
                     meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
             _refresh_reports_for_evalset(evalset)
+            _audit(self, "evalset_review", 200, detail=f"{evalset.parent.name}/{evalset.name}")
             return _send_json(self, 200, {"ok": True, "path": str(reviews / "review.json")})
         if path == "/api/llm/test":
             data = _json_body(self)
@@ -1094,6 +1261,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/override":
             data = _json_body(self)
             rid = str(data.get("id") or "")
+            if _run_access(self, rid) is False:
+                return _deny_run(self, rid, "override_denied")
             reason = str(data.get("reason") or "").strip()
             try:
                 reviewer = _reviewer_name(data)
@@ -1143,9 +1312,12 @@ class Handler(BaseHTTPRequestHandler):
                     fh.write(json.dumps({"metric": metric, **overrides[metric]},
                                         ensure_ascii=False) + "\n")
             try:
-                return _send_json(self, 200, _rerun_report(run))
+                payload = _rerun_report(run)
             except Exception as exc:
                 return _send_json(self, 500, {"error": str(exc)})
+            _audit(self, "override", 200, run_id=rid, tier=run.get("tier") or "",
+                   detail=",".join(changes))
+            return _send_json(self, 200, payload)
         if path != "/api/run":
             return _send_json(self, 404, {"error": "not found"})
         data = _json_body(self)
@@ -1155,12 +1327,25 @@ class Handler(BaseHTTPRequestHandler):
         tier = str(data.get("tier") or "t2a").lower()
         if tier not in ("t0", "t1", "t2a", "t2b", "t3"):
             return _send_json(self, 400, {"error": "tier 只支持 t0/t1/t2a/t2b/t3"})
+        actor = _actor(self)
+        if tier in PROTECTED_TIERS and actor["kind"] != "token":
+            _audit(self, "run_denied", 401, tier=tier, detail="T2/T3 需要 token")
+            return _send_json(self, 401, {"ok": False,
+                                          "error": "T2/T3 需要访问 token：请向部署方申请"})
+        reuse_from = str(data.get("reuse_from") or "")
+        if reuse_from and _run_access(self, reuse_from) is False:
+            _audit(self, "reuse_denied", 403, run_id=reuse_from, tier=tier,
+                   detail="复用来源不属于当前身份")
+            return _send_json(self, 403, {"error": "无权复用该运行的产物"})
+        try:
+            skill_sha = runner_mod._skill_digest(Path(skill))
+        except OSError:
+            skill_sha = ""
         rid = uuid.uuid4().hex[:12]
         rdir = RUNS / rid
         rdir.mkdir(parents=True, exist_ok=True)
         progress = rdir / "progress.ndjson"
         results = rdir / "results"
-        reuse_from = str(data.get("reuse_from") or "")
         if reuse_from:
             prev = ACTIVE.get(reuse_from)
             if prev and prev["proc"].poll() is not None:
@@ -1234,17 +1419,24 @@ class Handler(BaseHTTPRequestHandler):
             popen_kwargs["start_new_session"] = True
         proc = subprocess.Popen(cmd, **popen_kwargs)
         ACTIVE[rid] = {"proc": proc, "dir": rdir, "results": results,
-                       "progress": progress, "log": log, "stopped": False}
-        (rdir / "run.json").write_text(json.dumps({
+                       "progress": progress, "log": log, "stopped": False,
+                       "tier": tier}
+        run_meta = {
             "id": rid, "skill": skill, "skill_name": _skill_name(Path(skill)),
             "workspace": str(data.get("workspace") or ""), "tier": tier,
-            "evalset": str(data.get("evalset") or ""),
-            "created_at": time.strftime("%Y-%m-%dT%H:%M:%S")},
-            ensure_ascii=False, indent=2), encoding="utf-8")
+            "evalset": str(data.get("evalset") or ""), "skill_sha256": skill_sha,
+            "owner_kind": actor["kind"], "owner_id": actor["id"],
+            "owner_name": actor["name"], "protected": tier in PROTECTED_TIERS,
+            "created_at": time.strftime("%Y-%m-%dT%H:%M:%S")}
+        (rdir / "run.json").write_text(json.dumps(run_meta, ensure_ascii=False, indent=2),
+                                       encoding="utf-8")
+        _audit(self, "run_start", 200, run_id=rid, tier=tier, skill_sha256=skill_sha)
         return _send_json(self, 200, {"id": rid, "results": str(results),
                                       "skill_name": _skill_name(Path(skill))})
 
     def _events(self, rid: str):
+        if _run_access(self, rid) is False:
+            return _deny_run(self, rid)
         run = ACTIVE.get(rid)
         if not run:
             return _send_json(self, 404, {"error": "run not found"})
@@ -1252,7 +1444,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Connection", "keep-alive")
-        self.end_headers()
+        _send_headers(self)
         pos = 0
         last_ping = time.time()
         # 不设硬截止：长跑可能数小时；客户端断开由写失败/前端重连处理。

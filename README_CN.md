@@ -29,7 +29,7 @@ skill-evaluator/
 ├── judges/             # LLM 评审 rubric（结构化 JSON 输出，固定单发 prompt）
 ├── scripts/            # CLI + runner + llm/harness 适配层；check-deps.sh = 前置自检（#7）
 ├── web/                # 本地前端（stdlib HTTP + SSE + 原生 JS）
-└── tests/              # 380 个测试，全部走 subprocess seam
+└── tests/              # 398 个测试，全部走 subprocess seam
 docs/adr/               # 41 条架构决策记录
 ```
 
@@ -40,6 +40,7 @@ docs/adr/               # 41 条架构决策记录
 1. 安装：把 `skill-evaluator/` 复制到 `~/.pi/agent/skills/`
 2. 前置自检：`bash scripts/check-deps.sh`（python ≥ 3.9 / git / pytest / pi CLI / config.yaml 可解析）
 3. 会话里说：*"评估这个 skill：`<路径>`"*；外部人员可在本地 UI 上传 `.zip`。上传按内容 hash 落到工作区，同内容复用；评测集路径自动填好。
+   T2/T3 需要持久访问 token（T0/T1 游客可直接用）。审批流由外部表单维护，审批后用 `python web/token_admin.py issue --name "申请人"` 发 token；明文只显示一次，客户端保存。
 4. 或直接用确定性流水线 / 本地前端：
    ```bash
    python scripts/runner.py --skill <路径> --tier t2a
@@ -68,7 +69,7 @@ docs/adr/               # 41 条架构决策记录
 
 ```bash
 cd skill-evaluator
-python -m pytest tests        # 380 个测试全绿
+python -m pytest tests        # 398 个测试全绿
 ```
 
 设计决策及理由见 `docs/adr/`。英文版见 `README.md`。

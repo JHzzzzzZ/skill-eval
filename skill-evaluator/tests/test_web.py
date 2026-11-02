@@ -1,6 +1,7 @@
 """web/app.py 与前端接线的回归（后台服务只在审核人 400 用例里临时启动）。"""
 import http.client
 import importlib.util
+from contextlib import contextmanager
 import inspect
 import io
 import json
@@ -597,3 +598,295 @@ def test_ui_wires_export_and_copy_link():
     assert "导出报告 .zip" in html and "复制链接" in html
     assert "/api/export?id=" in html
     assert 'location.origin + location.pathname + "?run="' in html
+
+# --- 分层访问与审计：T2/T3 token 门禁、游客 T0/T1、run 归属、audit.jsonl ---
+
+class _FakeProc:
+    """不真跑 runner：只验证门禁与归属，进程保持“在跑”。"""
+
+    def __init__(self, cmd=None, **kwargs):
+        self.cmd = list(cmd or [])
+        self.pid = 0
+
+    def poll(self):
+        return None
+
+
+def write_owned_run(root: Path, rid: str, *, owner_kind="guest", owner_id="", protected=False,
+                    tier="t2a") -> Path:
+    rdir = root / rid
+    results = rdir / "results"
+    results.mkdir(parents=True)
+    run_json = {"id": rid, "tier": tier, "skill_name": "demo",
+                "created_at": "2026-11-01T10:00:00", "skill_sha256": "sha-1"}
+    if owner_kind:
+        run_json.update({"owner_kind": owner_kind, "owner_id": owner_id,
+                         "owner_name": owner_id, "protected": protected})
+    (rdir / "run.json").write_text(json.dumps(run_json), encoding="utf-8")
+    (results / "run-meta.json").write_text(json.dumps({
+        "skill": str(root / "skill"), "skill_name": "demo", "tier": tier,
+        "skill_sha256": "sha-1"}), encoding="utf-8")
+    (results / "report.json").write_text(json.dumps(
+        {"conclusion": "with-warnings", "metrics": {}}), encoding="utf-8")
+    (results / "report.html").write_text("<html></html>", encoding="utf-8")
+    (rdir / "run.log").write_text("line", encoding="utf-8")
+    return rdir
+
+
+@contextmanager
+def web_server(tmp_path, monkeypatch):
+    monkeypatch.setattr(web, "RUNS", tmp_path / "runs")
+    (tmp_path / "runs").mkdir(exist_ok=True)
+    monkeypatch.setattr(web, "ACTIVE", {})
+    monkeypatch.setattr(web.token_admin, "TOKENS_FILE", tmp_path / "tokens.json")
+    monkeypatch.setattr(web.token_admin, "AUDIT_FILE", tmp_path / "audit.jsonl")
+    monkeypatch.setattr(web.subprocess, "Popen", _FakeProc)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), web.Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        yield server
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def call(server, method, path, body=None, headers=None, cookie=""):
+    conn = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=5)
+    hdrs = dict(headers or {})
+    payload = None
+    if body is not None:
+        payload = json.dumps(body)
+        hdrs.setdefault("Content-Type", "application/json")
+    if cookie:
+        hdrs["Cookie"] = cookie
+    conn.request(method, path, body=payload, headers=hdrs)
+    resp = conn.getresponse()
+    raw = resp.read()
+    set_cookie = resp.getheader("Set-Cookie") or ""
+    conn.close()
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        data = None
+    return resp.status, data, set_cookie.split(";", 1)[0]
+
+
+def make_skill(tmp_path: Path) -> Path:
+    skill = tmp_path / "skill"
+    skill.mkdir(exist_ok=True)
+    (skill / "SKILL.md").write_text("---\nname: demo\ndescription: d\n---\nbody\n",
+                                    encoding="utf-8")
+    return skill
+
+
+def test_guests_can_run_t0_t1_but_t2a_needs_token(tmp_path, monkeypatch):
+    skill = make_skill(tmp_path)
+    with web_server(tmp_path, monkeypatch) as server:
+        status, data, cookie = call(server, "POST", "/api/run",
+                                    {"skill": str(skill), "tier": "t2a"})
+        assert status == 401 and "token" in data["error"]
+        assert cookie.startswith("se_guest=")
+        assert not list((tmp_path / "runs").glob("*/run.json"))   # 服务端不启动
+        guest = cookie.split("=", 1)[1]
+
+        for tier in ("t0", "t1"):
+            status, data, _ = call(server, "POST", "/api/run",
+                                   {"skill": str(skill), "tier": tier}, cookie=cookie)
+            assert status == 200, data
+            run_meta = json.loads((tmp_path / "runs" / data["id"] / "run.json")
+                                  .read_text(encoding="utf-8"))
+            assert run_meta["owner_kind"] == "guest"
+            assert run_meta["owner_id"] == guest
+            assert run_meta["owner_name"] == "游客"
+            assert run_meta["protected"] is False
+            assert run_meta["tier"] == tier and run_meta["skill_sha256"]
+
+
+def test_t2a_with_token_is_owner_scoped(tmp_path, monkeypatch):
+    skill = make_skill(tmp_path)
+    with web_server(tmp_path, monkeypatch) as server:
+        owner = web.token_admin.issue("张三")
+        other = web.token_admin.issue("李四")
+        owner_h = {"X-Skill-Eval-Token": owner["token"]}
+        other_h = {"X-Skill-Eval-Token": other["token"]}
+
+        status, data, _ = call(server, "POST", "/api/run",
+                               {"skill": str(skill), "tier": "t2a"}, headers=owner_h)
+        assert status == 200, data
+        rid = data["id"]
+        run_meta = json.loads((tmp_path / "runs" / rid / "run.json").read_text(encoding="utf-8"))
+        assert run_meta["owner_kind"] == "token" and run_meta["owner_id"] == owner["id"]
+        assert run_meta["owner_name"] == "张三" and run_meta["protected"] is True
+
+        for path in (f"/api/status?id={rid}", f"/api/report?id={rid}", f"/api/log?id={rid}",
+                     f"/api/export?id={rid}", f"/report?id={rid}", f"/api/events?id={rid}"):
+            assert call(server, "GET", path, headers=other_h)[0] == 403, path
+            assert call(server, "GET", path, cookie="se_guest=" + "a" * 32)[0] == 403, path
+        assert call(server, "POST", "/api/stop", {"id": rid}, headers=other_h)[0] == 403
+        assert call(server, "POST", "/api/override", {"id": rid}, headers=other_h)[0] == 403
+        assert call(server, "GET", f"/api/status?id={rid}", headers=owner_h)[0] == 200
+
+
+def test_run_lists_and_legacy_runs_follow_ownership(tmp_path, monkeypatch):
+    with web_server(tmp_path, monkeypatch) as server:
+        owner = web.token_admin.issue("张三")
+        owner_h = {"X-Skill-Eval-Token": owner["token"]}
+        runs = tmp_path / "runs"
+        write_owned_run(runs, "tokenrun", owner_kind="token", owner_id=owner["id"],
+                        protected=True)
+        write_owned_run(runs, "guestrun", owner_kind="guest", owner_id="a" * 32, tier="t0")
+        write_owned_run(runs, "legacyrun", owner_kind=None)
+
+        assert call(server, "GET", "/api/status?id=guestrun", headers=owner_h)[0] == 403
+        assert call(server, "GET", "/api/status?id=guestrun",
+                    cookie="se_guest=" + "a" * 32)[0] == 200
+        assert call(server, "GET", "/api/status?id=guestrun",
+                    cookie="se_guest=" + "b" * 32)[0] == 403
+        # token 库非空 → legacy run 不属于任何身份，既不可读也不列出
+        assert call(server, "GET", "/api/status?id=legacyrun",
+                    cookie="se_guest=" + "b" * 32)[0] == 403
+        assert call(server, "GET", "/api/report?id=legacyrun", headers=owner_h)[0] == 403
+
+        status, data, _ = call(server, "GET", "/api/runs?limit=50",
+                               cookie="se_guest=" + "a" * 32)
+        assert {r["id"] for r in data["runs"]} == {"guestrun"}
+        status, data, _ = call(server, "GET", "/api/runs?limit=50",
+                               cookie="se_guest=" + "b" * 32)
+        assert data["runs"] == []
+        status, data, _ = call(server, "GET", "/api/runs?limit=50", headers=owner_h)
+        assert {r["id"] for r in data["runs"]} == {"tokenrun"}
+        # 跨 run 对比同样校验双方归属
+        assert call(server, "GET", "/api/compare?base=guestrun&target=tokenrun",
+                    headers=owner_h)[0] == 403
+
+
+def test_legacy_runs_visible_only_without_tokens(tmp_path, monkeypatch):
+    runs = tmp_path / "runs"
+    with web_server(tmp_path, monkeypatch) as server:
+        write_owned_run(runs, "legacyrun", owner_kind=None)
+        bare = runs / "norunjson"        # 旧 run：目录和 results 在，但没有 run.json
+        (bare / "results").mkdir(parents=True)
+        (bare / "results" / "run-meta.json").write_text(
+            json.dumps({"skill_name": "demo", "tier": "t0"}), encoding="utf-8")
+        (bare / "run.log").write_text("line", encoding="utf-8")
+        assert web._run_owner("norunjson")["kind"] == "legacy"
+
+        guest = "se_guest=" + "a" * 32
+        # 完全没有 token：单用户迁移期，legacy run 对当前身份放行
+        for rid in ("legacyrun", "norunjson"):
+            assert call(server, "GET", f"/api/status?id={rid}", cookie=guest)[0] == 200
+            assert call(server, "GET", f"/api/log?id={rid}", cookie=guest)[0] == 200
+        status, data, _ = call(server, "GET", "/api/runs?limit=50", cookie=guest)
+        assert {r["id"] for r in data["runs"]} == {"legacyrun", "norunjson"}
+
+        # 发过一个 token 后就是多用户模式：legacy 一律不可见/不可读
+        token = web.token_admin.issue("张三")
+        token_h = {"X-Skill-Eval-Token": token["token"]}
+        for rid in ("legacyrun", "norunjson"):
+            assert call(server, "GET", f"/api/status?id={rid}", cookie=guest)[0] == 403
+            assert call(server, "GET", f"/api/report?id={rid}", headers=token_h)[0] == 403
+        for who in ({"cookie": guest}, {"headers": token_h}):
+            status, data, _ = call(server, "GET", "/api/runs?limit=50", **who)
+            assert data["runs"] == []
+
+
+def test_reuse_from_requires_ownership(tmp_path, monkeypatch):
+    skill = make_skill(tmp_path)
+    audit = tmp_path / "audit.jsonl"
+    with web_server(tmp_path, monkeypatch) as server:
+        owner = web.token_admin.issue("张三")
+        other = web.token_admin.issue("李四")
+        owner_h = {"X-Skill-Eval-Token": owner["token"]}
+        other_h = {"X-Skill-Eval-Token": other["token"]}
+
+        status, data, _ = call(server, "POST", "/api/run",
+                               {"skill": str(skill), "tier": "t2a"}, headers=owner_h)
+        assert status == 200, data
+        src = data["id"]
+        before = {p.name for p in (tmp_path / "runs").iterdir()}
+
+        status, data, _ = call(server, "POST", "/api/run",
+                               {"skill": str(skill), "tier": "t2a", "reuse_from": src},
+                               headers=other_h)
+        assert status == 403 and "复用" in data["error"]
+        assert {p.name for p in (tmp_path / "runs").iterdir()} == before   # 拒绝时不建 run
+        denied = [json.loads(line) for line in audit.read_text(encoding="utf-8").splitlines()
+                  if json.loads(line)["action"] == "reuse_denied"]
+        assert denied and denied[-1]["run_id"] == src
+        assert denied[-1]["actor_id"] == other["id"] and denied[-1]["status"] == 403
+
+        status, data, _ = call(server, "POST", "/api/run",
+                               {"skill": str(skill), "tier": "t2a", "reuse_from": src},
+                               headers=owner_h)
+        assert status == 200 and data["id"] != src      # 自己的 run 可复用
+
+
+def test_evalset_endpoints_require_token(tmp_path, monkeypatch):
+    with web_server(tmp_path, monkeypatch) as server:
+        for path in ("/api/evalset/status?evalset=x&skill=y", "/api/evalset/items?evalset=x",
+                     "/api/evalset/export?evalset=x"):
+            assert call(server, "GET", path)[0] == 401, path
+        for path in ("/api/evalset/generate", "/api/evalset/review"):
+            assert call(server, "POST", path, {})[0] == 401, path
+        assert call(server, "POST", "/api/evalset/import?filename=x.zip")[0] == 401
+
+        token = web.token_admin.issue("张三")
+        status, _, _ = call(server, "GET", "/api/evalset/items?evalset=missing-evalset",
+                            headers={"X-Skill-Eval-Token": token["token"]})
+        assert status == 400      # 过了门禁，只剩业务错误
+
+
+def test_token_check_reports_identity_and_revocation(tmp_path, monkeypatch):
+    with web_server(tmp_path, monkeypatch) as server:
+        assert call(server, "GET", "/api/token/check")[0] == 401
+        token = web.token_admin.issue("张三")
+        status, data, _ = call(server, "GET", "/api/token/check",
+                               headers={"X-Skill-Eval-Token": token["token"]})
+        assert status == 200
+        assert data == {"ok": True, "id": token["id"], "name": "张三"}
+        web.token_admin.revoke(token["id"])
+        assert call(server, "GET", "/api/token/check",
+                    headers={"X-Skill-Eval-Token": token["token"]})[0] == 401
+
+
+AUDIT_FIELDS = {"ts", "ip", "x_forwarded_for", "user_agent", "actor_kind", "actor_id",
+                "actor_name", "action", "method", "path", "status", "run_id", "tier",
+                "skill_sha256", "detail"}
+
+
+def test_audit_records_ip_ua_actor_without_token(tmp_path, monkeypatch):
+    skill = make_skill(tmp_path)
+    audit = tmp_path / "audit.jsonl"
+    with web_server(tmp_path, monkeypatch) as server:
+        token = web.token_admin.issue("张三")
+        headers = {"X-Skill-Eval-Token": token["token"], "User-Agent": "pytest-agent/1.0",
+                   "X-Forwarded-For": "203.0.113.9"}
+        status, data, _ = call(server, "POST", "/api/run",
+                               {"skill": str(skill), "tier": "t0"}, headers=headers)
+        assert status == 200
+        lines = [json.loads(line) for line in audit.read_text(encoding="utf-8").splitlines()]
+        start = [e for e in lines if e["action"] == "run_start"][0]
+        assert start["actor_kind"] == "token" and start["actor_id"] == token["id"]
+        assert start["actor_name"] == "张三"
+        assert start["ip"] and start["user_agent"] == "pytest-agent/1.0"
+        assert start["x_forwarded_for"] == "203.0.113.9"      # 只记录，不用于授权
+        assert start["tier"] == "t0" and start["run_id"] == data["id"]
+        assert start["skill_sha256"] and start["method"] == "POST"
+        assert start["path"] == "/api/run"
+        raw = audit.read_text(encoding="utf-8")
+        assert token["token"] not in raw                        # 明文 token 不入审计
+        assert all(set(entry) == AUDIT_FIELDS for entry in lines)
+
+
+def test_ui_token_gate_hides_evalset_and_sends_header():
+    html = (WEB_APP.parent / "index.html").read_text(encoding="utf-8")
+    for element in ('id="accessToken"', 'id="tokenBtn"', 'id="tokenState"', 'id="evalCard"'):
+        assert element in html, element
+    assert "X-Skill-Eval-Token" in html
+    assert 'localStorage.getItem("se-token")' in html
+    assert '$("evalCard").hidden = !tokenAuthorized' in html     # 游客隐藏评测集卡
+    assert "T2/T3 需要申请 token" in html
+    assert "new EventSource" not in html                         # SSE 改 fetch 才能带请求头
+    assert "headers: authHeaders()" in html
+    assert 'fetch("/api/export?id=" + encodeURIComponent(rid), {headers: authHeaders()})' in html
+    assert "blobDownload(await r.blob()" in html

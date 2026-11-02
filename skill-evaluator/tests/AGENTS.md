@@ -4,7 +4,7 @@ Generated: 2026-09-22T13:43:08.578Z
 
 ## OVERVIEW
 
-25 个测试文件 / 380 个 test，全部走 subprocess seam：把脚本当 CLI 跑，不 import 被测脚本（`test_trace_run.py` 例外，它 import `EventAggregator` 做增量消费断言；`test_config.py` 直接 import `_config.py`；`test_runner.py` 直接 import `_real_cases`/`stage_ready` 做判定断言；`test_web.py` 直接 import `web/app.py`，其中审核人 400 用例临时起一个 loopback HTTP 服务）。
+26 个测试文件 / 398 个 test，全部走 subprocess seam：把脚本当 CLI 跑，不 import 被测脚本（`test_trace_run.py` 例外，它 import `EventAggregator` 做增量消费断言；`test_config.py` 直接 import `_config.py`；`test_runner.py` 直接 import `_real_cases`/`stage_ready` 做判定断言；`test_web.py` 直接 import `web/app.py`，审核人 400 与访问门禁用例临时起 loopback HTTP 服务；`test_token_admin.py` 用 `importlib` 加载 `web/token_admin.py` 测纯函数 + 跑 CLI）。
 
 ## WHERE TO LOOK
 
@@ -13,7 +13,8 @@ Generated: 2026-09-22T13:43:08.578Z
 | `test_static_check.py` | `scripts/static_check.py`（六组规则 + PII + 依赖全面性 + 字符/行阈值） | 63 |
 | `test_config.py` | `scripts/_config.py`（YAML 子集解析/优先级/类型） | 7 |
 | `test_evalset_gen.py` | `scripts/evalset_gen.py`（prompt/条目归一化） | 2 |
-| `test_web.py` | `web/app.py`（zip 上传安全边界 / UI 术语 / 停止进程 / 复用拷贝 / 工作区 / 评测集版本与导入导出 / 磁盘 history 回退 / 局部报告 / ACTIVE 运行态 / 内容保真 / provenance / 审核人 400 / 预检接线 / 评测集前置 / 历史对比与可比性判定 / 报告导出） | 36 |
+| `test_web.py` | `web/app.py`（zip 上传安全边界 / UI 术语 / 停止进程 / 复用拷贝与复用归属 / 工作区 / 评测集版本与导入导出 / 磁盘 history 回退 / 局部报告 / ACTIVE 运行态 / 内容保真 / provenance / 审核人 400 / 预检接线 / 评测集前置 / 历史对比与可比性判定 / 报告导出 / T2-T3 token 门禁与 run 归属 / 游客 T0-T1 / legacy 在无 token 时才放行 / 审计） | 45 |
+| `test_token_admin.py` | `web/token_admin.py`（issue 只返一次明文、只落 hash / list 不泄 hash / revoke 即时失效 / CLI 全局 `--tokens-file`/`--audit-file` / 路径不走环境变量 / 审计写失败不抛 / 损坏库 fail closed） | 9 |
 | `test_llm.py` | `scripts/llm.py`（协议/无 tools/JSON 提取） | 5 |
 | `test_judge_run.py` | `scripts/judge_run.py`（文件收集/prompt/SKILL.md 优先） | 5 |
 | `test_runner.py` | `scripts/runner.py`（dry-run/T0 端到端 / 进度计时 / T0-T1 复用与跨目录缓存 / 阶段级完成判定 / 半截 T1 不缓存 / 真实输入解析） | 14 |
@@ -36,7 +37,7 @@ Generated: 2026-09-22T13:43:08.578Z
 | `test_calibrate.py` | `scripts/calibrate.py`（一致率/准确率统计 / 校准集结构） | 3 |
 | `test_pairwise.py` | `scripts/pairwise.py`（A/B prompt 匿名化） | 1 |
 
-`scripts/` 16 个 Python CLI + 5 个共享模块全覆盖，无缺口；T4 的 3 个测试已随脚本移入 `attic/tests/`。`report.py` 是唯一拆成 4 个文件覆盖的脚本。`check-deps.sh` 无 Python 测试（前置自检靠实跑验证）。
+`scripts/` 16 个 Python CLI + 5 个共享模块全覆盖，无缺口；`web/` 的 `app.py` 由 `test_web.py` 覆盖、`token_admin.py` 由 `test_token_admin.py` 覆盖。T4 的 3 个测试已随脚本移入 `attic/tests/`。`report.py` 是唯一拆成 4 个文件覆盖的脚本。`check-deps.sh` 无 Python 测试（前置自检靠实跑验证）。
 
 ## CONVENTIONS
 
@@ -61,5 +62,6 @@ Generated: 2026-09-22T13:43:08.578Z
 
 - `tests/tmp-ev/triggers/should/s1.json`（内容仅 `{"prompt": "x"}`）已被 git 跟踪但全仓零引用，是误提交的 scratch 残渣。
 - `test_static_check.py::test_evaluator_self_check_passes` 是自检回归锁：保证 `python scripts/static_check.py skill-evaluator` 输出 `passed: true`（ADR-0012/0013）。
-- `test_web.py::test_override_rejects_empty_reviewer` 是本仓唯一临时启动 HTTP 服务的用例（端口 0 + daemon 线程，结束 `shutdown()`），只为验证接口返回 400；其余测试仍走纯函数或 subprocess。
+- `test_web.py::test_override_rejects_empty_reviewer` 是本仓最早的临时 HTTP 服务用例（端口 0 + daemon 线程，结束 `shutdown()`）；新增的访问门禁用例共用 `web_server`/`call` 帮手，并用 `_FakeProc` 替掉 `subprocess.Popen`（不真跑 runner），否则每个用例都会拉起真实子进程。
+- `test_web.py` 里带非 ASCII 字符的绝对路径不能直接拼进请求行（`http.client` 按 ASCII 编码）：访问门禁用例改用固定的 ASCII 评测集名，避免 Windows 中文用户名环境假阴性。
 - 该文件是最大测试文件（63 test），因 #4 扩为六组规则后每组都要正向+负向用例。加规则时必须同时加“不该误报”的负向用例（尤其 `secrets` 的占位符、`obfuscation`/`pii` 的 warn 分级与示例白名单）。

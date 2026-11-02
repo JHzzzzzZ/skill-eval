@@ -1,6 +1,6 @@
 # PROJECT KNOWLEDGE BASE — skill-evaluator
 
-Generated: 2026-11-01（v2 更新：ADR-0032–0040）
+Generated: 2026-11-01（v2 更新：ADR-0032–0041）
 
 ## OVERVIEW
 
@@ -31,6 +31,8 @@ Generated: 2026-11-01（v2 更新：ADR-0032–0040）
 | 改评测集版本/导入导出 | `web/app.py` 的 `_evalset_versions` / `_evalset_export_zip` / `_import_evalset` + `web/index.html` 版本下拉 |
 | 改停止后的局部报告 | `web/app.py` 的 `_completed_stages` / `_finalize_partial` + `report.py --partial` |
 | 改运行历史/日志/重连 | `web/app.py` 的 `_runs` / `_status_payload` / `_tail_log` / `Handler._events`（无硬截止，15s 心跳） |
+| 改访问控制/token 门禁 | `web/token_admin.py`（`web/tokens.json` 只存 hash + issue/list/revoke CLI）+ `web/app.py` 的 `_token_record` / `_run_access` / `/api/token/check`；T2/T3 需 token，T0/T1 游客可用 |
+| 改审计字段/落盘 | `web/app.py::_audit` + `web/token_admin.py::append_audit`（`web/audit.jsonl`，字段固定；不写 token/API key/正文） |
 
 ## PIPELINE
 
@@ -85,5 +87,7 @@ runner 按档位增量执行（ADR-0033）：
 - 不改 #4 的命中分级：`dangerous`/`secrets`/`injection`/`exfil` 命中即 fail，`obfuscation`/`pii` 只 warn（ADR-0013/0029）。
 - 不让 `deps_missing` 把 #12 判成 fail（ADR-0031）。
 - 优化建议必须从裁决确定性派生，不得 LLM 生成（ADR-0030）。
+- T2/T3 必须带有效 token，T0/T1 游客可用；游客不能访问评测集接口。token 是访问控制，不是执行沙箱——不要把它说成“已隔离”。
+- 审计不记录 token/API key/prompt 正文；IP 取 `client_address`，`X-Forwarded-For` 只记录不授权（见 `reference.md § 访问控制与审计`）。
 - T4 的 `attic/` 内容不随包分发、不跑测试（ADR-0032）。
 - 前端不重算指标，只调 runner；报告契约以 `report.py` 为准（ADR-0036）。

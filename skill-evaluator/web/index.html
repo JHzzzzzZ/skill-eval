@@ -44,7 +44,9 @@
   }
   .brand h1{font-size:19px;letter-spacing:-.02em;margin:0}
   .brand p{margin:2px 0 0;color:var(--muted);font-size:12.5px}
-  .top-actions{display:flex;gap:8px;align-items:center}
+  .top-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
+  .token-set{display:flex;gap:6px;align-items:center}
+  .token-set input{width:190px;padding:7px 10px;font-size:12.5px;border-radius:10px}
   .icon-btn{
     width:38px;height:38px;border-radius:11px;border:1px solid var(--line);
     background:var(--card);color:var(--ink-2);display:grid;place-items:center;cursor:pointer;
@@ -315,6 +317,11 @@
       </div>
     </div>
     <div class="top-actions">
+      <div class="token-set">
+        <input id="accessToken" type="password" autocomplete="off" placeholder="访问 token（T2/T3 必填）" aria-label="访问 token">
+        <button class="btn btn-ghost btn-sm" id="tokenBtn" type="button">验证</button>
+        <span class="pill" id="tokenState">游客</span>
+      </div>
       <span class="pill"><span class="dot" id="liveDot"></span><span id="state">待机</span></span>
       <button class="icon-btn" id="themeBtn" title="切换主题" aria-label="切换主题">◐</button>
     </div>
@@ -412,9 +419,9 @@
         <div class="tier-grid" id="tierGrid">
           <div class="tier-opt"><input type="radio" name="tier" id="t0" value="t0"><label for="t0"><b>基础检查</b><small>5–15 秒 · 0 次模型</small><small>#1 #3 #4 #12</small></label></div>
           <div class="tier-opt"><input type="radio" name="tier" id="t1" value="t1"><label for="t1"><b>文档语义评审</b><small>1–2 分钟 · 7 次模型</small><small>#2 #5–#9</small></label></div>
-          <div class="tier-opt"><input type="radio" name="tier" id="t2a" value="t2a" checked><label for="t2a"><b>触发评测 <span class="tag-rec">推荐</span></b><small>2–45 分钟 · 按 case 兜底</small><small>#10</small></label></div>
-          <div class="tier-opt"><input type="radio" name="tier" id="t2b" value="t2b"><label for="t2b"><b>真实输入对比</b><small>5–40 分钟 · 2×case</small><small>#11 #12</small></label></div>
-          <div class="tier-opt"><input type="radio" name="tier" id="t3" value="t3"><label for="t3"><b>完整任务运行</b><small>30 分钟–数小时 · 重复×3</small><small>#13–#16</small></label></div>
+          <div class="tier-opt"><input type="radio" name="tier" id="t2a" value="t2a" checked><label for="t2a"><b>触发评测 <span class="tag-rec">推荐</span></b><small>2–45 分钟 · 按 case 兜底 · 需申请 token</small><small>#10</small></label></div>
+          <div class="tier-opt"><input type="radio" name="tier" id="t2b" value="t2b"><label for="t2b"><b>真实输入对比</b><small>5–40 分钟 · 2×case · 需申请 token</small><small>#11 #12</small></label></div>
+          <div class="tier-opt"><input type="radio" name="tier" id="t3" value="t3"><label for="t3"><b>完整任务运行</b><small>30 分钟–数小时 · 重复×3 · 需申请 token</small><small>#13–#16</small></label></div>
         </div>
         <div class="inline-note" style="margin-top:8px">时间为范围，取决于模型、评测集与 case 数。</div>
 
@@ -667,6 +674,51 @@ function reviewerName(){ return $("reviewerName").value.trim(); }
 function setReviewer(value){ $("reviewerName").value = value || ""; }
 setReviewer(localStorage.getItem("se-reviewer") || "");
 $("reviewerName").addEventListener("input", () => localStorage.setItem("se-reviewer", reviewerName()));
+
+// 访问 token：T0/T1 游客可跑；T2/T3 需要有效 token（服务端同样强制 401）。
+// token 明文只存本地 localStorage，请求带 X-Skill-Eval-Token；不写进分享链接。
+let tokenAuthorized = false, tokenName = "";
+function tokenValue(){ return localStorage.getItem("se-token") || ""; }
+function authHeaders(extra){
+  const headers = Object.assign({}, extra || {});
+  const token = tokenValue();
+  if(token) headers["X-Skill-Eval-Token"] = token;
+  return headers;
+}
+function applyActorUi(){
+  $("evalCard").hidden = !tokenAuthorized;      // 游客隐藏评测集卡
+  $("tokenState").textContent = tokenAuthorized ? "已授权：" + (tokenName || "token") : "游客";
+  $("accessToken").value = tokenAuthorized ? tokenValue() : "";
+  refreshRunPrereq();
+}
+function clearToken(){ tokenAuthorized = false; tokenName = ""; localStorage.removeItem("se-token"); }
+async function checkToken(){
+  const token = tokenValue();
+  if(!token){ clearToken(); applyActorUi(); return false; }
+  try{
+    const r = await fetch("/api/token/check", {headers: authHeaders()});
+    const d = await r.json();
+    if(!r.ok || !d.ok){ clearToken(); }
+    else { tokenAuthorized = true; tokenName = d.name || ""; }
+  }catch(e){ clearToken(); }
+  applyActorUi();
+  if(tokenAuthorized) loadRuns();
+  return tokenAuthorized;
+}
+$("tokenBtn").onclick = async () => {
+  const raw = $("accessToken").value.trim();
+  if(!raw){
+    clearToken(); applyActorUi(); loadRuns();
+    toast("已切换为游客", "ok");
+    return;
+  }
+  localStorage.setItem("se-token", raw);
+  const ok = await checkToken();
+  toast(ok ? "已授权：" + tokenName : "token 无效或已停用", ok ? "ok" : "err");
+};
+$("accessToken").addEventListener("keydown", (e)=>{ if(e.key === "Enter") $("tokenBtn").click(); });
+applyActorUi();
+checkToken();
 function preflightWarnings(){
   const warnings = [];
   const tier = tierValue();
@@ -735,6 +787,13 @@ function setProgress(p, reset){
 }
 function publicText(value){
   return String(value == null ? "" : value).replace(/\s{2,}/g, " ").trim();
+}
+function blobDownload(blob, filename){
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url), 2000);
 }
 function esc(value){
   return String(value == null ? "" : value)
@@ -951,7 +1010,7 @@ $("genEval").onclick = async () => {
   if(!skill || !out){ toast("先上传或选择工作区", "err"); return; }
   $("evalMsg").textContent = "生成中（会调用模型，可能较慢）…";
   try{
-    const r = await fetch("/api/evalset/generate", {method:"POST", headers:{"Content-Type":"application/json"},
+    const r = await fetch("/api/evalset/generate", {method:"POST", headers:authHeaders({"Content-Type":"application/json"}),
       body: JSON.stringify({skill, out, count:parseInt($("evalCount").value||"10",10),
         backend:$("backend").value, protocol:$("provider").value,
         base_url:$("base_url").value.trim(), model:$("model").value.trim(), api_key:$("api_key").value})});
@@ -967,7 +1026,7 @@ $("loadEval").onclick = async () => {
   const evalset = evalsetPath();
   if(!evalset){ toast("先选择工作区与评测集版本", "err"); return; }
   try{
-    const r = await fetch("/api/evalset/items?evalset="+encodeURIComponent(evalset));
+    const r = await fetch("/api/evalset/items?evalset="+encodeURIComponent(evalset), {headers:authHeaders()});
     const d = await r.json();
     if(!r.ok) throw new Error(d.error||"读取失败");
     evalItems = d.items || [];
@@ -989,7 +1048,7 @@ $("submitReview").onclick = async () => {
     expect:it.expect||"", verdict:document.querySelector(`.rv[data-i="${i}"]`).value,
     note:document.querySelector(`.rr[data-i="${i}"]`).value.trim()}));
   try{
-    const r = await fetch("/api/evalset/review", {method:"POST", headers:{"Content-Type":"application/json"},
+    const r = await fetch("/api/evalset/review", {method:"POST", headers:authHeaders({"Content-Type":"application/json"}),
       body: JSON.stringify({evalset, decisions, reviewer:reviewerName()})});
     const d = await r.json();
     if(!r.ok) throw new Error(d.error||"提交失败");
@@ -997,13 +1056,15 @@ $("submitReview").onclick = async () => {
     toast("审核已记录", "ok");
   }catch(e){ $("evalMsg").textContent = "✗ " + e.message; toast(e.message, "err"); }
 };
-$("exportEval").onclick = () => {
+$("exportEval").onclick = async () => {
   const evalset = evalsetPath();
   if(!evalset){ toast("先选择评测集版本", "err"); return; }
-  const a = document.createElement("a");
-  a.href = "/api/evalset/export?evalset=" + encodeURIComponent(evalset);
-  a.download = "";
-  document.body.appendChild(a); a.click(); a.remove();
+  try{
+    const r = await fetch("/api/evalset/export?evalset=" + encodeURIComponent(evalset),
+      {headers:authHeaders()});
+    if(!r.ok){ const d = await r.json().catch(()=>({})); throw new Error(d.error || "导出失败"); }
+    blobDownload(await r.blob(), "evalset.zip");
+  }catch(e){ toast(e.message, "err"); }
 };
 $("importEval").onclick = () => $("evalZip").click();
 $("evalZip").onchange = () => {
@@ -1016,6 +1077,7 @@ $("evalZip").onchange = () => {
   const xhr = new XMLHttpRequest();
   xhr.open("POST", "/api/evalset/import?filename=" + encodeURIComponent(file.name));
   xhr.setRequestHeader("Content-Type", "application/zip");
+  if(tokenValue()) xhr.setRequestHeader("X-Skill-Eval-Token", tokenValue());
   xhr.onload = () => {
     let d = {};
     try{ d = JSON.parse(xhr.responseText || "{}"); }catch{}
@@ -1115,6 +1177,12 @@ addRealRow();
 $("run").onclick = async () => {
   const skill = currentSkill;
   if(!skill){ toast("先上传压缩包或选择工作区", "err"); return; }
+  const tier = tierValue();
+  if(!tokenAuthorized && (tier === "t2a" || tier === "t2b" || tier === "t3")){
+    toast("T2/T3 需要申请 token：先在右上角填入访问 token", "err");
+    $("runHint").textContent = "T2/T3 需要访问 token；基础检查与文档评审免 token 可用。";
+    return;
+  }
   let realCases = [];
   try{ realCases = realPayload(); }catch(e){ toast(e.message, "err"); return; }
   const warnings = preflightWarnings();
@@ -1132,7 +1200,7 @@ $("run").onclick = async () => {
   const llm = {protocol:$("provider").value, base_url:$("base_url").value.trim(),
                model:$("model").value.trim(), api_key:$("api_key").value};
   try{
-    const r = await fetch("/api/run", {method:"POST", headers:{"Content-Type":"application/json"},
+    const r = await fetch("/api/run", {method:"POST", headers:authHeaders({"Content-Type":"application/json"}),
       body: JSON.stringify({skill, tier:tierValue(), harness:$("harness").value,
         model:llm.model, evalset:evalsetPath(), backend:$("backend").value,
         real_cases: realCases, llm, workspace: currentWorkspace,
@@ -1154,7 +1222,7 @@ $("stop").onclick = async () => {
   if(!confirm("终止当前评估？已完成的阶段会保留，并生成局部报告。")) return;
   $("stop").disabled = true;
   try{
-    const r = await fetch("/api/stop", {method:"POST", headers:{"Content-Type":"application/json"},
+    const r = await fetch("/api/stop", {method:"POST", headers:authHeaders({"Content-Type":"application/json"}),
       body: JSON.stringify({id:runId})});
     const d = await r.json();
     if(!r.ok) throw new Error(d.error||"终止失败");
@@ -1169,10 +1237,41 @@ $("stop").onclick = async () => {
 
 function listen(id){
   finish();
-  es = new EventSource("/api/events?id="+id);
-  es.onopen = () => { reconnectAttempt = 0; };
-  es.onmessage = (msg) => {
-    let ev; try{ ev = JSON.parse(msg.data); }catch{ return; }
+  reconnectAttempt = 0;
+  const ctrl = new AbortController();
+  let closed = false;
+  es = { close(){ closed = true; try{ ctrl.abort(); }catch(e){ /* 已断开 */ } } };
+  // EventSource 不能带自定义请求头，改用 fetch 流式读 SSE，token 走 X-Skill-Eval-Token。
+  (async () => {
+    try{
+      const res = await fetch("/api/events?id=" + encodeURIComponent(id),
+        {headers: authHeaders(), signal: ctrl.signal});
+      if(!res.ok) throw new Error("进度连接失败");
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while(true){
+        const {done, value} = await reader.read();
+        if(done) break;
+        buffer += decoder.decode(value, {stream:true});
+        let cut;
+        while((cut = buffer.indexOf("\n\n")) >= 0){
+          const chunk = buffer.slice(0, cut);
+          buffer = buffer.slice(cut + 2);
+          for(const line of chunk.split("\n")){
+            if(!line.startsWith("data: ")) continue;
+            let ev; try{ ev = JSON.parse(line.slice(6)); }catch(e){ continue; }
+            handleEvent(id, ev);
+          }
+        }
+      }
+      if(!closed) handleDisconnect(id);
+    }catch(e){
+      if(!closed) handleDisconnect(id);
+    }
+  })();
+}
+function handleEvent(id, ev){
     const at = ev.clock || clockOf(ev.ts);
     if(ev.type==="plan"){
       setPlan(ev.tier, ev.stages);
@@ -1236,15 +1335,13 @@ function listen(id){
       stopTiming("完成"); setTitle("✓ 报告已生成"); notifyResult("评估完成", "报告已生成");
       showReport(id); loadRuns();
     }
-  };
-  es.onerror = () => { handleDisconnect(id); };
 }
 function finish(){ if(es){ es.close(); es=null; } }
 
 async function handleDisconnect(id){
   finish();
   try{
-    const r = await fetch("/api/status?id="+id);
+    const r = await fetch("/api/status?id="+id, {headers: authHeaders()});
     if(!r.ok){ setBusy(false); showError("无法读取这次运行的状态", id, false); return; }
     const s = await r.json();
     if(s.running){
@@ -1296,7 +1393,7 @@ async function showLog(id){
   if(!id){ toast("还没有可查看的运行", "err"); return; }
   $("logModal").hidden = false; $("logBody").textContent = "加载中…";
   try{
-    const r = await fetch("/api/log?id=" + encodeURIComponent(id));
+    const r = await fetch("/api/log?id=" + encodeURIComponent(id), {headers: authHeaders()});
     const d = await r.json();
     $("logBody").textContent = r.ok ? (d.log || "（日志为空）") : (d.error || "日志读取失败");
   }catch(e){ $("logBody").textContent = "日志读取失败：" + e.message; }
@@ -1313,9 +1410,37 @@ function setResultLinks(id){
   $("exportLink").href = "/api/export?id=" + encodeURIComponent(rid);
   $("exportLink").setAttribute("download", "report-" + rid + ".zip");
 }
+// <a href> 与 window.open 带不了请求头：报告/导出改走 fetch + blob，token 只进 header。
+$("reportLink").onclick = async (e) => {
+  e.preventDefault();
+  const rid = runId || (report && report.run_id) || "";
+  if(!rid){ toast("还没有可打开的报告", "err"); return; }
+  const tab = window.open("about:blank", "_blank");   // 先同步开窗口，避免异步后被拦
+  try{
+    const r = await fetch("/report?id=" + encodeURIComponent(rid), {headers: authHeaders()});
+    if(!r.ok) throw new Error("报告还没生成");
+    const url = URL.createObjectURL(new Blob([await r.text()], {type:"text/html"}));
+    if(tab) tab.location.href = url; else window.location.href = url;
+    setTimeout(()=>URL.revokeObjectURL(url), 60000);
+  }catch(err){
+    if(tab) tab.close();
+    toast(err.message, "err");
+  }
+};
+$("exportLink").onclick = async (e) => {
+  e.preventDefault();
+  const rid = runId || (report && report.run_id) || "";
+  if(!rid){ toast("还没有可导出的报告", "err"); return; }
+  try{
+    const r = await fetch("/api/export?id=" + encodeURIComponent(rid), {headers: authHeaders()});
+    if(!r.ok){ const d = await r.json().catch(()=>({})); throw new Error(d.error || "导出失败"); }
+    blobDownload(await r.blob(), "report-" + rid + ".zip");
+  }catch(e){ toast(e.message, "err"); }
+};
 $("copyLink").onclick = async () => {
   const rid = runId || (report && report.run_id) || "";
   if(!rid){ toast("还没有可分享的运行", "err"); return; }
+  // 链接只带 run id；token 存在对方浏览器的 localStorage，绝不写进 URL
   const url = location.origin + location.pathname + "?run=" + encodeURIComponent(rid);
   try{
     await navigator.clipboard.writeText(url);
@@ -1324,7 +1449,7 @@ $("copyLink").onclick = async () => {
 };
 async function loadRuns(){
   try{
-    const r = await fetch("/api/runs?limit=10");
+    const r = await fetch("/api/runs?limit=10", {headers: authHeaders()});
     const d = await r.json();
     const runs = d.runs || [];
     if(!runs.length){ $("recent").innerHTML = '<div class="empty">还没有报告</div>'; return; }
@@ -1387,7 +1512,7 @@ async function openHistory(){
   $("historyModal").hidden = false;
   $("historyList").innerHTML = '<div class="empty">加载中…</div>';
   try{
-    const r = await fetch("/api/runs?limit=100");
+    const r = await fetch("/api/runs?limit=100", {headers: authHeaders()});
     const d = await r.json();
     if(!r.ok) throw new Error(d.error || "读取历史失败");
     historyRuns = (d.runs || []).filter(x=>x.has_report);
@@ -1405,7 +1530,8 @@ $("compareGo").onclick = async () => {
   if(base === target){ toast("请选择两份不同的报告", "err"); return; }
   $("compareMsg").textContent = "对比中…";
   try{
-    const r = await fetch(`/api/compare?base=${encodeURIComponent(base)}&target=${encodeURIComponent(target)}`);
+    const r = await fetch(`/api/compare?base=${encodeURIComponent(base)}&target=${encodeURIComponent(target)}`,
+      {headers: authHeaders()});
     const d = await r.json();
     if(!r.ok) throw new Error(d.error || "对比失败");
     renderCompare(d);
@@ -1451,7 +1577,7 @@ async function openRun(id){
   history.replaceState(null, "", "?run=" + encodeURIComponent(id));
   localStorage.setItem("se-last-run", id);
   try{
-    const r = await fetch("/api/status?id="+id);
+    const r = await fetch("/api/status?id="+id, {headers: authHeaders()});
     if(!r.ok){ showError("找不到这次运行", id, false); return; }
     const s = await r.json();
     if(s.running){
@@ -1474,7 +1600,7 @@ if(linkedRun){ openRun(linkedRun); }
 
 async function showReport(id){
   try{
-    const r = await fetch("/api/report?id="+id);
+    const r = await fetch("/api/report?id="+id, {headers: authHeaders()});
     const data = await r.json();
     if(!r.ok) throw new Error(data.error || "报告尚未生成");
     report = data;
@@ -1585,7 +1711,7 @@ $("ovBtn").onclick = async () => {
   if(!reason){ toast("必须写调整理由", "err"); return; }
   const reviewer = reviewerName();
   if(!reviewer){ toast("先填写审核人姓名", "err"); $("reviewerName").focus(); return; }
-  const r = await fetch("/api/override", {method:"POST", headers:{"Content-Type":"application/json"},
+  const r = await fetch("/api/override", {method:"POST", headers:authHeaders({"Content-Type":"application/json"}),
     body: JSON.stringify({id:runId, changes, reason, reviewer})});
   const d = await r.json();
   if(!r.ok){ toast(d.error||"调整失败", "err"); return; }

@@ -29,7 +29,7 @@ skill-evaluator/
 ├── judges/             # LLM-judge rubrics (structured JSON output, fixed single-shot prompt)
 ├── scripts/            # CLI + runner + llm/harness adapters; check-deps.sh = preflight (#7)
 ├── web/                # local UI (stdlib HTTP + SSE + vanilla JS)
-└── tests/              # 380 tests, subprocess-seam based
+└── tests/              # 398 tests, subprocess-seam based
 docs/adr/               # 41 architecture decisions
 ```
 
@@ -40,6 +40,7 @@ The evaluator is **self-contained**: all scripts and tests live inside the skill
 1. Install: copy `skill-evaluator/` into `~/.pi/agent/skills/`
 2. Preflight: `bash scripts/check-deps.sh` (python >= 3.9, git, pytest, pi CLI, config.yaml parses)
 3. Say: *"evaluate this skill: <path>"* — or open the local UI and upload a `.zip`. The upload is stored in a content-hash workspace; re-uploading the same content reuses it, and the eval-set path is filled automatically.
+   T2/T3 require a persistent access token (T0/T1 are open as a guest). Issue one after your approval flow: `python web/token_admin.py issue --name "applicant"`; the plaintext token is shown once and stored client-side. The form itself is external.
 4. Or run the deterministic pipeline / local UI:
    ```bash
    python scripts/runner.py --skill <path> --tier t2a
@@ -68,7 +69,7 @@ Tier entry: `--tier <t0|t1|t2a|t2b|t3>` (default T2A); higher tiers reuse lower-
 
 ```bash
 cd skill-evaluator
-python -m pytest tests        # 380 tests, all green
+python -m pytest tests        # 398 tests, all green
 ```
 
 Design decisions and their reasoning live in `docs/adr/`. See `README_CN.md` for the Chinese version.

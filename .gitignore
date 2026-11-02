@@ -18,3 +18,9 @@ skill-evaluator/web/runs/
 .skill-eval-cache/
 skill-evaluator/calibration/results/
 skill-evaluator/web/workspaces/
+
+# 访问 token（只存 hash）与本地审计日志
+web/tokens.json
+web/audit.jsonl
+skill-evaluator/web/tokens.json
+skill-evaluator/web/audit.jsonl
