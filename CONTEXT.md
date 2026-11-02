@@ -75,7 +75,7 @@ static_check 的编号检查项：被测 skill 出现宿主环境硬编码（绝
 `report.json` 的契约版本。schema 2 = 16 条指标 + 新编号；跨 schema 不构成回归证据（ADR-0032）；evolution 已随 T4 休眠。
 
 ### 优化建议（Advice）
-报告里可执行的待办项，每项带 `#N` 反链（`{metric, severity, problem, evidence, action}`）。由 `report.py` 从裁决**确定性派生**，不经 LLM——建议与问题同源，结构上不可能脱钩。落地三处：每个指标卡下方内联、report.html 的「优化建议」tab 汇总、report.md 的 `## 优化建议` 段（同一份数据，ADR-0030）。
+报告里可执行的待办项，每项带 `#N` 反链（`{metric, severity, priority, effort, problem, evidence, action}`）。`priority` = fail 1 / warn 2 / info 3，`effort` = quick/medium/large，均为确定性展示字段。由 `report.py` 从裁决**确定性派生**，不经 LLM——建议与问题同源，结构上不可能脱钩。落地四处：每个指标卡下方内联、report.html 的「优化建议」tab 汇总、report.md 的 `## 优化建议` 段（同一份数据，ADR-0030）、Web 结果区「下一步」卡与全部建议弹层。
 _Avoid_: 让 LLM 生成建议（会与指标脱钩）
 
 ### 依赖全面性（Dependency Completeness）

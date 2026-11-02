@@ -88,7 +88,7 @@ evalsets/<name>/v1/
 
 冻结前跑质量自检（ADR-0011）：`python scripts/evalset_check.py <evalset目录> --skill <skill目录>`，查 should prompt 照抄 description、组内近似重复、同句跨组冲突；命中则先改写再冻结，裁决落 `evalset.json`（clean=false → report.py 把 #10 降级为 warn）。
 
-草稿生成：`python scripts/evalset_gen.py --skill <skill目录> --out <evalset目录> --count 10`（默认走 `llm`；只写草稿，不写 `meta.json`）。Web 生成后补写 `meta.json` 的 `name`/`version`/`skill_name`/`skill_sha256`/`created_at`，供版本来源判定。前端「评测集」面板按版本操作：生成草稿、加载逐条审核并写 `reviews/review.json`；`report.html` 的「评测集审核」tab 保留。
+草稿生成：`python scripts/evalset_gen.py --skill <skill目录> --out <evalset目录> --count 10`（默认走 `llm`；只写草稿，不写 `meta.json`）。Web 生成后补写 `meta.json` 的 `name`/`version`/`skill_name`/`skill_sha256`/`created_at`，供版本来源判定。前端「评测集」面板按版本操作：生成草稿、加载逐条审核并写 `reviews/review.json`；`report.html` 的「评测集审核」tab 保留。加载版本时同读 `GET /api/evalset/status`：审核表上方展示条数闸门（passed/issues）与 `evalset_check` 的照抄 description / 含 skill 名称 / 组内重复 / 跨组冲突 / 越界路径（带文件与覆盖率，可折叠）。审核表默认「未审」，支持 prompt 搜索、按组/按状态过滤、仅对可见行全选与批量标记；批量通过二次确认并回显质量自检摘要，自检只提示问题、不替代人工判断。`GET /api/evalset/items` 每条附 `review`（`verdict`/`note`/`reviewer`/`at`，来自 `reviews/review.json`），刷新后恢复已审状态。`POST /api/evalset/review` 增量合并：只接受 `verdict ∈ approve|reject` 的 decisions，按 `file` 与已有记录合并（其它文件的已有条目保留，同 file 覆盖），空 verdict 不落盘；返回 `{ok, reviewed, total}`，`reviewed` = 当前评测集中已审条数，`total` = 当前条目总数。全部条目均为 approve 时才把 `meta.json` 升级为 `reviewed_by: "human"`。
 
 评测集版本与导入导出：
 
@@ -123,7 +123,7 @@ T1 评审走 `llm` 接口层（ADR-0034）：模型 `--model` > `llm.model` > `S
 
 可选 `--thinking <off|minimal|low|medium|high|xhigh|max>` 控制思考档位。
 
-可配参数统一在 `config.yaml`（ADR-0035），优先级 CLI > 现有 ENV > config.yaml > 代码默认。关键项：description 字符阈值 384 warn / 1024 fail、正文 150 warn / 500 fail（ADR-0037）、触发集每组最小条数 10、F1 0.7、逐 case 变异系数上限 0.5、幂等比例 0.5、触发集覆盖 0.6/0.8、跨模型相似度 0.5/0.8、触发判定分 0.5、触发单 case 90s/30 步/120000 token、args 上限 2000、UI 单元格 800 / 内联 400；重复运行 3 次、评审单发 1 次/并发 4（runner 读取）。既有 `SKILL_EVAL_TRIGGER_MIN` 仍可覆盖最小条数；`--exclude <路径>`（相对 skill 目录解析）、`--no-default-excludes`（static_check.py）仍是 CLI 开关；`--threshold` 仍可覆盖触发判定分。`JUDGE_SAMPLES=3` 的多数票流程不变（跑 3 次后 `judge_runner.py --merge`，ADR-0028）。
+可配参数统一在 `config.yaml`（ADR-0035），优先级 CLI > 现有 ENV > config.yaml > 代码默认。关键项：description 字符阈值 384 warn / 1024 fail、正文 150 warn / 500 fail（ADR-0037）、触发集每组最小条数 10、F1 0.7、逐 case 变异系数上限 0.5、幂等比例 0.5、触发集覆盖 0.6/0.8、跨模型相似度 0.5/0.8、触发判定分 0.5、触发单 case 90s/30 步/120000 token、args 上限 2000、UI 单元格 800 / 内联 400；重复运行 3 次、评审单发 1 次/并发 4（runner 读取）。成本预估默认值在 `estimate.*`：完整任务/触发 case 的秒与 token、判定调用秒与 token、T2A 早停比例、固定开销；只影响页面提示，不参与裁决。既有 `SKILL_EVAL_TRIGGER_MIN` 仍可覆盖最小条数；`--exclude <路径>`（相对 skill 目录解析）、`--no-default-excludes`（static_check.py）仍是 CLI 开关；`--threshold` 仍可覆盖触发判定分。`JUDGE_SAMPLES=3` 的多数票流程不变（跑 3 次后 `judge_runner.py --merge`，ADR-0028）。
 
 判据口径（容易被误读，单独列）：#11 = 三分量多数票（tokens/tool_calls/seconds 各一票，ADR-0026）；
 #5 = 评审面（消融实证随 T4 休眠，ADR-0026）；#12 = 全部 golden trace 取并集，依赖信号分强弱档
@@ -146,6 +146,7 @@ T1 评审走 `llm` 接口层（ADR-0034）：模型 `--model` > `llm.model` > `S
 `web/app.py` 是 stdlib HTTP 入口（只绑 `127.0.0.1`）：
 - `POST /api/upload`：浏览器直接以 `application/zip` 流式上传，安全解压到临时目录后复制进工作区；返回 `workspace_id`/`workspace`/`skill`/`evalset`/`evalset_version`/`evalset_versions`/`skill_sha256`；拒绝 `..`/绝对路径/符号链接，限制 1GB 压缩包、2GB 解压体积、20000 个文件。旧 base64 分支仅兼容，UI 不使用。
 - `GET /api/workspaces`：返回 `{"workspaces": [{id,name,skill_sha256,skill,evalset,evalset_version,evalset_versions}]}`，供工作区与评测集版本下拉。
+- `GET /api/estimate?skill=&tier=&evalset=&real_cases=&real_expects=&repeat=`：成本预估（`scripts/estimate.py` 的纯函数），返回 `calls`/`agent_runs`/`tokens`/`minutes` 区间、逐阶段 `stages` 与 `weights`、`cached` 阶段与 `assumptions`。**只读**：不建 run、不扣配额、不需要 token。`skill` 下没有 `SKILL.md` 或 `tier` 非法 400；`evalset` 必须位于 `evalsets/` 下且存在，否则 400。缓存阶段按同一 skill 最近一次 run 的完整阶段推断：T2A/T3 要求评测集相同，T2B/T3 在本次有真实输入时不算缓存（接口只有条数，无法确认是同一份输入），实际是否命中仍由 runner 的指纹校验决定。
 - `GET /api/llm/config`、`POST /api/llm/test`：返回非敏感默认配置 / 测试连接。
 - `POST /api/run`：启动 runner；可带 `llm`（protocol/base_url/model/api_key）与 `real_cases`（数组，每条 `{prompt,note,expect}`；也兼容旧 `real_input` 字符串）。T2A/T2B/T3 必须带有效 `X-Skill-Eval-Token`，否则 401 且不启动；T0/T1 游客或 token 都可创建。`reuse_from`（复用另一个活动 run 的已完成产物）先校验该 run 归属，不匹配返回 403 并审计 `reuse_denied`，且不建新 run 目录。**创建 run 目录之前先过限流**（见 § 限流）：超限返回 429 + `Retry-After` 与 `{ok:false,error,reason,scope,retry_after}`，审计 `rate_limited`，不建目录、不写 `run.json`、不消耗额度。启动时写 `web/runs/<id>/run.json`（skill 名/tier/评测集/创建时间/skill_sha256/owner_kind/owner_id/owner_name/protected），供重启后历史列表与归属校验。
 - `POST /api/stop`：终止当前 runner 后按产物做一次完成度判定，取**最高完整阶段**生成局部报告（`report.py --partial --completed-stages ...`，档位 = 该阶段）；响应带 `report`/`partial`/`completed_stages`/`error`。连 T0 都没完成时不生成空报告。
@@ -157,7 +158,7 @@ T1 评审走 `llm` 接口层（ADR-0034）：模型 `--model` > `llm.model` > `S
 - `GET /api/report?id=` / `GET /report?id=`：先查活动 run，再回退磁盘 `results/`；只有两边都没有才 404。`/api/report` 在返回的 JSON 上附加 `run_id` 与 `run_meta`（不写回 `report.json`）。
 - `GET /api/compare?base=&target=`：读两份历史 `report.json` + `run-meta.json` 做逐指标对比。`comparable` = 报告 `schema` 相同且 `evaluator.content_sha256` 相同；`skill_same` = `skill_sha256` 相同（`skill_known` 标两侧是否都记了指纹）。每个 `#N` 返回 `base`/`target`/`change`（`improved`/`regressed`/`same`/`skipped`）与两侧 `note`，附 `counts` 与 `notes`（不可比、不同 skill、含局部报告）。缺 id 或 id 非法 400，缺报告 404。
 - `GET /api/export?id=`：合法 run id 才打包 `results/` 里的 `report.json`/`report.md`/`report.html` + `meta.json`（无报告自带 meta 时回退 `run-meta.json`），并附可复核证据：`score.json`/`triggers.json`/`runs.json`/`idem.json`/`compare.json`/`golden.json` + `judges/`、`triggers/`、`traces/` 白名单；不含 `run.log`、`raw/`、sandbox 与真实输入原文。文件名 `report-<id>.zip`。id 非法 400，缺报告 404。
-- `GET /api/evalset/status|items`、`POST /api/evalset/generate|review`：评测集检查、生成草稿、逐条审核（写 `reviews/review.json` + `audit.jsonl`；`reviewer` 必填）。
+- `GET /api/evalset/status|items`、`POST /api/evalset/generate|review`：评测集检查、生成草稿、逐条审核（`items` 带 `review`；`review` 按 file 增量合并，写 `reviews/review.json` + `audit.jsonl`，空 verdict 忽略，返回 `reviewed`/`total`；`reviewer` 必填）。
 - `GET /api/evalset/export?evalset=`、`POST /api/evalset/import?filename=`：评测集 zip 导出/导入（见 § 评测集冻结）。
 - `POST /api/override`：支持一次提交多条裁决调整（`changes: [{metric,to}]`），统一写 `overrides.json` + `manual-overrides.jsonl`，重出报告；`reviewer` 必填，空值 400（不再写死 `web`）。
 
@@ -301,7 +302,8 @@ evalsets/<name>/results/<version>/
 - **内容保真**：报告只做空白整理，不删用户文本（包括用户内容里的 `ADR-xxxx`）；`report.json` 的 `data` 原样保留，渲染层不得反向改形状
 - **data 渲染**（report.md / report.html 共用一套，ADR-0030）：**所有指标一律表格化**——已知形状走定制表（#16 `per_pair`、#15 `cost_by_case`+`cv_by_case`、#13 `cost`、#14 `per_case`、#10 三率、#11 三分量、#12 报错与评审项、#4 六组与闸门），其余走**通用兜底**（dict/list 递归压平成 key-value 表）；judge 面（`items`）另加 score/reason 摘要行。原始 JSON 一律保留：**有表就折叠**（`<details>`，不管多短），无表且 ≤400 字符才内联；单元格 >800 字符截断并标注。**不得静默截断**（旧实现 `[:2000]` 会把 2165 字符的 #16 data 切成非法 JSON）。渲染层不得反向改 `report.json` 的形状
 - **结果符号**：卡片徽章、表格结果列与顶部 16 行总览表（`id="overview"`）统一 pass=✓ / fail=✗ / warn=⚠ / skipped=–
-- **优化建议**（ADR-0030）：`report.json.advice` = `[{metric, severity, problem, evidence, action}]`，由 `build()` 从裁决确定性派生（`severity` = fail/warn/info，排序 fail→warn→info）；每个指标卡下方内联该指标建议，`report.html` 另有「优化建议」tab（`#N` 锚点跳回指标卡），report.md 有 `## 优化建议` 段。问题与建议同源，不存在“建议里说了、指标里没有”
+- **优化建议**（ADR-0030）：`report.json.advice` = `[{metric, severity, priority, effort, problem, evidence, action}]`，由 `build()` 从裁决确定性派生，不经 LLM。`severity` = fail/warn/info；`priority` 只按严重度定档（fail=1 / warn=2 / info=3）；`effort` = quick/medium/large（quick：文档/命名/契约类 #1–#3、#5–#9、#14；medium：安全修复与评测集/触发/依赖 #4、#10–#12；large：T3 成本/稳定性 #13、#15、#16）。排序 priority → effort → 指标号，同一输入两次生成的 advice 列表一致。两个新字段只影响展示，不改 16 指标 schema、裁决或 `conclusion()`。每个指标卡下方内联该指标建议，`report.html` 另有「优化建议」tab（`#N` 锚点跳回指标卡），report.md 有 `## 优化建议` 段。问题与建议同源，不存在“建议里说了、指标里没有”
+- **报告页导航**（Web，Phase B）：指标行 `id="m-N"` 与 `report.html` 的指标卡锚点同形，`?run=<id>#m-2` 打开后滚动并高亮；筛选「全部/只看失败/只看警告/只看未测」只切行可见性，不重算；结果区「下一步」卡按 `priority`/`effort` 取前 3 条建议并可打开全部建议弹层。Web 不复制报告数据，只读 `/api/report` 的同一份 `report.json`
 - **可移植性闸门可见性**（ADR-0008/0030）：`static.json.hardcoded` 非空 → #4 裁决 = fail（闸门不属于独立指标，只能挂在 #4 上才进得了 `conclusion()`）；`stale_refs` / `scan_excluded_dirs` 只作 #4 卡的信息行，不改裁决
 - 评测集 `reviewed_by: "ai"` 时，报告与 #10/#11/#14 的结论处注明「评测集 AI 审核，未经人工复核」
 - 不合成加权总分；结论分三档：必测全过 / 有警告 / 有失败

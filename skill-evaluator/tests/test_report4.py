@@ -5,8 +5,9 @@ HTML 契约（ADR-0030，本文件的断言依据）：
 - 徽章 = `<span class='badge vf-pass'>✓ pass</span>`（glyph + 原文）
 - 总览表 = `<table id='overview'>`，16 行，首列 `<td>#N</td>`
 - 原始 JSON：**有表就折叠**（`<details>`），无表且短才内联
-- 建议：`report.json.advice` = [{metric, severity, problem, evidence, action}]；
-  卡片内 `<div class='adv'>`；tab `id='t-advice'`；md 有 `## 优化建议`
+- 建议：`report.json.advice` = [{metric, severity, priority, effort, problem, evidence, action}]；
+  priority = fail 1 / warn 2 / info 3，effort = quick/medium/large（确定性展示字段，不改裁决）；
+  排序 priority → effort → 指标号；卡片内 `<div class='adv'>`；tab `id='t-advice'`；md 有 `## 优化建议`
 覆盖：1 表格化 + 折叠 / 2 建议 / 3 闸门可见 / 4 ✓✗ / 5 依赖全面性 / 6 PII 评审折进 #4。
 PII 与依赖全面性的静态面在 test_static_check.py。
 """
@@ -276,6 +277,48 @@ def test_advice_severity_follows_verdict(tmp_path):
         if a["problem"].startswith("检查点未通过") or a["problem"].startswith("静态规则命中"):
             continue
         assert {"fail": "fail", "warn": "warn", "skipped": "info"}[sev[a["metric"]]] == a["severity"], a
+
+
+ADVICE_KEYS = {"metric", "severity", "priority", "effort", "problem", "evidence", "action"}
+# 与 report.ADVICE_EFFORT 同源：文档/契约类 quick，评测集/依赖类 medium，T3 成本/稳定性类 large
+EFFORT_BY_METRIC = {"#4": "medium", "#6": "quick", "#12": "medium", "#15": "large"}
+
+
+def test_advice_priority_and_effort_fields(tmp_path):
+    """Phase B：每条建议都带确定性 priority/effort，形状固定、值可预期。"""
+    d = base(tmp_path)
+    files = partial_inputs()
+    files["model_robust.json"] = {"skipped": False, "robust": False, "note": "跨模型漂移"}
+    write_inputs(d, files)
+    rep, _html, _md = run_all(d)
+    assert rep["advice"], "混合裁决必须产出建议"
+    for a in rep["advice"]:
+        assert set(a) == ADVICE_KEYS, a
+        assert a["priority"] == {"fail": 1, "warn": 2, "info": 3}[a["severity"]], a
+        assert a["effort"] in ("quick", "medium", "large"), a
+        assert a["effort"] == EFFORT_BY_METRIC[a["metric"]], a
+    assert {a["metric"] for a in rep["advice"] if a["effort"] == "large"} == {"#15"}, \
+        "T3 稳定性要重跑多次，必须标 large"
+
+
+def test_advice_sorted_by_priority_then_effort(tmp_path):
+    """排序只影响展示：fail 永远在 warn/info 前，同档 quick 先于 medium。"""
+    d = base(tmp_path)
+    write_inputs(d, partial_inputs())
+    rep, _html, _md = run_all(d)
+    order = [(a["priority"], {"quick": 0, "medium": 1, "large": 2}[a["effort"]],
+              int(a["metric"].lstrip("#"))) for a in rep["advice"]]
+    assert order == sorted(order), order
+    assert order[0][0] == 1, "fail 级建议必须排最前"
+
+
+def test_advice_priority_effort_stable_across_runs(tmp_path):
+    """同一份输入两次出报告，建议列表（含 priority/effort）字节级一致。"""
+    d = base(tmp_path)
+    write_inputs(d, partial_inputs())
+    first, _html, _md = run_all(d)
+    second, _html2, _md2 = run_all(d)
+    assert first["advice"] == second["advice"]
 
 
 def test_advice_empty_when_all_pass(tmp_path):

@@ -29,6 +29,8 @@ ROOT = WEB.parent
 RUNNER = ROOT / "scripts" / "runner.py"
 sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(WEB))
+import _config  # noqa: E402
+import estimate as estimate_mod  # noqa: E402
 import llm as llm_layer  # noqa: E402
 import capabilities  # noqa: E402
 import ratelimit  # noqa: E402
@@ -399,6 +401,55 @@ def _evalset_fields(name: str, sha: str) -> dict:
             "evalset_versions": versions}
 
 
+def _evalset_items(evalset: Path) -> list:
+    """评测集逐条清单：三个触发组 + cases；只收含字符串 prompt 的可解析条目。"""
+    evalset = Path(evalset)
+    items = []
+    for group, sub in (("should", "should"), ("should_not", "should-not"),
+                       ("confusable", "confusable")):
+        for f in sorted((evalset / "triggers" / sub).glob("*.json")):
+            data = _load_json(f, None)
+            if isinstance(data, dict) and isinstance(data.get("prompt"), str):
+                items.append({"group": group, "file": f"triggers/{sub}/{f.name}",
+                              "prompt": data["prompt"]})
+    for f in sorted((evalset / "cases").glob("*.json")):
+        data = _load_json(f, None)
+        if isinstance(data, dict) and isinstance(data.get("prompt"), str):
+            items.append({"group": "case", "file": f"cases/{f.name}",
+                          "prompt": data["prompt"], "expect": data.get("expect") or ""})
+    return items
+
+
+def _evalset_review_records(evalset: Path) -> list:
+    """reviews/review.json 中可用的逐条记录；文件缺失/损坏/条目不全返回空表。"""
+    data = _load_json(Path(evalset) / "reviews" / "review.json", None)
+    if not isinstance(data, dict) or not isinstance(data.get("items"), list):
+        return []
+    reviewer = str(data.get("reviewer") or "")
+    at = str(data.get("reviewed_at") or "")
+    records = []
+    for item in data["items"]:
+        if not isinstance(item, dict):
+            continue
+        file = str(item.get("file") or "")
+        verdict = str(item.get("verdict") or "")
+        if not file or verdict not in ("approve", "reject"):
+            continue
+        records.append({"group": item.get("group"), "file": file, "verdict": verdict,
+                        "note": str(item.get("note") or item.get("reason") or ""),
+                        "prompt": item.get("prompt"), "expect": item.get("expect") or "",
+                        "reviewer": str(item.get("reviewer") or reviewer),
+                        "at": str(item.get("at") or at)})
+    return records
+
+
+def _evalset_review_map(evalset: Path) -> dict:
+    """逐条审核映射 {file: {verdict, note, reviewer, at}}；无文件或损坏返回 {}。"""
+    return {r["file"]: {"verdict": r["verdict"], "note": r["note"],
+                       "reviewer": r["reviewer"], "at": r["at"]}
+            for r in _evalset_review_records(evalset)}
+
+
 def _skill_name(skill: Path) -> str:
     try:
         meta, _ = static_check.parse_frontmatter(
@@ -722,6 +773,58 @@ def _completed_stages(results: Path) -> list:
     return [name for name in runner_mod.TIERS if runner_mod.stage_ready(name, Path(results))]
 
 
+def _estimate_cached_stages(skill: str, evalset: str, real_cases: int) -> list:
+    """按同 skill 最近一次 run 的完整阶段推断可复用阶段；只读，失败返回空表。
+
+    评测集不同的运行不能复用 T2A/T3；真实输入内容不在预估接口的参数里（只有条数），
+    所以有真实输入时不把 T2B/T3 算作已缓存——实际是否命中由 runner 的指纹校验决定。
+    """
+    try:
+        target = Path(skill).resolve()
+    except (OSError, ValueError):
+        return []
+    best = None
+    for meta_path in RUNS.glob("*/results/run-meta.json"):
+        meta = _load_json(meta_path, None)
+        if not isinstance(meta, dict) or not meta.get("skill"):
+            continue
+        try:
+            same = Path(str(meta["skill"])).resolve() == target
+        except (OSError, ValueError):
+            same = False
+        if not same:
+            continue
+        created = str(meta.get("created_at") or "")
+        if best is None or created >= best[0]:
+            best = (created, meta_path.parent, meta)
+    if best is None:
+        return []
+    _, results, meta = best
+    try:
+        done = _completed_stages(results)
+    except Exception:               # 产物损坏只影响预估，不影响页面其它功能
+        return []
+    same_evalset = bool(evalset) and str(meta.get("evalset") or "") == str(Path(evalset).resolve())
+    keep = []
+    for name in done:
+        if name in ("t2a", "t3") and not same_evalset:
+            continue
+        if name in ("t2b", "t3") and real_cases:
+            continue
+        keep.append(name)
+    return keep
+
+
+def _int_query(q: dict, key: str, default: int) -> int:
+    raw = (q.get(key) or [""])[0]
+    if raw == "":
+        return default
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{key} 必须是整数") from exc
+
+
 def _report_payload(rid: str):
     """报告 + 运行 provenance。只读 report.json，不改变其 16 key/schema 契约。"""
     results = _results_dir(rid)
@@ -998,6 +1101,31 @@ class Handler(BaseHTTPRequestHandler):
             return _send_json(self, 200, capabilities.snapshot(adapter=adapter))
         if path == "/api/workspaces":
             return _send_json(self, 200, {"workspaces": _workspaces()})
+        if path == "/api/estimate":
+            # 只读预估：不建 run、不扣配额、不需要 token。
+            skill = (q.get("skill") or [""])[0]
+            if not skill or not (Path(skill) / "SKILL.md").is_file():
+                return _send_json(self, 400, {"error": "skill 路径下没有 SKILL.md"})
+            tier = (q.get("tier") or ["t2a"])[0].lower()
+            if tier not in estimate_mod.TIERS:
+                return _send_json(self, 400, {"error": "tier 只支持 t0/t1/t2a/t2b/t3"})
+            evalset = (q.get("evalset") or [""])[0]
+            if evalset and not (_under_evalsets(Path(evalset)) and Path(evalset).is_dir()):
+                return _send_json(self, 400, {"error": "评测集必须位于 evalsets/ 下且存在"})
+            try:
+                real_cases = _int_query(q, "real_cases", 0)
+                real_expects = _int_query(q, "real_expects", 0)
+                repeat = _int_query(q, "repeat", _config.get_int("run.repeat", 3))
+                cached = _estimate_cached_stages(skill, evalset, max(0, real_cases))
+                payload = estimate_mod.estimate(tier, evalset=evalset or None,
+                                                real_cases=real_cases,
+                                                real_expects=real_expects,
+                                                repeat=repeat, cached_stages=cached)
+            except ValueError as exc:
+                return _send_json(self, 400, {"error": str(exc)})
+            except Exception as exc:          # 预估失败不影响页面其它功能
+                return _send_json(self, 500, {"error": f"成本预估失败：{exc}"})
+            return _send_json(self, 200, payload)
         if path == "/api/runs":
             try:
                 limit = int((q.get("limit") or ["20"])[0])
@@ -1043,25 +1171,11 @@ class Handler(BaseHTTPRequestHandler):
             evalset = (q.get("evalset") or [""])[0]
             if not evalset or not Path(evalset).is_dir():
                 return _send_json(self, 400, {"error": "评测集目录不存在"})
+            review = _evalset_review_map(Path(evalset))
             items = []
-            for group, sub in (("should", "should"), ("should_not", "should-not"),
-                               ("confusable", "confusable")):
-                for f in sorted((Path(evalset) / "triggers" / sub).glob("*.json")):
-                    try:
-                        data = json.loads(f.read_text(encoding="utf-8"))
-                    except (OSError, json.JSONDecodeError):
-                        continue
-                    if isinstance(data, dict) and isinstance(data.get("prompt"), str):
-                        items.append({"group": group, "file": f"triggers/{sub}/{f.name}",
-                                      "prompt": data["prompt"]})
-            for f in sorted((Path(evalset) / "cases").glob("*.json")):
-                try:
-                    data = json.loads(f.read_text(encoding="utf-8"))
-                except (OSError, json.JSONDecodeError):
-                    continue
-                if isinstance(data, dict) and isinstance(data.get("prompt"), str):
-                    items.append({"group": "case", "file": f"cases/{f.name}",
-                                  "prompt": data["prompt"], "expect": data.get("expect") or ""})
+            for item in _evalset_items(Path(evalset)):
+                item["review"] = review.get(item["file"])
+                items.append(item)
             return _send_json(self, 200, {"items": items})
         if path == "/api/events":
             return self._events((q.get("id") or [""])[0])
@@ -1276,37 +1390,58 @@ class Handler(BaseHTTPRequestHandler):
                 reviewer = _reviewer_name(data)
             except ValueError as exc:
                 return _send_json(self, 400, {"error": str(exc)})
-            reviews = evalset / "reviews"
-            reviews.mkdir(parents=True, exist_ok=True)
-            items = []
+            now = time.strftime("%Y-%m-%dT%H:%M:%S")
+            records = _evalset_review_records(evalset)
+            index = {r["file"]: pos for pos, r in enumerate(records)}
+            submitted = 0
             for d in decisions:
                 if not isinstance(d, dict):
                     continue
-                items.append({"group": d.get("group"), "file": d.get("file"),
-                              "verdict": d.get("verdict"), "note": d.get("note") or d.get("reason") or "",
-                              "prompt": d.get("prompt"), "expect": d.get("expect") or ""})
+                file = str(d.get("file") or "")
+                verdict = str(d.get("verdict") or "").strip()
+                if not file or verdict not in ("approve", "reject"):
+                    continue        # 空 verdict / 未审行不落盘，避免把“没选”写成通过或驳回
+                record = {"group": d.get("group"), "file": file, "verdict": verdict,
+                          "note": str(d.get("note") or d.get("reason") or ""),
+                          "prompt": d.get("prompt"), "expect": d.get("expect") or "",
+                          "reviewer": reviewer, "at": now}
+                if file in index:
+                    records[index[file]] = record
+                else:
+                    index[file] = len(records)
+                    records.append(record)
+                submitted += 1
+            evalset_items = _evalset_items(evalset)
+            total = len(evalset_items)
+            reviewed = sum(1 for item in evalset_items if item["file"] in index)
+            if not submitted:
+                # 没有已审行：不碰 review.json，也不升级 meta，只在响应里回当前进度
+                return _send_json(self, 200, {"ok": True, "reviewed": reviewed, "total": total,
+                                              "path": str(evalset / "reviews" / "review.json"),
+                                              "written": False})
+            reviews = evalset / "reviews"
+            reviews.mkdir(parents=True, exist_ok=True)
             payload = {"type": "evalset-review", "evalset": evalset.parent.name,
                        "version": evalset.name,
                        "reviewer": reviewer,
-                       "reviewed_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-                       "items": items}
+                       "reviewed_at": now,
+                       "items": records}
             (reviews / "review.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2),
                                                  encoding="utf-8")
             with (reviews / "audit.jsonl").open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(payload, ensure_ascii=False) + "\n")
-            if items and all(i.get("verdict") == "approve" for i in items):
+            approved = {r["file"] for r in records if r["verdict"] == "approve"}
+            if total and all(item["file"] in approved for item in evalset_items):
                 meta_path = evalset / "meta.json"
-                try:
-                    meta = json.loads(meta_path.read_text(encoding="utf-8"))
-                except (OSError, json.JSONDecodeError):
-                    meta = None
+                meta = _load_json(meta_path, None)
                 if isinstance(meta, dict):
                     meta["reviewed_by"] = "human"
-                    meta["reviewed_at"] = payload["reviewed_at"]
+                    meta["reviewed_at"] = now
                     meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
             _refresh_reports_for_evalset(evalset)
             _audit(self, "evalset_review", 200, detail=f"{evalset.parent.name}/{evalset.name}")
-            return _send_json(self, 200, {"ok": True, "path": str(reviews / "review.json")})
+            return _send_json(self, 200, {"ok": True, "reviewed": reviewed, "total": total,
+                                          "path": str(reviews / "review.json"), "written": True})
         if path == "/api/llm/test":
             data = _json_body(self)
             try:

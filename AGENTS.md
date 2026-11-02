@@ -2,7 +2,7 @@
 
 Generated: 2026-09-22T13:43:08.578Z
 Snapshot: 2026-11-01 · Branch: feat/eval-v2
-当前分支 `feat/eval-v2`。计数与结构已重算（469 tests / 29 个测试文件 / 41 ADR / 16 个 Python CLI + 11 个共享模块 + 8 份 rubric）。v2 与后续可用性改动（ADR-0032–0041）已落文档；工作区、缓存、触发上限、真实输入多 case 已实现。
+当前分支 `feat/eval-v2`。计数与结构已重算（493 tests / 30 个测试文件 / 41 ADR / 16 个 Python CLI + 12 个共享模块 + 8 份 rubric）。v2 与后续可用性改动（ADR-0032–0041）已落文档；工作区、缓存、触发上限、真实输入多 case 已实现。
 
 ## IMPLEMENTATION WORKFLOW
 
@@ -34,7 +34,7 @@ skill-evaluator/        # 产品本体（自闭环，ADR-0006）
 ├── judges/             # 8 份 LLM 评审 rubric（md）；side-effects 已移入 attic
 ├── sandbox/            # T2/T3 容器镜像模板与边界说明（Docker/无网络）
 ├── web/                # 本地前端（stdlib HTTP + SSE + 原生 JS，ADR-0036）
-└── tests/              # 469 个测试，扁平单层；conftest.py 只设 PYTHONIOENCODING
+└── tests/              # 493 个测试，扁平单层；conftest.py 只设 PYTHONIOENCODING
 docs/adr/               # 41 条架构决策（0001–0041）
 evalsets/               # ⚠ 被 gitignore：评测集 + 运行产物，本地态```
 
@@ -125,7 +125,7 @@ cd skill-evaluator                    # 所有相对路径以此目录为基准
 bash scripts/check-deps.sh            # 前置自检，退出码 0 = 可跑（缺硬依赖不要继续）
 pip install -r requirements.txt       # 仅跑测试时需要（pytest>=7）
 
-python -m pytest tests                # 全量：469 个测试
+python -m pytest tests                # 全量：493 个测试
 python -m pytest tests/test_idem.py   # 单文件
 python -m pytest tests -k "idem or report"
 

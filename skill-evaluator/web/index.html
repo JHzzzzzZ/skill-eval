@@ -24,6 +24,7 @@
     --shadow:0 18px 50px rgba(0,0,0,.35); --shadow-sm:0 4px 16px rgba(0,0,0,.25);
   }
   *{box-sizing:border-box}
+  [hidden]{display:none!important}
   html,body{min-height:100%}
   body{
     margin:0; color:var(--ink);
@@ -161,6 +162,12 @@
   .real-extra input{font-size:12px;padding:8px 10px}
   .real-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px}
   .inline-note{font-size:11.5px;color:var(--muted);line-height:1.45}
+  .estimate-bar{display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;margin-top:12px;
+    border:1px solid var(--line);border-radius:12px;background:var(--card-soft);padding:9px 12px;
+    font-size:12.5px;color:var(--ink-2)}
+  .estimate-bar[hidden]{display:none}
+  .estimate-bar b{color:var(--ink);font-weight:650}
+  .estimate-bar .estimate-note{flex:1 1 220px;font-size:11.5px;color:var(--muted);line-height:1.4}
   .inline-note[hidden]{display:none}
   .inline-note code{font-family:var(--mono);font-size:11px;background:var(--card);padding:1px 5px;border-radius:5px;border:1px solid var(--line)}
 
@@ -202,6 +209,29 @@
   .prereq.warn{color:var(--warn);background:var(--warn-soft);
     border-color:color-mix(in srgb,var(--warn) 35%,transparent)}
   .result-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .metric-filters{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:0 0 10px}
+  .filter-btn{border:1px solid var(--line);background:var(--card);color:var(--ink-2);border-radius:999px;
+    padding:5px 11px;font-size:12px;font-weight:650;cursor:pointer}
+  .filter-btn:hover{border-color:var(--brand);color:var(--brand)}
+  .filter-btn.active{background:var(--brand-soft);border-color:var(--brand);color:var(--brand)}
+  #metrics tr[hidden]{display:none}
+  #metrics tr.metric-row{scroll-margin-top:84px}
+  #metrics tr.metric-row.anchor-hit td{animation:anchorPulse 2.4s ease}
+  @keyframes anchorPulse{0%,35%{background:color-mix(in srgb,var(--brand) 18%,transparent)}
+    100%{background:transparent}}
+  .next-card{border:1px solid color-mix(in srgb,var(--brand) 30%,var(--line));border-radius:14px;
+    background:linear-gradient(135deg,color-mix(in srgb,var(--brand) 8%,var(--card)),var(--card));
+    padding:12px 14px;margin-bottom:14px}
+  .next-card[hidden]{display:none}
+  .next-head{display:flex;justify-content:space-between;align-items:center;gap:10px;
+    flex-wrap:wrap;margin-bottom:8px}
+  .next-head b{font-size:13px}
+  .next-list{margin:0;padding-left:18px;display:grid;gap:8px}
+  .next-list li{font-size:12.5px;color:var(--ink-2)}
+  .next-list .empty{list-style:none;margin-left:-18px;color:var(--muted)}
+  .next-list .metric-note{margin-top:2px;font-size:12px}
+  .next-link{font-family:var(--mono);font-weight:700}
+  .advice-table{min-width:720px}
   .compare-banner{border:1px solid var(--line);border-radius:10px;padding:8px 11px;margin-bottom:8px;
     font-size:12.5px;background:var(--card-soft)}
   .compare-banner.warn{color:var(--warn);background:var(--warn-soft);
@@ -280,12 +310,27 @@
   .eval-table{max-height:360px;overflow:auto;border:1px solid var(--line);border-radius:12px;margin-top:10px}
   .eval-table table{table-layout:fixed;min-width:640px;width:100%}
   .eval-table td,.eval-table th{padding:8px 9px;font-size:12px}
-  .eval-table th:nth-child(1),.eval-table td:nth-child(1){width:64px}
-  .eval-table th:nth-child(2),.eval-table td:nth-child(2){width:auto;word-break:break-word}
-  .eval-table th:nth-child(3),.eval-table td:nth-child(3){width:96px;white-space:nowrap}
-  .eval-table th:nth-child(4),.eval-table td:nth-child(4){width:190px}
+  .eval-table th:nth-child(1),.eval-table td:nth-child(1){width:36px}
+  .eval-table th:nth-child(2),.eval-table td:nth-child(2){width:64px}
+  .eval-table th:nth-child(3),.eval-table td:nth-child(3){width:auto;word-break:break-word}
+  .eval-table th:nth-child(4),.eval-table td:nth-child(4){width:96px;white-space:nowrap}
+  .eval-table th:nth-child(5),.eval-table td:nth-child(5){width:190px}
   .eval-table select,.eval-table input{padding:6px 8px;border-radius:8px;font-size:12px;width:100%}
   .eval-table select{min-width:84px}
+  .eval-quality{margin-top:12px;border:1px solid var(--line);border-radius:12px;padding:10px 12px;font-size:12px;background:var(--card)}
+  .eval-quality[hidden]{display:none}
+  .eval-quality .qline{display:flex;gap:10px;flex-wrap:wrap;align-items:baseline;margin-bottom:6px}
+  .eval-quality details{margin-top:6px}
+  .eval-quality summary{cursor:pointer;font-weight:600}
+  .eval-quality .qlist{max-height:180px;overflow:auto;margin-top:6px}
+  .eval-quality .qitem{padding:3px 0;border-top:1px dashed var(--line);word-break:break-word}
+  .eval-quality .qitem code{font-family:var(--mono);font-size:11px}
+  .eval-quality .q-ok{color:var(--pass);font-weight:600}
+  .eval-quality .q-bad{color:var(--fail);font-weight:600}
+  .eval-filters{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:12px}
+  .eval-filters[hidden]{display:none}
+  .eval-filters input[type=search],.eval-filters select{padding:6px 9px;border-radius:9px;border:1px solid var(--line);font-size:12px;background:var(--card)}
+  .eval-filters input[type=search]{min-width:200px;flex:1}
   .muted{color:var(--muted)}
   .toast-wrap{position:fixed;right:22px;bottom:22px;display:grid;gap:8px;z-index:50}
   .toast{
@@ -317,6 +362,28 @@
     .tier-grid{grid-template-columns:1fr 1fr}
     .hero h2{font-size:22px}
     .stats{grid-template-columns:1fr 1fr}
+  }
+  @media(max-width:640px){
+    /* 报告表转卡片：隐藏表头，行/单元格 block，字段名走 td::before 的 data-label。
+       仍是同一份数据，不做两套数据源。 */
+    #result .table-wrap{overflow:visible;border:0;border-radius:0}
+    #metrics{display:block;min-width:0;width:100%}
+    #metrics thead{display:none}
+    #metrics tbody{display:block}
+    #metrics tr.metric-row{display:block;border:1px solid var(--line);border-radius:14px;
+      background:var(--card);padding:10px 12px;margin-bottom:10px}
+    #metrics tr.metric-row td{display:block;border:0;padding:3px 0}
+    #metrics tr.metric-row td::before{content:attr(data-label);display:block;font-size:10px;
+      letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+    #metrics tr.group{display:block;border:0;background:transparent;margin:12px 0 6px}
+    #metrics tr.group td{display:block;border:0;background:transparent;padding:0;font-size:12px}
+    #metrics tr.metric-empty{display:block}
+    #metrics tr.metric-empty td{display:block;border:0}
+    #metrics tr.metric-empty td::before{content:none}
+    #metrics .verdict-picker{display:block;width:100%}
+    #metrics .verdict-menu{left:0;right:auto}
+    .metric-filters{gap:5px}
+    .filter-btn{padding:5px 9px}
   }
 </style>
 </head>
@@ -413,6 +480,28 @@
           <label for="reviewerName">审核人 <span class="hint">（人工调整 / 评测集审核必填）</span></label>
           <input id="reviewerName" placeholder="填写你的姓名">
         </div>
+        <div class="eval-quality" id="evalQuality" hidden></div>
+        <div class="eval-filters" id="evalFilters" hidden>
+          <input id="evalSearch" type="search" placeholder="搜索 prompt">
+          <select id="evalGroupFilter" aria-label="按组过滤">
+            <option value="">全部组</option>
+            <option value="should">should</option>
+            <option value="should_not">should-not</option>
+            <option value="confusable">confusable</option>
+            <option value="case">case</option>
+          </select>
+          <select id="evalStatusFilter" aria-label="按状态过滤">
+            <option value="">全部状态</option>
+            <option value="pending">未审</option>
+            <option value="approve">通过</option>
+            <option value="reject">驳回</option>
+          </select>
+          <label class="check"><input type="checkbox" id="evalSelectAll"> 全选可见行</label>
+          <button class="btn btn-ghost btn-sm" id="evalBatchApprove" type="button">标记所选通过</button>
+          <button class="btn btn-ghost btn-sm" id="evalBatchReject" type="button">标记所选驳回</button>
+          <span class="inline-note" id="evalReviewedCount">已审 0/0</span>
+          <span class="inline-note" id="evalFilterCount"></span>
+        </div>
         <div id="evalReview"></div>
       </section>
 
@@ -440,6 +529,10 @@
           <div class="tier-opt"><input type="radio" name="tier" id="t2a" value="t2a" checked><label for="t2a"><b>触发评测 <span class="tag-rec">推荐</span></b><small>2–45 分钟 · 按 case 兜底 · 需申请 token</small><small>#10</small></label></div>
           <div class="tier-opt"><input type="radio" name="tier" id="t2b" value="t2b"><label for="t2b"><b>真实输入对比</b><small>5–40 分钟 · 2×case · 需申请 token</small><small>#11 #12</small></label></div>
           <div class="tier-opt"><input type="radio" name="tier" id="t3" value="t3"><label for="t3"><b>完整任务运行</b><small>30 分钟–数小时 · 重复×3 · 需申请 token</small><small>#13–#16</small></label></div>
+        </div>
+        <div class="estimate-bar" id="estimateBar" hidden>
+          <span id="estimateMain"></span>
+          <span class="estimate-note" id="estimateNote"></span>
         </div>
         <div class="inline-note" id="capabilityNote" hidden></div>
         <div class="inline-note" style="margin-top:8px">时间为范围，取决于模型、评测集与 case 数。</div>
@@ -547,9 +640,23 @@
           </div>
         </div>
         <div class="inline-note warn" id="partialNote" hidden></div>
+        <div class="next-card" id="nextCard" hidden>
+          <div class="next-head">
+            <div><b>下一步</b> <span class="inline-note" id="nextCounts"></span></div>
+            <button class="btn btn-ghost btn-sm" id="openAdvice" type="button">查看全部建议</button>
+          </div>
+          <ol class="next-list" id="nextList"></ol>
+        </div>
         <div class="provenance" id="provenance"></div>
         <div class="stats" id="summary"></div>
-        <div class="table-wrap">
+        <div class="metric-filters" id="metricFilters" role="group" aria-label="筛选指标">
+          <button class="filter-btn active" data-filter="all" type="button" aria-pressed="true">全部</button>
+          <button class="filter-btn" data-filter="fail" type="button" aria-pressed="false">只看失败</button>
+          <button class="filter-btn" data-filter="warn" type="button" aria-pressed="false">只看警告</button>
+          <button class="filter-btn" data-filter="skipped" type="button" aria-pressed="false">只看未测</button>
+          <span class="inline-note" id="filterCount"></span>
+        </div>
+        <div class="table-wrap" id="metricsWrap">
           <table id="metrics"></table>
         </div>
         <div class="override-box">
@@ -583,20 +690,20 @@
   <button class="btn btn-ghost btn-sm" id="errorRetry" type="button">重连</button>
   <button class="btn btn-ghost btn-sm" id="errorClose" type="button">关闭</button>
 </div>
-<div class="modal" id="logModal" hidden>
+<div class="modal" id="logModal" role="dialog" aria-modal="true" aria-labelledby="logTitle" hidden>
   <div class="modal-card">
-    <div class="modal-head"><b>运行日志（尾部 200 行）</b>
+    <div class="modal-head"><b id="logTitle">运行日志（尾部 200 行）</b>
       <button class="btn btn-ghost btn-sm" id="logClose" type="button">关闭</button></div>
     <pre id="logBody">加载中…</pre>
   </div>
 </div>
-<div class="modal" id="tokenModal" hidden>
+<div class="modal" id="tokenModal" role="dialog" aria-modal="true" aria-labelledby="tokenTitle" hidden>
   <div class="modal-card" style="max-width:480px">
-    <div class="modal-head"><b>访问 token</b>
+    <div class="modal-head"><b id="tokenTitle">访问 token</b>
       <button class="btn btn-ghost btn-sm" id="tokenClose" type="button">关闭</button></div>
     <div class="evidence-body">
       <div class="field"><label for="accessTokenMobile">访问 token（T2/T3 必填）</label>
-        <input id="accessTokenMobile" type="password" autocomplete="off" placeholder="粘贴 token">
+        <input id="accessTokenMobile" type="password" autocomplete="off" placeholder="粘贴 token" data-autofocus>
       </div>
       <div class="row" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px">
         <button class="btn btn-ghost btn-sm" id="tokenBtnMobile" type="button">验证</button>
@@ -606,23 +713,23 @@
     </div>
   </div>
 </div>
-<div class="modal" id="overridesModal" hidden>
+<div class="modal" id="overridesModal" role="dialog" aria-modal="true" aria-labelledby="overridesTitle" hidden>
   <div class="modal-card">
-    <div class="modal-head"><b>改判历史</b>
+    <div class="modal-head"><b id="overridesTitle">改判历史</b>
       <button class="btn btn-ghost btn-sm" id="overridesClose" type="button">关闭</button></div>
     <div class="evidence-body" id="overridesBody"></div>
   </div>
 </div>
-<div class="modal" id="evidenceModal" hidden>
+<div class="modal" id="evidenceModal" role="dialog" aria-modal="true" aria-labelledby="evidenceTitle" hidden>
   <div class="modal-card">
     <div class="modal-head"><b id="evidenceTitle">证据</b>
       <button class="btn btn-ghost btn-sm" id="evidenceClose" type="button">关闭</button></div>
     <div class="evidence-body" id="evidenceBody"></div>
   </div>
 </div>
-<div class="modal" id="historyModal" hidden>
+<div class="modal" id="historyModal" role="dialog" aria-modal="true" aria-labelledby="historyTitle" hidden>
   <div class="modal-card">
-    <div class="modal-head"><b>全部历史（最多 100 条）</b>
+    <div class="modal-head"><b id="historyTitle">全部历史（最多 100 条）</b>
       <button class="btn btn-ghost btn-sm" id="historyClose" type="button">关闭</button></div>
     <div class="evidence-body">
       <div class="grid-2" style="margin-bottom:12px">
@@ -637,17 +744,78 @@
     </div>
   </div>
 </div>
-<div class="modal" id="compareModal" hidden>
+<div class="modal" id="compareModal" role="dialog" aria-modal="true" aria-labelledby="compareTitle" hidden>
   <div class="modal-card">
     <div class="modal-head"><b id="compareTitle">对比</b>
       <button class="btn btn-ghost btn-sm" id="compareClose" type="button">关闭</button></div>
     <div class="evidence-body" id="compareBody"></div>
   </div>
 </div>
+<div class="modal" id="adviceModal" role="dialog" aria-modal="true" aria-labelledby="adviceTitle" hidden>
+  <div class="modal-card">
+    <div class="modal-head"><b id="adviceTitle">全部优化建议</b>
+      <button class="btn btn-ghost btn-sm" id="adviceClose" type="button">关闭</button></div>
+    <div class="evidence-body" id="adviceBody"></div>
+  </div>
+</div>
 
 <script>
 const $ = (id) => document.getElementById(id);
 const K2A = "T2" + "A", K2B = "T2" + "B";
+
+// 统一弹窗管理：所有 modal 都走 showModal/hideModal，Esc 关闭、Tab 锁在弹窗内、
+// 关闭后把焦点还给触发元素。弹层可叠加（如历史 → 对比），Esc 只关最上面一层。
+const modalStack = [];
+const MODAL_FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),'
+  + 'textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
+function modalFocusables(modal){
+  return [...modal.querySelectorAll(MODAL_FOCUSABLE)].filter(el=>el.getClientRects().length);
+}
+function topModal(){ return modalStack.length ? modalStack[modalStack.length - 1] : null; }
+function showModal(id){
+  const modal = $(id);
+  if(!modal) return null;
+  if(!modalStack.includes(modal)){
+    modal._returnFocus = document.activeElement;
+    modal.setAttribute("role", "dialog");
+    modal.setAttribute("aria-modal", "true");
+    modal.hidden = false;
+    modalStack.push(modal);
+  }
+  const first = modal.querySelector("[data-autofocus]") || modalFocusables(modal)[0] || modal;
+  if(first && typeof first.focus === "function"){
+    try{ first.focus({preventScroll:true}); }catch(e){ first.focus(); }
+  }
+  return modal;
+}
+function hideModal(id){
+  const modal = id && typeof id === "object" ? id : (id ? $(id) : topModal());
+  if(!modal || modal.hidden) return null;
+  const index = modalStack.indexOf(modal);
+  if(index >= 0) modalStack.splice(index, 1);
+  modal.hidden = true;
+  const back = modal._returnFocus;
+  modal._returnFocus = null;
+  if(back && typeof back.focus === "function"){
+    try{ back.focus({preventScroll:true}); }catch(e){ /* 原元素已移除 */ }
+  }
+  return modal;
+}
+document.addEventListener("keydown", (e)=>{
+  const modal = topModal();
+  if(!modal) return;
+  if(e.key === "Escape"){ e.preventDefault(); hideModal(modal); return; }
+  if(e.key !== "Tab") return;
+  const items = modalFocusables(modal);
+  if(!items.length){ e.preventDefault(); return; }
+  const first = items[0], last = items[items.length - 1];
+  const outside = !modal.contains(document.activeElement);
+  if(e.shiftKey && (outside || document.activeElement === first)){
+    e.preventDefault(); last.focus();
+  }else if(!e.shiftKey && (outside || document.activeElement === last)){
+    e.preventDefault(); first.focus();
+  }
+});
 const STAGE_LABELS = {T0:"基础检查", T1:"文档语义评审", [K2A]:"触发评测", [K2B]:"真实输入对比",
                       T3:"完整任务运行", sandbox:"准备隔离副本", report:"生成报告"};
 const TIER_LABELS = {T0:"基础检查", T1:"文档语义评审", [K2A]:"触发评测", [K2B]:"真实输入对比", T3:"完整任务运行"};
@@ -668,7 +836,12 @@ let currentSkill = "", currentWorkspace = "", currentEvalsetPath = "";
 let workspaceMap = new Map(), reconnectAttempt = 0, errorRunId = "";
 let progressValue = 0, currentPlan = TIER_PLANS.t2a, planTotal = 1;
 let runStartedAt = 0, timingTimer = null, isRunning = false, currentTier = "t2a";
+let currentMetricFilter = "all";
 let serverLlmConfigured = false;
+let planWeights = {}, currentEstimate = null, estimateTimer = null, estimateSeq = 0, currentStage = "";
+const FORM_KEY = "se-form";
+let formRestoring = false, formRestored = false, formTouched = false;
+const restoredFields = new Set();
 // 容器能力：只影响需要容器运行时的评估深度（触发评测/真实输入对比/完整任务运行）
 const CONTAINER_TIERS = ["t2a","t2b","t3"];
 let capabilityTiers = null;
@@ -686,19 +859,25 @@ function stageKey(name){
   if(key === "T0" || key === "T1" || key === "T3") return key;
   return raw.toLowerCase();
 }
-function setPlan(tier, stages){
+function setPlan(tier, stages, weights){
   currentTier = String(tier || tierValue()).toLowerCase();
   currentPlan = Array.isArray(stages) && stages.length
     ? stages.map(stageKey) : (TIER_PLANS[currentTier] || TIER_PLANS.t2a);
-  planTotal = currentPlan.reduce((sum, name)=>sum + (STAGE_WEIGHTS[name] || 0), 0) || 1;
+  // plan 事件不保证带 weights：没有时沿用 /api/estimate 的权重，不用写死值覆盖。
+  if(weights && typeof weights === "object") planWeights = Object.assign({}, weights);
+  planTotal = currentPlan.reduce((sum, name)=>sum + stageWeight(name), 0) || 1;
+}
+function stageWeight(name){
+  const weight = planWeights[name];
+  return (typeof weight === "number" && weight > 0) ? weight : (STAGE_WEIGHTS[name] || 0);
 }
 function stageBounds(name){
   let before = 0;
   for(const item of currentPlan){
     if(item === name) break;
-    before += STAGE_WEIGHTS[item] || 0;
+    before += stageWeight(item);
   }
-  return [before / planTotal * 100, (STAGE_WEIGHTS[name] || 0) / planTotal * 100];
+  return [before / planTotal * 100, stageWeight(name) / planTotal * 100];
 }
 function syncRerun(){
   const rank = {t0:0,t1:1,t2a:2,t2b:3,t3:4};
@@ -709,12 +888,25 @@ function syncRerun(){
     if(el.disabled) el.checked = false;
   });
 }
-document.querySelectorAll('input[name="tier"]').forEach(el=>el.addEventListener("change", ()=>{ syncRerun(); refreshRunPrereq(); refreshRunHint(); }));
+const saveFormInputs = ["rerunT0","rerunT1","rerunTrigger","rerunReal","rerunFull",
+  "provider","model","base_url","backend","harness"];
+document.querySelectorAll('input[name="tier"]').forEach(el=>el.addEventListener("change", ()=>{
+  syncRerun(); refreshRunPrereq(); refreshRunHint();
+  // 先清旧档位的权重与耗时，再用新预估填；避免新档刚开跑时沿用旧区间。
+  planWeights = {}; currentEstimate = null; setPlan(tierValue());
+  scheduleEstimate(0); scheduleSaveForm();
+}));
+saveFormInputs.forEach(id=>{
+  const el = $(id);
+  if(el) el.addEventListener("change", scheduleSaveForm);
+});
+["model","base_url"].forEach(id=>$(id).addEventListener("input", scheduleSaveForm));
 syncRerun();
 refreshRunPrereq();
 $("rerunAll").onclick = () => {
   document.querySelectorAll('#rerunT0,#rerunT1,#rerunTrigger,#rerunReal,#rerunFull')
     .forEach(el=>{ if(!el.disabled) el.checked = true; });
+  scheduleSaveForm();
 };
 function reviewerName(){ return $("reviewerName").value.trim(); }
 function setReviewer(value){ $("reviewerName").value = value || ""; }
@@ -770,13 +962,13 @@ async function submitToken(raw){
   localStorage.setItem("se-token", raw);
   const ok = await checkToken();
   toast(ok ? "已授权：" + tokenName : "token 无效或已停用", ok ? "ok" : "err");
-  if(ok) $("tokenModal").hidden = true;
+  if(ok) hideModal("tokenModal");
 }
 $("tokenBtn").onclick = () => submitToken($("accessToken").value);
 $("tokenBtnMobile").onclick = () => submitToken($("accessTokenMobile").value);
-$("tokenOpen").onclick = () => { $("tokenModal").hidden = false; };
-$("tokenClose").onclick = () => { $("tokenModal").hidden = true; };
-$("tokenModal").onclick = (e) => { if(e.target.id === "tokenModal") $("tokenModal").hidden = true; };
+$("tokenOpen").onclick = () => showModal("tokenModal");
+$("tokenClose").onclick = () => hideModal("tokenModal");
+$("tokenModal").onclick = (e) => { if(e.target.id === "tokenModal") hideModal("tokenModal"); };
 ["accessToken", "accessTokenMobile"].forEach(id=>{
   $(id).addEventListener("keydown", (e)=>{ if(e.key === "Enter") $(id === "accessToken" ? "tokenBtn" : "tokenBtnMobile").click(); });
 });
@@ -921,6 +1113,82 @@ function refreshRunPrereq(){
   $("runPrereq").classList.toggle("warn", info.warn);
 }
 
+// 成本预估：档位/评测集/真实输入变化后防抖刷新；只读接口，不启动 run、不扣配额。
+function estimateQuery(){
+  const tier = tierValue();
+  const params = new URLSearchParams();
+  params.set("skill", currentSkill);
+  params.set("tier", tier);
+  const evalset = ["t2a","t2b","t3"].includes(tier) ? evalsetPath() : "";
+  if(evalset) params.set("evalset", evalset);
+  let cases = [];
+  try{ cases = realPayload(); }catch(e){ cases = []; }
+  params.set("real_cases", String(cases.length));
+  params.set("real_expects", String(cases.filter(c=>c.expect).length));
+  return params;
+}
+async function refreshEstimate(){
+  if(estimateTimer){ clearTimeout(estimateTimer); estimateTimer = null; }
+  const tier = tierValue();
+  if(!currentSkill){ currentEstimate = null; $("estimateBar").hidden = true; return; }
+  const seq = ++estimateSeq;
+  try{
+    const r = await fetch("/api/estimate?" + estimateQuery().toString(), {headers: authHeaders()});
+    const d = await r.json();
+    if(seq !== estimateSeq || tier !== tierValue()) return;   // 只认最后一次请求
+    if(!r.ok) throw new Error(d.error || ("HTTP " + r.status));
+    applyEstimate(d);
+  }catch(e){
+    if(seq !== estimateSeq) return;
+    currentEstimate = null;
+    $("estimateMain").textContent = "成本预估暂不可用（不影响运行）";
+    $("estimateNote").textContent = publicText(e.message || "");
+    $("estimateBar").hidden = false;
+  }
+}
+function scheduleEstimate(delay=250){
+  if(estimateTimer) clearTimeout(estimateTimer);
+  estimateTimer = setTimeout(()=>{ estimateTimer = null; refreshEstimate(); }, delay);
+}
+function fmtTokenCount(value){
+  const n = Math.max(0, Number(value) || 0);
+  if(n >= 1000000) return (n / 1000000).toFixed(1).replace(/\.0$/, "") + "M";
+  if(n >= 1000) return Math.round(n / 1000) + "k";
+  return String(n);
+}
+function fmtEstimateMinutes(minutes){
+  const low = Number(minutes.min) || 0, high = Number(minutes.max) || 0;
+  if(low !== high) return "约 " + fmtEtaRange(low, high);
+  return "约 " + (high < 1 ? Math.max(1, Math.round(high * 60)) + " 秒"
+                           : Math.max(1, Math.ceil(high)) + " 分钟");
+}
+function estimateMainText(data){
+  const calls = data.calls || {}, tokens = data.tokens || {}, minutes = data.minutes || {};
+  const callText = Number(calls.min) === Number(calls.max)
+    ? `${Number(calls.max) || 0} 次模型调用` : `${Number(calls.min) || 0}–${Number(calls.max) || 0} 次模型调用`;
+  const tokenText = Number(tokens.min) === Number(tokens.max)
+    ? `约 ${fmtTokenCount(tokens.max)} tokens`
+    : `约 ${fmtTokenCount(tokens.min)}–${fmtTokenCount(tokens.max)} tokens`;
+  return [callText, `${Number(data.agent_runs) || 0} 个 agent 子进程`, tokenText,
+    fmtEstimateMinutes(minutes)];
+}
+function applyEstimate(data){
+  currentEstimate = data;
+  $("estimateMain").innerHTML = estimateMainText(data).map(text=>`<b>${esc(text)}</b>`).join(" · ");
+  const cached = (data.cached || []).map(name=>label(stageKey(name)));
+  $("estimateNote").textContent = cached.length
+    ? "已缓存：" + cached.join("、") + "（不计入本次成本）"
+    : (data.assumptions || []).slice(0, 2).join("；");
+  $("estimateNote").title = (data.assumptions || []).join("\n");
+  $("estimateBar").hidden = false;
+  if(!isRunning) applyEstimateWeights(data.weights);
+}
+function applyEstimateWeights(weights){
+  if(!weights || typeof weights !== "object") return;
+  planWeights = Object.assign({}, weights);
+  setPlan(tierValue());
+}
+
 function toast(msg, kind="info"){
   const el = document.createElement("div"); el.className = "toast " + (kind==="ok"?"ok":kind==="err"?"err":"");
   el.textContent = publicText(msg); $("toasts").appendChild(el);
@@ -965,25 +1233,35 @@ function fmtEtaRange(low, high){
   if(high < 1) return `${Math.max(1, Math.round(low * 60))}–${Math.max(1, Math.round(high * 60))} 秒`;
   return `${Math.max(1, Math.ceil(low))}–${Math.max(1, Math.ceil(high))} 分钟`;
 }
+function estimateMinutes(){
+  const minutes = currentEstimate && currentEstimate.minutes;
+  if(minutes && isFinite(minutes.min) && isFinite(minutes.max) && Number(minutes.max) > 0){
+    return [Number(minutes.min), Number(minutes.max)];
+  }
+  return TIER_ESTIMATE_MIN[currentTier] || TIER_ESTIMATE_MIN.t2a;
+}
 function updateTiming(){
   if(!runStartedAt) return;
   const elapsed = Date.now() - runStartedAt;
-  const estimate = TIER_ESTIMATE_MIN[currentTier] || TIER_ESTIMATE_MIN.t2a;
+  const estimate = estimateMinutes();
   let tail;
   if(!isRunning){
     tail = "已结束";
   } else if(elapsed / 60000 >= estimate[1]){
-    tail = "已超过预估，仍在运行";
+    // 超过预估不代表卡死：只给可能原因，不暗示失败。
+    tail = "这次比预估慢，可能原因：模型排队、长 case、容器启动或重试；仍在运行";
   } else {
     const leftLow = Math.max(0, estimate[0] - elapsed / 60000);
     const leftHigh = Math.max(0, estimate[1] - elapsed / 60000);
     tail = "预计剩余 " + fmtEtaRange(leftLow, leftHigh);
   }
-  $("timing").textContent = `已用 ${fmtElapsed(elapsed)} · ${tail}`;
+  const stage = currentStage ? label(currentStage) + " · " : "";
+  $("timing").textContent = `已用 ${fmtElapsed(elapsed)} · ${stage}${tail}`;
   if(isRunning) document.title = `${tierLabel(currentTier)} · ${fmtElapsed(elapsed)} · Skill Evaluator`;
 }
 function startTiming(tier, startedAt){
   currentTier = String(tier || tierValue()).toLowerCase();
+  currentStage = "";
   runStartedAt = startedAt || Date.now();
   if(timingTimer) clearInterval(timingTimer);
   timingTimer = setInterval(updateTiming, 1000);
@@ -1043,9 +1321,10 @@ $("themeBtn").onclick = () => {
 // server LLM defaults
 fetch("/api/llm/config").then(r=>r.json()).then(c=>{
   serverLlmConfigured = !!c.configured;
-  if(c.protocol) $("provider").value = c.protocol;
-  if(c.base_url) $("base_url").value = c.base_url;
-  if(c.model) $("model").value = c.model;
+  // 已从 se-form 恢复的字段不被服务端默认值覆盖（两边先后顺序不定）
+  if(c.protocol && !restoredFields.has("provider")) $("provider").value = c.protocol;
+  if(c.base_url && !restoredFields.has("base_url")) $("base_url").value = c.base_url;
+  if(c.model && !restoredFields.has("model")) $("model").value = c.model;
   $("llmState").textContent = c.configured
     ? "服务端已有可用模型配置；页面字段会覆盖它"
     : "服务端未配置模型；填端点/模型/key，或继续用本机命令行";
@@ -1071,6 +1350,7 @@ function applyWorkspace(w, preferred){
     : (w.evalset && paths.includes(w.evalset)) ? w.evalset
     : (paths.length ? paths[paths.length-1] : (w.evalset || ""));
   currentEvalsetPath = sel.value || "";
+  resetEvalReview();                 // 换工作区后旧版本的审核表不能留在页面上
   $("uploadState").textContent = "工作区：" + (w.name || currentWorkspace);
   refreshRunPrereq();
 }
@@ -1095,15 +1375,102 @@ $("workspace").onchange = () => {
   const w = workspaceMap.get($("workspace").value);
   if(!w){ currentSkill = ""; currentWorkspace = ""; currentEvalsetPath = "";
     $("evalVersion").innerHTML = '<option value="">选择工作区后自动识别</option>';
-    refreshRunPrereq(); return; }
+    refreshRunPrereq(); scheduleEstimate(0); scheduleSaveForm(); return; }
   applyWorkspace(w);
+  scheduleEstimate(0); scheduleSaveForm();
 };
 $("evalVersion").onchange = () => {
   currentEvalsetPath = $("evalVersion").value || "";
   $("evalMsg").textContent = "";
-  refreshRunPrereq();
+  resetEvalReview();
+  refreshRunPrereq(); scheduleEstimate(0); scheduleSaveForm();
 };
-loadWorkspaces();
+
+// 配置记忆：localStorage["se-form"] 只存非敏感选择；API key / token 绝不写入。
+function formState(){
+  const rows = realRows().map(row=>({
+    prompt: row.querySelector(".real-prompt").value,
+    expect: row.querySelector(".real-expect").value,
+    note: row.querySelector(".real-note").value,
+  })).filter(row=>row.prompt.trim() || row.expect.trim() || row.note.trim());
+  return {
+    tier: tierValue(),
+    rerun: {t0:$("rerunT0").checked, t1:$("rerunT1").checked,
+            trigger:$("rerunTrigger").checked, real:$("rerunReal").checked,
+            full:$("rerunFull").checked},
+    realCases: rows,
+    provider: $("provider").value,
+    model: $("model").value.trim(),
+    base_url: $("base_url").value.trim(),
+    backend: $("backend").value,
+    harness: $("harness").value,
+    workspace: $("workspace").value,
+    evalVersion: $("evalVersion").value,
+  };
+}
+function saveForm(){
+  if(formRestoring || !formRestored) return;   // 恢复完成前不写，避免把默认值当用户选择
+  try{ localStorage.setItem(FORM_KEY, JSON.stringify(formState())); }catch(e){ /* 隐私模式忽略 */ }
+}
+function scheduleSaveForm(){ if(!formRestoring) saveForm(); }
+function restoreForm(){
+  formRestoring = true;
+  let restoredAny = false;
+  try{
+    const raw = localStorage.getItem(FORM_KEY);
+    const saved = raw && !formTouched ? JSON.parse(raw) : null;
+    if(saved && typeof saved === "object"){
+      const tiers = ["t0","t1","t2a","t2b","t3"];
+      if(tiers.includes(saved.tier)){
+        const radio = document.querySelector(`input[name="tier"][value="${saved.tier}"]`);
+        if(radio){ radio.checked = true; restoredAny = true; }
+      }
+      syncRerun();
+      const rerun = saved.rerun || {};
+      const boxes = {rerunT0:"t0", rerunT1:"t1", rerunTrigger:"trigger",
+                     rerunReal:"real", rerunFull:"full"};
+      Object.entries(boxes).forEach(([id,key])=>{
+        const el = $(id);
+        if(el && !el.disabled) el.checked = !!rerun[key];
+      });
+      if(Array.isArray(saved.realCases) && saved.realCases.length){
+        $("realList").innerHTML = "";
+        saved.realCases.slice(0, 20).forEach(row=>addRealRow({
+          prompt: String(row.prompt || ""), expect: String(row.expect || ""),
+          note: String(row.note || "")}));
+        refreshRealRows();
+        restoredAny = true;
+      }
+      ["provider","model","base_url","backend","harness"].forEach(key=>{
+        const value = String(saved[key] || "");
+        const el = $(key);
+        if(!value || !el) return;
+        if(el.tagName === "SELECT"
+            && ![...el.options].some(opt=>opt.value===value && !opt.disabled)) return;
+        el.value = value;
+        restoredFields.add(key);
+        restoredAny = true;
+      });
+      if(saved.workspace && workspaceMap.has(saved.workspace)){
+        $("workspace").value = saved.workspace;
+        applyWorkspace(workspaceMap.get(saved.workspace), saved.evalVersion || "");
+        restoredAny = true;
+      }
+    }
+  }catch(e){ /* 坏数据/隐私模式：保持当前表单 */ }
+  formRestoring = false;
+  formRestored = true;
+  syncRerun(); refreshRunPrereq(); refreshRunHint();
+  if(restoredAny) toast("已恢复上次配置（不含 API key）", "ok");
+}
+async function loadWorkspacesThenRestore(){
+  await loadWorkspaces();      // 先有工作区列表，才能回到上次的工作区/评测集
+  restoreForm();
+  refreshEstimate(0);
+}
+// 用户在恢复前已经动过表单：保留他刚改的值，不用旧配置覆盖。
+["input","change"].forEach(ev=>document.addEventListener(ev, ()=>{ formTouched = true; }, true));
+loadWorkspacesThenRestore();
 loadRuns();
 loadCapabilities();
 
@@ -1177,38 +1544,188 @@ $("genEval").onclick = async () => {
     toast("评测集草稿已生成", "ok");
   }catch(e){ $("evalMsg").textContent = "✗ " + e.message; toast(e.message, "err"); }
 };
-let evalItems = [];
+// 评测集审核：质量自检面板 + 搜索/组/状态过滤 + 可见行全选 + 增量提交
+const EVAL_QUALITY_GROUPS = [
+  ["echoes_description", "照抄 description"],
+  ["echoes_name", "含 skill 名称"],
+  ["duplicates", "组内近似重复"],
+  ["conflicts", "跨组冲突"],
+  ["out_of_sandbox", "越界路径"],
+];
+let evalItems = [], evalQualitySummary = "";
+
+function evalQualityRow(kind, item){
+  const files = kind === "duplicates" ? `${item.a} ↔ ${item.b}`
+    : kind === "conflicts" ? `${item.should} ↔ ${item.should_not}` : (item.file || "—");
+  const details = [];
+  if(item.coverage != null) details.push(`覆盖率 ${item.coverage}`);
+  if(item.token) details.push(`路径 ${item.token}`);
+  if(item.name) details.push(`名称 ${item.name}`);
+  return `<div class="qitem"><code>${esc(files)}</code>${details.length ? " · " + esc(details.join(" · ")) : ""}</div>`;
+}
+function renderEvalQuality(status){
+  const el = $("evalQuality");
+  if(!status){ el.hidden = true; el.innerHTML = ""; evalQualitySummary = ""; return; }
+  const count = status.count || {}, check = status.check || {};
+  const countPass = count.passed === true;
+  const countIssues = count.issues || [];
+  const clean = check.clean;
+  const checkLabel = clean === true ? "✓ 质量自检通过"
+    : clean === false ? "✗ 质量自检发现问题" : "– 质量自检未判";
+  const groups = EVAL_QUALITY_GROUPS.map(([key, label])=>{
+    const list = check[key] || [];
+    if(!list.length) return "";
+    return `<details><summary>${esc(label)}（${list.length}）</summary>
+      <div class="qlist">${list.map(item=>evalQualityRow(key, item)).join("")}</div></details>`;
+  }).join("");
+  const problems = [];
+  countIssues.forEach(issue=>problems.push(`条数闸门：${issue}`));
+  if(check.note) problems.push(check.note);
+  evalQualitySummary = problems.join("；") || "条数闸门通过，质量自检无照抄/重复/冲突";
+  el.innerHTML = `<div class="qline"><b>冻结前自检</b>
+      <span class="${countPass ? "q-ok" : "q-bad"}">${countPass ? "✓" : "✗"} 条数闸门${countPass ? "通过" : "未通过"}</span>
+      <span class="${clean === true ? "q-ok" : clean === false ? "q-bad" : "muted"}">${esc(checkLabel)}</span>
+      <span class="muted">${esc(check.note || "")}</span></div>
+    ${countIssues.length ? `<div class="inline-note warn">${countIssues.map(issue=>esc(issue)).join("<br>")}</div>` : ""}
+    ${groups || '<div class="muted">没有照抄 / 重复 / 冲突 / 越界条目。</div>'}
+    <div class="inline-note">质量自检来自 evalset_check.py，只提示问题，不替代人工判断。</div>`;
+  el.hidden = false;
+}
+async function loadEvalQuality(evalset){
+  if(!currentSkill){ renderEvalQuality(null); return ""; }
+  try{
+    const r = await fetch(`/api/evalset/status?evalset=${encodeURIComponent(evalset)}&skill=${encodeURIComponent(currentSkill)}`,
+      {headers:authHeaders()});
+    const d = await r.json();
+    if(!r.ok) throw new Error(d.error || "读取质量自检失败");
+    renderEvalQuality(d);
+    return "";
+  }catch(e){
+    renderEvalQuality(null);
+    return "质量自检读取失败：" + e.message;
+  }
+}
+function evalRow(index){
+  return document.querySelector(`#evalReview tr.item[data-i="${index}"]`);
+}
+function updateReviewedCount(){
+  const verdicts = [...document.querySelectorAll("#evalReview .rv")].map(el=>el.value);
+  const reviewed = verdicts.filter(Boolean).length;
+  $("evalReviewedCount").textContent = `已审 ${reviewed}/${evalItems.length}`;
+}
+function applyEvalFilter(){
+  const q = $("evalSearch").value.trim().toLowerCase();
+  const group = $("evalGroupFilter").value;
+  const status = $("evalStatusFilter").value;
+  let shown = 0;
+  document.querySelectorAll("#evalReview tr.item").forEach(row=>{
+    const item = evalItems[Number(row.dataset.i)] || {};
+    const verdict = row.querySelector(".rv").value;
+    let show = (!group || item.group === group) && (!q || (item.prompt || "").toLowerCase().includes(q));
+    if(status === "pending") show = show && !verdict;
+    else if(status) show = show && verdict === status;
+    row.hidden = !show;
+    if(!show) row.querySelector(".ck").checked = false;   // 全选只作用于可见行
+    if(show) shown += 1;
+  });
+  $("evalFilterCount").textContent = `显示 ${shown}/${evalItems.length} 条`;
+}
+function renderEvalTable(){
+  if(!evalItems.length){
+    $("evalReview").innerHTML = '<div class="inline-note">这个版本还没有可审核的条目。</div>';
+    return;
+  }
+  let rows = `<div class="eval-table"><table><tr><th></th><th>组</th><th>prompt</th><th>结论</th><th>理由</th></tr>`;
+  evalItems.forEach((it, i)=>{
+    const review = it.review || {};
+    const verdict = review.verdict === "approve" || review.verdict === "reject" ? review.verdict : "";
+    rows += `<tr class="item" data-i="${i}" data-group="${esc(it.group)}">
+      <td><input type="checkbox" class="ck" data-i="${i}" aria-label="选择此行"></td>
+      <td class="muted">${esc(it.group)}</td><td>${esc(it.prompt || "")}</td>
+      <td><select data-i="${i}" class="rv">
+        <option value=""${verdict ? "" : " selected"}>未审</option>
+        <option value="approve"${verdict === "approve" ? " selected" : ""}>通过</option>
+        <option value="reject"${verdict === "reject" ? " selected" : ""}>驳回</option></select></td>
+      <td><input data-i="${i}" class="rr" placeholder="驳回理由" value="${esc(review.note || "")}"></td></tr>`;
+  });
+  $("evalReview").innerHTML = rows + "</table></div>";
+}
+async function loadEvalData(evalset){
+  const r = await fetch("/api/evalset/items?evalset="+encodeURIComponent(evalset), {headers:authHeaders()});
+  const d = await r.json();
+  if(!r.ok) throw new Error(d.error || "读取失败");
+  evalItems = d.items || [];
+  $("evalFilters").hidden = !evalItems.length;
+  $("evalSelectAll").checked = false;
+  renderEvalTable();
+  updateReviewedCount();
+  applyEvalFilter();
+  return await loadEvalQuality(evalset);
+}
+function resetEvalReview(){
+  evalItems = [];
+  evalQualitySummary = "";
+  $("evalFilters").hidden = true;
+  $("evalSelectAll").checked = false;
+  $("evalFilterCount").textContent = "";
+  $("evalReview").innerHTML = "";
+  renderEvalQuality(null);
+  updateReviewedCount();
+}
 $("loadEval").onclick = async () => {
   const evalset = evalsetPath();
   if(!evalset){ toast("先选择工作区与评测集版本", "err"); return; }
   try{
-    const r = await fetch("/api/evalset/items?evalset="+encodeURIComponent(evalset), {headers:authHeaders()});
-    const d = await r.json();
-    if(!r.ok) throw new Error(d.error||"读取失败");
-    evalItems = d.items || [];
-    $("evalMsg").textContent = `已加载 ${evalItems.length} 条`;
-    let rows = `<div class="eval-table"><table><tr><th>组</th><th>prompt</th><th>结论</th><th>理由</th></tr>`;
-    evalItems.forEach((it,i)=>{
-      rows += `<tr><td class="muted">${it.group}</td><td>${(it.prompt||"").replace(/</g,"&lt;")}</td>
-        <td><select data-i="${i}" class="rv"><option value="approve">通过</option><option value="reject">驳回</option></select></td>
-        <td><input data-i="${i}" class="rr" placeholder="驳回理由"></td></tr>`;
-    });
-    $("evalReview").innerHTML = rows + "</table></div>";
+    const warning = await loadEvalData(evalset);
+    $("evalMsg").textContent = `已加载 ${evalItems.length} 条` + (warning ? "；" + warning : "");
   }catch(e){ $("evalMsg").textContent = "✗ " + e.message; toast(e.message, "err"); }
 };
+$("evalSearch").addEventListener("input", applyEvalFilter);
+$("evalGroupFilter").addEventListener("change", applyEvalFilter);
+$("evalStatusFilter").addEventListener("change", applyEvalFilter);
+$("evalSelectAll").addEventListener("change", () => {
+  const on = $("evalSelectAll").checked;
+  document.querySelectorAll("#evalReview tr.item").forEach(row=>{
+    if(!row.hidden) row.querySelector(".ck").checked = on;
+  });
+});
+$("evalReview").addEventListener("change", (e)=>{
+  if(!e.target.classList.contains("rv")) return;
+  updateReviewedCount();
+  applyEvalFilter();
+});
+function evalCheckedRows(){
+  return [...document.querySelectorAll("#evalReview tr.item")]
+    .filter(row=>!row.hidden && row.querySelector(".ck").checked);
+}
+function applyEvalBatch(verdict){
+  const rows = evalCheckedRows();
+  if(!rows.length){ toast("先勾选当前可见的行", "err"); return; }
+  if(verdict === "approve" && !confirm(`把所选 ${rows.length} 条标为通过？\n质量自检：${evalQualitySummary || "尚未加载"}\n质量自检只提示问题，不替代人工判断。`)) return;
+  rows.forEach(row=>{ row.querySelector(".rv").value = verdict; });
+  updateReviewedCount();
+  applyEvalFilter();
+}
+$("evalBatchApprove").onclick = ()=>applyEvalBatch("approve");
+$("evalBatchReject").onclick = ()=>applyEvalBatch("reject");
 $("submitReview").onclick = async () => {
   const evalset = evalsetPath();
   if(!evalset || !evalItems.length){ toast("先加载评测集", "err"); return; }
   if(!reviewerName()){ toast("先填写审核人姓名", "err"); $("reviewerName").focus(); return; }
-  const decisions = evalItems.map((it,i)=>({file:it.file, group:it.group, prompt:it.prompt,
-    expect:it.expect||"", verdict:document.querySelector(`.rv[data-i="${i}"]`).value,
-    note:document.querySelector(`.rr[data-i="${i}"]`).value.trim()}));
+  const decisions = evalItems.map((it, i)=>{
+    const row = evalRow(i);
+    return {file:it.file, group:it.group, prompt:it.prompt, expect:it.expect||"",
+      verdict:row ? row.querySelector(".rv").value : "",
+      note:row ? row.querySelector(".rr").value.trim() : ""};
+  }).filter(d=>d.verdict);          // 未审行不提交，后端也不会把空 verdict 写成通过
+  if(!decisions.length){ toast("没有已审的行：先把至少一条标为通过或驳回", "err"); return; }
   try{
     const r = await fetch("/api/evalset/review", {method:"POST", headers:authHeaders({"Content-Type":"application/json"}),
       body: JSON.stringify({evalset, decisions, reviewer:reviewerName()})});
     const d = await r.json();
     if(!r.ok) throw new Error(d.error||"提交失败");
-    $("evalMsg").textContent = "✓ 审核已记录：" + d.path;
+    const warning = await loadEvalData(evalset);   // 重新读 items + 质量面板，已审状态从 review.json 恢复
+    $("evalMsg").textContent = `✓ 审核已记录：已审 ${d.reviewed}/${d.total}（本次提交 ${decisions.length} 条）` + (warning ? "；" + warning : "");
     toast("审核已记录", "ok");
   }catch(e){ $("evalMsg").textContent = "✗ " + e.message; toast(e.message, "err"); }
 };
@@ -1263,8 +1780,13 @@ function addRealRow(data={}){
   item.querySelector(".real-prompt").value = data.prompt || "";
   item.querySelector(".real-expect").value = data.expect || "";
   item.querySelector(".real-note").value = data.note || "";
-  item.querySelector("button").onclick = () => { item.remove(); if(!realRows().length) addRealRow(); refreshRealRows(); };
-  item.querySelectorAll("textarea,input").forEach(el => el.addEventListener("input", refreshRealRows));
+  item.querySelector("button").onclick = () => {
+    item.remove(); if(!realRows().length) addRealRow();
+    refreshRealRows(); scheduleEstimate(); scheduleSaveForm();
+  };
+  item.querySelectorAll("textarea,input").forEach(el => el.addEventListener("input", ()=>{
+    refreshRealRows(); scheduleEstimate(); scheduleSaveForm();
+  }));
   $("realList").appendChild(item);
   refreshRealRows();
 }
@@ -1290,7 +1812,7 @@ function realPayload(){
   if(out.length > 20) throw new Error("真实输入最多 20 条");
   return out;
 }
-$("addReal").onclick = () => addRealRow();
+$("addReal").onclick = () => { addRealRow(); scheduleSaveForm(); };
 $("importReal").onclick = () => $("realFile").click();
 $("realFile").onchange = async () => {
   const file = $("realFile").files[0];
@@ -1323,6 +1845,7 @@ $("realFile").onchange = async () => {
     $("realList").innerHTML = "";
     clean.forEach(addRealRow);
     refreshRealRows();
+    scheduleEstimate(); scheduleSaveForm();
     toast(`已导入 ${clean.length} 条`, "ok");
   }catch(e){ toast(e.message, "err"); }
   finally{ $("realFile").value = ""; }
@@ -1458,11 +1981,14 @@ function listen(id){
 function handleEvent(id, ev){
     const at = ev.clock || clockOf(ev.ts);
     if(ev.type==="plan"){
-      setPlan(ev.tier, ev.stages);
+      // plan 事件不带 weights 时沿用已有的 /api/estimate 权重（setPlan 不会清空）。
+      setPlan(ev.tier, ev.stages, ev.weights);
+      currentStage = "";
       log(`[计划] ${currentPlan.map(label).join(" → ")}`, at);
     } else if(ev.type==="stage"){
       if(ev.status==="start"){
         stageStarted[ev.name] = performance.now();
+        currentStage = ev.name;
         markStep(ev.name, "on", "进行中");
         const [start] = stageBounds(stageKey(ev.name));
         setProgress(start);
@@ -1561,10 +2087,10 @@ function hideError(){ $("errorBar").hidden = true; }
 $("errorClose").onclick = () => hideError();
 $("errorRetry").onclick = () => { const id = errorRunId || runId; if(id){ hideError(); listen(id); } };
 $("errorLog").onclick = () => showLog(errorRunId || runId);
-$("logClose").onclick = () => { $("logModal").hidden = true; };
-$("logModal").onclick = (e) => { if(e.target.id === "logModal") $("logModal").hidden = true; };
-$("evidenceClose").onclick = () => { $("evidenceModal").hidden = true; };
-$("evidenceModal").onclick = (e) => { if(e.target.id === "evidenceModal") $("evidenceModal").hidden = true; };
+$("logClose").onclick = () => hideModal("logModal");
+$("logModal").onclick = (e) => { if(e.target.id === "logModal") hideModal("logModal"); };
+$("evidenceClose").onclick = () => hideModal("evidenceModal");
+$("evidenceModal").onclick = (e) => { if(e.target.id === "evidenceModal") hideModal("evidenceModal"); };
 const EVIDENCE_LABELS = {
   name:"检查点", check:"检查点", pass:"结果", result:"结果", quote:"原文引用",
   score:"得分", evidence:"证据", reason:"理由", note:"备注", metric:"指标",
@@ -1623,11 +2149,11 @@ function openEvidence(metric){
     + `<h4>证据数据</h4>${renderEvidenceData(value.data)}`
     + `<details class="raw-evidence"><summary>原始 JSON</summary><pre>${
       esc(JSON.stringify(value.data == null ? null : value.data, null, 2))}</pre></details>`;
-  $("evidenceModal").hidden = false;
+  showModal("evidenceModal");
 }
 async function showLog(id){
   if(!id){ toast("还没有可查看的运行", "err"); return; }
-  $("logModal").hidden = false; $("logBody").textContent = "加载中…";
+  showModal("logModal"); $("logBody").textContent = "加载中…";
   try{
     const r = await fetch("/api/log?id=" + encodeURIComponent(id), {headers: authHeaders()});
     const d = await r.json();
@@ -1739,14 +2265,14 @@ function renderHistory(){
       btn.onclick = (e)=>{
         e.stopPropagation();
         const role = btn.dataset.role;
-        if(role === "open"){ $("historyModal").hidden = true; openRun(row.dataset.id); return; }
+        if(role === "open"){ hideModal("historyModal"); openRun(row.dataset.id); return; }
         $(role === "base" ? "compareBase" : "compareTarget").value = row.dataset.id;
       };
     });
   });
 }
 async function openHistory(){
-  $("historyModal").hidden = false;
+  showModal("historyModal");
   $("historyList").innerHTML = '<div class="empty">加载中…</div>';
   try{
     const r = await fetch("/api/runs?limit=100", {headers: authHeaders()});
@@ -1757,10 +2283,10 @@ async function openHistory(){
   }catch(e){ $("historyList").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
 }
 $("historyOpen").onclick = openHistory;
-$("historyClose").onclick = () => { $("historyModal").hidden = true; };
-$("historyModal").onclick = (e) => { if(e.target.id === "historyModal") $("historyModal").hidden = true; };
-$("compareClose").onclick = () => { $("compareModal").hidden = true; };
-$("compareModal").onclick = (e) => { if(e.target.id === "compareModal") $("compareModal").hidden = true; };
+$("historyClose").onclick = () => hideModal("historyModal");
+$("historyModal").onclick = (e) => { if(e.target.id === "historyModal") hideModal("historyModal"); };
+$("compareClose").onclick = () => hideModal("compareModal");
+$("compareModal").onclick = (e) => { if(e.target.id === "compareModal") hideModal("compareModal"); };
 $("compareGo").onclick = async () => {
   const base = $("compareBase").value, target = $("compareTarget").value;
   if(!base || !target){ toast("先选两份报告", "err"); return; }
@@ -1773,7 +2299,7 @@ $("compareGo").onclick = async () => {
     if(!r.ok) throw new Error(d.error || "对比失败");
     renderCompare(d);
     $("compareMsg").textContent = "";
-    $("compareModal").hidden = false;
+    showModal("compareModal");
   }catch(e){ $("compareMsg").textContent = "✗ " + e.message; }
 };
 function renderCompare(data){
@@ -1811,7 +2337,9 @@ function renderCompare(data){
 async function openRun(id){
   if(!id) return;
   runId = id; errorRunId = id;
-  history.replaceState(null, "", "?run=" + encodeURIComponent(id));
+  // 深链 ?run=id#m-2：保留 hash，showReport 渲染完再按它定位
+  const anchor = /^#m-\d+$/.test(location.hash) ? location.hash : "";
+  history.replaceState(null, "", "?run=" + encodeURIComponent(id) + anchor);
   localStorage.setItem("se-last-run", id);
   try{
     const r = await fetch("/api/status?id="+id, {headers: authHeaders()});
@@ -1844,6 +2372,132 @@ async function openRun(id){
 
 const linkedRun = new URLSearchParams(location.search).get("run");
 if(linkedRun){ openRun(linkedRun); }
+
+// --- 报告当文档：指标锚点 / 筛选 / 下一步 / 全部建议（Phase B） ---
+const ADVICE_PRIORITY = {fail: 1, warn: 2, info: 3};
+const ADVICE_EFFORT_RANK = {quick: 0, medium: 1, large: 2};
+const ADVICE_EFFORT_LABELS = {quick: "快速", medium: "中等", large: "较大"};
+const ADVICE_SEVERITY_LABELS = {fail: "失败", warn: "警告", info: "未测"};
+const ADVICE_SEVERITY_CLASS = {fail: "fail", warn: "warn", info: "skipped"};
+function metricId(metric){ return "m-" + String(metric || "").replace(/^#/, ""); }
+function advicePriority(item){
+  const value = Number(item && item.priority);
+  if(value >= 1 && value <= 3) return value;
+  return ADVICE_PRIORITY[(item && item.severity) || "info"] || 3;
+}
+function adviceSorted(){
+  return ((report && report.advice) || []).slice().sort((a, b)=>
+    advicePriority(a) - advicePriority(b)
+    || (ADVICE_EFFORT_RANK[a.effort] ?? 1) - (ADVICE_EFFORT_RANK[b.effort] ?? 1)
+    || String(a.metric || "").localeCompare(String(b.metric || ""), "en", {numeric:true}));
+}
+function adviceSeverity(item){
+  const sev = (item && item.severity) || "info";
+  return {text: ADVICE_SEVERITY_LABELS[sev] || sev, cls: ADVICE_SEVERITY_CLASS[sev] || "skipped"};
+}
+function scrollToMetric(metric){
+  const el = document.getElementById(metricId(metric));
+  if(!el) return false;
+  if(el.hidden) applyMetricFilter("all");   // 目标被筛掉时先显示，再定位
+  el.scrollIntoView({behavior:"smooth", block:"center"});
+  el.classList.remove("anchor-hit");
+  void el.offsetWidth;                 // 强制重排，连续点同一条也能重放高亮
+  el.classList.add("anchor-hit");
+  clearTimeout(el._anchorTimer);
+  el._anchorTimer = setTimeout(()=>el.classList.remove("anchor-hit"), 2600);
+  return true;
+}
+function applyHashAnchor(){
+  const hash = String(location.hash || "");
+  if(!/^#m-\d+$/.test(hash)) return false;
+  return scrollToMetric(hash.slice(1));
+}
+window.addEventListener("hashchange", ()=>{ if(report) applyHashAnchor(); });
+function renderNextSteps(){
+  const counts = {fail: 0, warn: 0, skipped: 0};
+  Object.values((report && report.metrics) || {}).forEach(v=>{
+    if(counts[v.verdict] != null) counts[v.verdict] += 1;
+  });
+  const advice = adviceSorted();
+  $("nextCounts").textContent = `失败 ${counts.fail} · 警告 ${counts.warn} · 未测 ${counts.skipped}`;
+  $("openAdvice").hidden = !advice.length;
+  if(!advice.length){
+    const gaps = counts.fail + counts.warn + counts.skipped;
+    $("nextList").innerHTML = `<li class="empty">${gaps
+      ? "报告没有给出建议（可能是旧版报告）；点指标行的「证据」看详情。"
+      : "全部指标通过，没有待办建议。"}</li>`;
+  }else{
+    $("nextList").innerHTML = advice.slice(0, 3).map(item=>{
+      const sev = adviceSeverity(item);
+      return `<li><a class="next-link" href="#${metricId(item.metric)}" data-metric="${esc(item.metric)}">${esc(item.metric)}</a>
+        <span class="badge ${sev.cls}">${esc(sev.text)}</span>
+        <span class="inline-note">${esc(ADVICE_EFFORT_LABELS[item.effort] || "中等")}</span>
+        <div><b>${esc(publicText(item.problem))}</b></div>
+        <div class="metric-note">${esc(publicText(item.action))}</div></li>`;
+    }).join("");
+  }
+  $("nextCard").hidden = false;
+}
+function renderAdvice(){
+  const advice = adviceSorted();
+  if(!advice.length){
+    $("adviceBody").innerHTML = '<div class="empty">16 项指标全部通过，无待办建议。</div>';
+    return;
+  }
+  const rows = advice.map(item=>{
+    const sev = adviceSeverity(item);
+    return `<tr><td><a href="#${metricId(item.metric)}" data-metric="${esc(item.metric)}">${esc(item.metric)}</a></td>
+      <td><span class="badge ${sev.cls}">${esc(sev.text)}</span></td>
+      <td>${esc(publicText(item.problem))}</td>
+      <td>${esc(publicText(item.evidence))}</td>
+      <td>${esc(publicText(item.action))}</td>
+      <td>${esc(ADVICE_EFFORT_LABELS[item.effort] || "中等")}</td></tr>`;
+  }).join("");
+  $("adviceBody").innerHTML = '<div class="table-wrap"><table class="advice-table"><thead><tr>'
+    + '<th>指标</th><th>严重度</th><th>问题</th><th>证据</th><th>建议动作</th><th>工作量</th>'
+    + `</tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+$("openAdvice").onclick = () => { renderAdvice(); showModal("adviceModal"); };
+$("adviceClose").onclick = () => hideModal("adviceModal");
+$("adviceModal").onclick = (e) => { if(e.target.id === "adviceModal") hideModal("adviceModal"); };
+document.addEventListener("click", (e)=>{
+  const link = e.target && e.target.closest ? e.target.closest('a[href^="#m-"]') : null;
+  if(!link) return;
+  e.preventDefault();
+  hideModal();                         // 建议弹层里点 #N：先关弹层再定位
+  history.replaceState(null, "", link.getAttribute("href"));
+  scrollToMetric(link.dataset.metric || link.getAttribute("href").slice(2));
+});
+function applyMetricFilter(filter){
+  currentMetricFilter = ["fail", "warn", "skipped"].includes(filter) ? filter : "all";
+  const rows = [...document.querySelectorAll("#metrics tr.metric-row")];
+  let shown = 0;
+  rows.forEach(row=>{
+    const show = currentMetricFilter === "all" || row.dataset.verdict === currentMetricFilter;
+    row.hidden = !show;                // 只改可见行，不重算指标
+    if(show) shown += 1;
+  });
+  document.querySelectorAll("#metrics tr.group").forEach(group=>{
+    let el = group.nextElementSibling, any = false;
+    while(el && !el.classList.contains("group")){
+      if(el.classList.contains("metric-row") && !el.hidden) any = true;
+      el = el.nextElementSibling;
+    }
+    group.hidden = !any;               // 组标题没有可显示行时隐藏
+  });
+  const empty = $("metricEmpty");
+  if(empty) empty.hidden = shown > 0;
+  document.querySelectorAll("#metricFilters .filter-btn").forEach(btn=>{
+    const active = btn.dataset.filter === currentMetricFilter;
+    btn.classList.toggle("active", active);
+    btn.setAttribute("aria-pressed", active ? "true" : "false");
+  });
+  $("filterCount").textContent = shown === rows.length
+    ? `共 ${rows.length} 条` : `显示 ${shown}/${rows.length} 条`;
+}
+document.querySelectorAll("#metricFilters .filter-btn").forEach(btn=>{
+  btn.onclick = () => applyMetricFilter(btn.dataset.filter);
+});
 
 async function showReport(id){
   try{
@@ -1909,15 +2563,17 @@ async function showReport(id){
       for(const [k,v] of groups[t]){
         const opts = ["pass","warn","fail","skipped"].map(o =>
           `<button type="button" class="verdict-option ${o}" data-value="${o}">${verdictText(o)}</button>`).join("");
-        rows += `<tr><td><code>${k}</code></td>
-          <td><div class="verdict-picker" data-metric="${k}" data-original="${v.verdict}" data-value="${v.verdict}">
+        rows += `<tr class="metric-row" id="${metricId(k)}" data-metric="${esc(k)}" data-verdict="${esc(v.verdict)}" data-label="${esc(k)}">
+          <td data-label="指标"><code>${k}</code></td>
+          <td data-label="结果"><div class="verdict-picker" data-metric="${k}" data-original="${v.verdict}" data-value="${v.verdict}">
             <button type="button" class="verdict-btn ${v.verdict}" aria-haspopup="listbox" aria-expanded="false">${verdictText(v.verdict)} <span class="caret">▾</span></button>
             <div class="verdict-menu" role="listbox">${opts}</div>
           </div></td>
-          <td class="metric-note">${esc(publicText(v.note||""))}</td>
-          <td><button type="button" class="btn btn-ghost btn-sm evidence-btn" data-metric="${k}">证据</button></td></tr>`;
+          <td class="metric-note" data-label="摘要">${esc(publicText(v.note||""))}</td>
+          <td data-label="证据"><button type="button" class="btn btn-ghost btn-sm evidence-btn" data-metric="${k}">证据</button></td></tr>`;
       }
     }
+    rows += '<tr class="metric-empty" id="metricEmpty" hidden><td colspan="4">没有符合筛选的指标</td></tr>';
     $("metrics").innerHTML = rows + "</tbody>";
     document.querySelectorAll(".evidence-btn").forEach(btn=>{
       btn.addEventListener("click", (e)=>{ e.stopPropagation(); openEvidence(btn.dataset.metric); });
@@ -1946,6 +2602,9 @@ async function showReport(id){
       });
     });
     syncOverrideState();
+    renderNextSteps();
+    applyMetricFilter(currentMetricFilter);
+    requestAnimationFrame(()=>applyHashAnchor());   // ?run=id#m-2 打开后定位并高亮
   }catch(e){ toast("读报告失败："+e.message, "err"); showError("读报告失败："+e.message, id, false); }
 }
 document.addEventListener("click", ()=>{
@@ -1974,9 +2633,9 @@ function renderOverrideHistory(){
     + '<th>指标 / 时间</th><th>原值</th><th>新值</th><th>理由</th><th>审核人</th>'
     + `</tr></thead><tbody>${body}</tbody></table></div>`;
 }
-$("overrideHistory").onclick = () => { renderOverrideHistory(); $("overridesModal").hidden = false; };
-$("overridesClose").onclick = () => { $("overridesModal").hidden = true; };
-$("overridesModal").onclick = (e) => { if(e.target.id === "overridesModal") $("overridesModal").hidden = true; };
+$("overrideHistory").onclick = () => { renderOverrideHistory(); showModal("overridesModal"); };
+$("overridesClose").onclick = () => hideModal("overridesModal");
+$("overridesModal").onclick = (e) => { if(e.target.id === "overridesModal") hideModal("overridesModal"); };
 function syncOverrideState(){
   const changed = [...document.querySelectorAll(".verdict-picker")].filter(p=>p.dataset.value !== p.dataset.original);
   $("ovBtn").textContent = changed.length ? `应用 ${changed.length} 项调整` : "应用调整";

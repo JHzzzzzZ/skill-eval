@@ -1097,7 +1097,19 @@ def _raw_html(data, folded=False) -> str:
 
 VF_GLYPH = {"pass": "✓", "fail": "✗", "warn": "⚠", "skipped": "–"}  # 结果栏符号（ADR-0030）
 ADV_SEV_CLS = {"fail": "fail", "warn": "warn", "info": "skipped"}
-ADV_SEV_RANK = {"fail": 0, "warn": 1, "info": 2}
+# 展示排序字段（ADR-0030/Phase B）：priority 只按严重度定档，effort 按指标的可修范围定档。
+# 两者都不参与 16 指标裁决，只决定建议在报告与 Web「下一步」里的先后。
+ADV_PRIORITY = {"fail": 1, "warn": 2, "info": 3}
+ADV_EFFORT_RANK = {"quick": 0, "medium": 1, "large": 2}
+ADVICE_EFFORT = {
+    # 文档/命名/契约类：改一处文案或字段说明即可
+    "#1": "quick", "#2": "quick", "#3": "quick", "#5": "quick",
+    "#6": "quick", "#7": "quick", "#8": "quick", "#9": "quick", "#14": "quick",
+    # 安全修复 / 评测集、触发集与依赖声明
+    "#4": "medium", "#10": "medium", "#11": "medium", "#12": "medium",
+    # T3 成本、稳定性与幂等：要重跑多次运行才能验证
+    "#13": "large", "#15": "large", "#16": "large",
+}
 
 # 每条指标的建议动作（确定性文本，问题与建议同源 → 结构上无法服钩，ADR-0030）
 ADVICE_ACTIONS = {
@@ -1157,11 +1169,24 @@ def _judge_rows(items) -> list:
             for i in items if isinstance(i, dict)]
 
 
+def _advice_entry(metric: str, severity: str, problem: str, evidence: str, action: str) -> dict:
+    """三条派生路径（指标级/检查点级/#4 命中级）共用同一形状。
+
+    priority 与 effort 是确定性展示字段：同一 metric + severity 永远得到同一对值，
+    不参与裁决，也不受 LLM 影响（ADR-0030）。
+    """
+    return {"metric": metric, "severity": severity,
+            "priority": ADV_PRIORITY[severity],
+            "effort": ADVICE_EFFORT.get(metric, "medium"),
+            "problem": problem, "evidence": evidence, "action": action}
+
+
 def _advice(m: dict) -> list:
     """从裁决确定性派生优化建议（ADR-0030）：每条带 #N 反链，问题与建议同源。
 
     三档粒度：指标级（非 pass 即一条）、检查点级（judge 里 pass=false 的项）、
-    #4 命中级（每个命中的规则组/闸门一条）。排序 fail → warn → info，同级按指标号。
+    #4 命中级（每个命中的规则组/闸门一条）。排序 priority（fail 1 → warn 2 → info 3）
+    → effort（quick → medium → large）→ 指标号；同级条目顺序稳定。
     """
     out = []
     for k in ALL_KEYS:
@@ -1176,34 +1201,30 @@ def _advice(m: dict) -> list:
         # 否则 info 档上问题与建议仍然脱钩（评审 P1）。
         action = (f"补测：按「{v.get('method') or '未指定'}」面拿到数据后重出报告（未测是缺口，不是问题）"
                   if verdict == "skipped" else ADVICE_ACTIONS.get(k, "复跑该指标的测量面"))
-        out.append({"metric": k, "severity": sev,
-                    "problem": f"{DIM_NAMES.get(k, k)}（{k}）{phrase}",
-                    "evidence": (v.get("note") or "").strip() or "—", "action": action})
+        out.append(_advice_entry(k, sev, f"{DIM_NAMES.get(k, k)}（{k}）{phrase}",
+                                 (v.get("note") or "").strip() or "—", action))
         for items in _advice_items(data):
             for it in items:
                 if isinstance(it, dict) and it.get("pass") is False:
-                    out.append({"metric": k, "severity": sev,
-                                "problem": f"检查点未通过：{it.get('name')}",
-                                "evidence": str(it.get("quote") or "").strip() or "—",
-                                "action": action})
+                    out.append(_advice_entry(k, sev, f"检查点未通过：{it.get('name')}",
+                                             str(it.get("quote") or "").strip() or "—", action))
         if k != "#4":
             continue
         for g, label in DIM_PERM_GROUPS.items():
             hits = [h for h in (data.get(g) or []) if isinstance(h, dict)]
             if hits:
-                out.append({"metric": k,
-                            "severity": "fail" if g in DIM_PERM_HARD else sev,
-                            "problem": f"静态规则命中：{label}（{g}）×{len(hits)}",
-                            "evidence": "；".join(f"{h.get('file')}:{h.get('line')}" for h in hits[:3]),
-                            "action": ADVICE_ACTIONS["#4"]})
+                out.append(_advice_entry(k, "fail" if g in DIM_PERM_HARD else sev,
+                                         f"静态规则命中：{label}（{g}）×{len(hits)}",
+                                         "；".join(f"{h.get('file')}:{h.get('line')}" for h in hits[:3]),
+                                         ADVICE_ACTIONS["#4"]))
         gate = [h for h in (data.get("hardcoded") or []) if isinstance(h, dict)]
         if gate:
-            out.append({"metric": k, "severity": "fail",
-                        "problem": f"可移植性闸门命中：宿主环境硬编码 ×{len(gate)}",
-                        "evidence": "；".join(f"{h.get('file')}:{h.get('line')} {h.get('text')}"
+            out.append(_advice_entry(k, "fail",
+                                     f"可移植性闸门命中：宿主环境硬编码 ×{len(gate)}",
+                                     "；".join(f"{h.get('file')}:{h.get('line')} {h.get('text')}"
                                                for h in gate[:3]),
-                        "action": "把绝对路径/宿主目录改成相对路径或环境变量"})
-    out.sort(key=lambda a: (ADV_SEV_RANK.get(a["severity"], 3),
+                                     "把绝对路径/宿主目录改成相对路径或环境变量"))
+    out.sort(key=lambda a: (a["priority"], ADV_EFFORT_RANK.get(a["effort"], 2),
                              int(a["metric"][1:]) if a["metric"][1:].isdigit() else 999))
     return out
 

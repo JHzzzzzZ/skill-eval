@@ -47,6 +47,26 @@ run:
   # T1 评审并发数；runner 使用。单位：路。默认 4。
   judge_concurrency: 4
 
+estimate:
+  # 成本预估（scripts/estimate.py + /api/estimate）：只用于页面提示，不参与裁决。
+  # 保守默认：宁可估高，不估低；没有历史运行校准时按这些值算。
+  # 一次完整任务运行（T2B/T3 的 agent 子进程）的默认耗时。单位：秒。默认 45。
+  agent_seconds: 45
+  # 一次触发 case 的默认耗时；多数 case 早停，远小于完整任务。单位：秒。默认 20。
+  trigger_agent_seconds: 20
+  # 一次 LLM 判定/对比调用的默认耗时。单位：秒。默认 8。
+  judge_seconds: 8
+  # 一次完整任务运行的默认 token 消耗。单位：token。默认 12000。
+  agent_tokens: 12000
+  # 一次触发 case 的默认 token 消耗。单位：token。默认 6000。
+  trigger_agent_tokens: 6000
+  # 一次 LLM 判定/对比调用的默认 token 消耗。单位：token。默认 2500。
+  judge_tokens: 2500
+  # T2A 早停命中比例：只有未早停的 case 才调判定。范围 0~1。默认 0.5。
+  t2a_early_exit_ratio: 0.5
+  # 固定开销（沙箱副本/报告渲染）。单位：秒。默认 15。
+  overhead_seconds: 15
+
 idem:
   # 重复步骤比例上限；超过判不幂等。范围 0~1。默认 0.5。
   max_ratio: 0.5

@@ -14,6 +14,7 @@ import time
 import zipfile
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import quote
 
 import pytest
 
@@ -1390,3 +1391,293 @@ def test_ui_confirms_before_unsafe_host_fallback():
     assert "仍可能读到宿主文件" in html and "confirm(" in html
     # 未确认时不自动回退：只有 confirm 通过后才置 allowUnsafeHost
     assert html.index("confirm(\"当前环境没有可用的容器") < html.index("allowUnsafeHost = true")
+
+
+# --- 成本预估：GET /api/estimate（只读、不建 run、不扣配额、不需要 token）---
+
+def test_estimate_endpoint_counts_without_side_effects(tmp_path, monkeypatch):
+    skill = make_skill(tmp_path)
+    evalsets = tmp_path / "evalsets"
+    monkeypatch.setattr(web, "EVALSETS", evalsets)
+    evalset = make_evalset(evalsets, "demo", "v1")
+    query = (f"/api/estimate?skill={quote(str(skill))}&tier=t2a"
+             f"&evalset={quote(str(evalset))}")
+    with web_server(tmp_path, monkeypatch) as server:
+        status, data, _ = call(server, "GET", query)
+        assert status == 200, data
+        assert set(data) >= {"calls", "agent_runs", "tokens", "minutes",
+                             "stages", "weights", "cached", "assumptions"}
+        # 固定评测集：1 条 should 触发 → 1 个 agent，判定 0–1 次，另加 T1 的 7 次
+        assert data["agent_runs"] == 1
+        assert data["calls"]["max"] == 8
+        assert data["cached"] == []
+        assert not list((tmp_path / "runs").iterdir())      # 不建 run 目录
+        assert not (tmp_path / "usage.sqlite3").exists()    # 不扣配额
+
+
+def test_estimate_endpoint_rejects_invalid_inputs(tmp_path, monkeypatch):
+    skill = make_skill(tmp_path)
+    outside = tmp_path / "outside" / "v1"
+    (outside / "triggers" / "should").mkdir(parents=True)
+    (outside / "triggers" / "should" / "s1.json").write_text(
+        json.dumps({"prompt": "x"}), encoding="utf-8")
+    (tmp_path / "evalsets").mkdir()
+    monkeypatch.setattr(web, "EVALSETS", tmp_path / "evalsets")
+    with web_server(tmp_path, monkeypatch) as server:
+        status, data, _ = call(server, "GET",
+                               f"/api/estimate?skill={quote(str(skill))}&tier=t2a"
+                               f"&evalset={quote(str(outside))}")
+        assert status == 400 and "evalsets" in data["error"]
+        assert call(server, "GET", "/api/estimate?tier=t0")[0] == 400
+        assert call(server, "GET",
+                    f"/api/estimate?skill={quote(str(skill))}&tier=t9")[0] == 400
+        assert call(server, "GET",
+                    f"/api/estimate?skill={quote(str(tmp_path / 'nope'))}&tier=t0")[0] == 400
+        assert not (tmp_path / "usage.sqlite3").exists()
+
+
+def test_estimate_endpoint_reports_cached_stages(tmp_path, monkeypatch):
+    skill = make_skill(tmp_path)
+    with web_server(tmp_path, monkeypatch) as server:
+        results = tmp_path / "runs" / "prev" / "results"
+        results.mkdir(parents=True)
+        (results / "run-meta.json").write_text(json.dumps({
+            "skill": str(skill), "created_at": "2026-01-02T00:00:00"}), encoding="utf-8")
+        (results / "static.json").write_text(json.dumps({"passed": True}), encoding="utf-8")
+        status, data, _ = call(server, "GET",
+                               f"/api/estimate?skill={quote(str(skill))}&tier=t1")
+        assert status == 200, data
+        assert data["cached"] == ["T0"]
+        assert data["calls"] == {"min": 7, "max": 7}   # T1 未缓存
+
+
+def test_ui_wires_estimate_form_memory_and_dynamic_weights():
+    html = (WEB_APP.parent / "index.html").read_text(encoding="utf-8")
+    # 1 成本条：所有档位都显示，输入变化防抖刷新
+    assert 'id="estimateBar"' in html and 'id="estimateMain"' in html
+    assert 'fetch("/api/estimate?' in html and "scheduleEstimate" in html
+    assert "estimateSeq" in html            # 过期请求不覆盖新结果
+    # 2 动态权重：estimate 的 weights 进入 stageBounds，plan 无 weights 时不覆盖
+    assert "function setPlan(tier, stages, weights)" in html
+    assert "setPlan(ev.tier, ev.stages, ev.weights)" in html
+    assert "function stageWeight(name)" in html and "stageWeight(item)" in html
+    assert "if(weights && typeof weights === \"object\") planWeights" in html
+    # 3 计时用 estimate 的 minutes，超时文案不暗示卡死
+    assert "function estimateMinutes()" in html and "currentEstimate.minutes" in html
+    assert "这次比预估慢，可能原因：模型排队、长 case、容器启动或重试；仍在运行" in html
+    assert "已超过预估" not in html
+    # 4 配置记忆：se-form 存选择、恢复在 workspaces 之后、API key 不落盘
+    assert 'const FORM_KEY = "se-form"' in html
+    assert "localStorage.setItem(FORM_KEY" in html
+    assert "async function loadWorkspacesThenRestore" in html
+    assert html.index("await loadWorkspaces()") < html.index("restoreForm();")
+    start = html.index("function formState(")
+    form_block = html[start:html.index("function saveForm", start)]
+    assert "api_key" not in form_block and "token" not in form_block.lower()
+    assert "formTouched" in html              # 用户先手动改过就不覆盖
+
+
+# --- Phase B：报告当文档（锚点 / 筛选 / 统一弹窗 / 下一步 / 手机卡片）---
+
+def test_ui_wires_report_metric_anchors_and_filter():
+    html = (WEB_APP.parent / "index.html").read_text(encoding="utf-8")
+    # 1 指标行锚点：id=m-N 与 report.html 的 #m-N 兼容；深链打开后滚动并高亮
+    assert "function metricId(metric)" in html
+    assert 'id="${metricId(k)}" data-metric="${esc(k)}" data-verdict="${esc(v.verdict)}"' in html
+    assert "function scrollToMetric(metric)" in html and "anchor-hit" in html
+    assert "function applyHashAnchor()" in html and "location.hash" in html
+    assert "requestAnimationFrame(()=>applyHashAnchor())" in html
+    assert r"^#m-\d+$" in html
+    assert 'if(el.hidden) applyMetricFilter("all")' in html   # 目标被筛掉时先显示再定位
+    # 2 筛选：四个按钮，只改可见行，组标题无可显示行时隐藏
+    for key in ("all", "fail", "warn", "skipped"):
+        assert f'data-filter="{key}"' in html, key
+    assert "function applyMetricFilter(filter)" in html
+    assert "row.hidden = !show" in html and "group.hidden = !any" in html
+    assert "只改可见行，不重算指标" in html
+    assert 'id="filterCount"' in html and "显示 ${shown}/${rows.length} 条" in html
+
+
+def test_ui_wires_unified_modal_focus_and_escape():
+    html = (WEB_APP.parent / "index.html").read_text(encoding="utf-8")
+    assert "const modalStack = []" in html
+    assert "function showModal(id)" in html and "function hideModal(id)" in html
+    assert 'e.key === "Escape"' in html and 'e.key !== "Tab"' in html
+    assert "document.activeElement === first" in html
+    assert "document.activeElement === last" in html
+    assert 'modal.setAttribute("role", "dialog")' in html
+    assert 'modal.setAttribute("aria-modal", "true")' in html
+    assert "modal._returnFocus" in html and "back.focus" in html
+    modals = ("logModal", "tokenModal", "overridesModal", "evidenceModal",
+              "historyModal", "compareModal", "adviceModal")
+    for modal in modals:
+        assert f'id="{modal}" role="dialog" aria-modal="true"' in html, modal
+        assert f'showModal("{modal}")' in html, modal
+        assert f'hideModal("{modal}")' in html, modal
+        assert f'$("{modal}").hidden = true' not in html, modal
+        assert f'$("{modal}").hidden = false' not in html, modal
+
+
+def test_ui_wires_next_steps_and_advice_modal():
+    html = (WEB_APP.parent / "index.html").read_text(encoding="utf-8")
+    assert 'id="nextCard"' in html and 'id="nextList"' in html
+    assert 'id="openAdvice"' in html and 'id="adviceModal"' in html
+    assert "function renderNextSteps()" in html
+    assert "function adviceSorted()" in html and "function advicePriority(item)" in html
+    assert "ADVICE_EFFORT_RANK" in html and "ADVICE_EFFORT_LABELS" in html
+    assert "advice.slice(0, 3)" in html
+    assert "失败 ${counts.fail} · 警告 ${counts.warn} · 未测 ${counts.skipped}" in html
+    assert 'href="#${metricId(item.metric)}"' in html and 'data-metric="${esc(item.metric)}"' in html
+    assert "function renderAdvice()" in html
+    for column in ("严重度", "问题", "证据", "建议动作", "工作量"):
+        assert f"<th>{column}</th>" in html, column
+    assert "renderNextSteps();" in html and "renderAdvice(); showModal(\"adviceModal\")" in html
+
+
+def test_ui_report_table_becomes_cards_on_mobile():
+    html = (WEB_APP.parent / "index.html").read_text(encoding="utf-8")
+    mobile = html[html.rindex("@media(max-width:640px)"):]
+    assert "#metrics{display:block;min-width:0;width:100%}" in mobile
+    assert "#metrics thead{display:none}" in mobile
+    assert "#metrics tr.metric-row{display:block" in mobile
+    assert "td::before{content:attr(data-label)" in mobile
+    assert "#metrics tr[hidden]{display:none}" in html
+    for label in ("指标", "结果", "摘要", "证据"):
+        assert f'data-label="{label}"' in html, label
+
+
+# --- Phase C：评测集审核体验（质量面板 / 默认未审 / 过滤 / 增量合并）---
+
+def test_evalset_review_map_handles_missing_corrupt_and_empty_verdict(tmp_path):
+    ev = make_evalset(tmp_path / "evalsets", "demo", "v1")
+    assert web._evalset_review_map(ev) == {}
+
+    (ev / "reviews").mkdir()
+    (ev / "reviews" / "review.json").write_text("{bad json", encoding="utf-8")
+    assert web._evalset_review_map(ev) == {}
+
+    (ev / "reviews" / "review.json").write_text(json.dumps({
+        "reviewer": "张三", "reviewed_at": "2026-01-01T00:00:00",
+        "items": [{"file": "triggers/should/s1.json", "verdict": "approve", "note": "好"},
+                  {"file": "cases/c1.json", "verdict": ""}]}), encoding="utf-8")
+    assert web._evalset_review_map(ev) == {
+        "triggers/should/s1.json": {"verdict": "approve", "note": "好",
+                                    "reviewer": "张三", "at": "2026-01-01T00:00:00"}}
+
+
+def _review(server, evalset, decisions, headers, reviewer="张三"):
+    return call(server, "POST", "/api/evalset/review",
+                {"evalset": str(evalset), "decisions": decisions, "reviewer": reviewer},
+                headers=headers)
+
+
+def test_evalset_items_carry_review_and_review_merges_incrementally(tmp_path, monkeypatch):
+    monkeypatch.setattr(web, "EVALSETS", tmp_path / "evalsets")
+    ev = make_evalset(tmp_path / "evalsets", "demo", "v1")
+    (ev / "triggers" / "should" / "s2.json").write_text(
+        json.dumps({"prompt": "第二个"}), encoding="utf-8")
+    url = "/api/evalset/items?evalset=" + quote(str(ev))
+    with web_server(tmp_path, monkeypatch) as server:
+        token = web.token_admin.issue("张三")
+        headers = {"X-Skill-Eval-Token": token["token"]}
+
+        status, data, _ = call(server, "GET", url, headers=headers)
+        assert status == 200, data
+        assert [item["review"] for item in data["items"]] == [None, None, None]
+
+        # 首次提交：只有 s1 有 verdict；s2 的空 verdict 不落盘
+        status, data, _ = _review(server, ev, [
+            {"file": "triggers/should/s1.json", "group": "should", "prompt": "帮我评估",
+             "verdict": "approve", "note": "好"},
+            {"file": "triggers/should/s2.json", "group": "should", "prompt": "第二个",
+             "verdict": "", "note": "没选"}], headers)
+        assert status == 200, data
+        assert data["ok"] is True and data["reviewed"] == 1 and data["total"] == 3
+        assert data["written"] is True
+        saved = json.loads((ev / "reviews" / "review.json").read_text(encoding="utf-8"))
+        assert [item["file"] for item in saved["items"]] == ["triggers/should/s1.json"]
+        assert saved["items"][0]["reviewer"] == "张三" and saved["items"][0]["at"]
+
+        # 再次提交：按 file 合并，s1 保留，s2 新增
+        status, data, _ = _review(server, ev, [
+            {"file": "triggers/should/s2.json", "group": "should", "prompt": "第二个",
+             "verdict": "reject", "note": "太泛"}], headers)
+        assert status == 200, data
+        assert data["reviewed"] == 2 and data["total"] == 3
+        saved = json.loads((ev / "reviews" / "review.json").read_text(encoding="utf-8"))
+        by_file = {item["file"]: item for item in saved["items"]}
+        assert set(by_file) == {"triggers/should/s1.json", "triggers/should/s2.json"}
+        assert by_file["triggers/should/s1.json"]["note"] == "好"      # 已有记录不丢
+        assert by_file["triggers/should/s2.json"]["verdict"] == "reject"
+
+        # 刷新恢复：items 带回 review
+        status, data, _ = call(server, "GET", url, headers=headers)
+        assert status == 200
+        review = {item["file"]: item["review"] for item in data["items"]}
+        assert review["triggers/should/s1.json"]["verdict"] == "approve"
+        assert review["triggers/should/s1.json"]["note"] == "好"
+        assert review["triggers/should/s1.json"]["reviewer"] == "张三"
+        assert review["triggers/should/s2.json"]["verdict"] == "reject"
+        assert review["cases/c1.json"] is None
+
+        # 只有空 verdict：不写盘、不升级 meta
+        before = (ev / "reviews" / "review.json").read_bytes()
+        meta_before = (ev / "meta.json").read_bytes()
+        status, data, _ = _review(server, ev, [
+            {"file": "cases/c1.json", "verdict": ""}], headers)
+        assert status == 200 and data["reviewed"] == 2 and data["written"] is False
+        assert (ev / "reviews" / "review.json").read_bytes() == before
+        assert (ev / "meta.json").read_bytes() == meta_before
+
+
+def test_evalset_review_upgrades_meta_only_when_every_item_approved(tmp_path, monkeypatch):
+    monkeypatch.setattr(web, "EVALSETS", tmp_path / "evalsets")
+    ev = make_evalset(tmp_path / "evalsets", "demo", "v1")
+    with web_server(tmp_path, monkeypatch) as server:
+        token = web.token_admin.issue("张三")
+        headers = {"X-Skill-Eval-Token": token["token"]}
+
+        status, data, _ = _review(server, ev, [
+            {"file": "triggers/should/s1.json", "verdict": "approve"}], headers)
+        assert status == 200, data
+        meta = json.loads((ev / "meta.json").read_text(encoding="utf-8"))
+        assert "reviewed_by" not in meta          # 2 条里只审 1 条，不算人工复核完成
+
+        status, data, _ = _review(server, ev, [
+            {"file": "cases/c1.json", "verdict": "approve"}], headers)
+        assert status == 200 and data["reviewed"] == 2
+        meta = json.loads((ev / "meta.json").read_text(encoding="utf-8"))
+        assert meta["reviewed_by"] == "human" and meta["reviewed_at"]
+
+
+def test_ui_wires_evalset_quality_panel_filters_and_incremental_review():
+    html = (WEB_APP.parent / "index.html").read_text(encoding="utf-8")
+    # 1 质量面板：加载版本时调 status，展示条数闸门 + 自检问题与文件/覆盖率，可折叠可滚动
+    assert 'id="evalQuality"' in html and "function renderEvalQuality" in html
+    assert "/api/evalset/status?evalset=" in html and "loadEvalQuality" in html
+    assert "evalset_check.py" in html
+    for key in ("echoes_description", "echoes_name", "duplicates", "conflicts",
+                "out_of_sandbox"):
+        assert key in html, key
+    assert "覆盖率 ${item.coverage}" in html
+    assert "<details><summary>" in html and "qlist" in html and "max-height:180px" in html
+    assert "不替代人工判断" in html
+    # 2 默认未审，并从 review.json 恢复
+    assert 'it.review' in html
+    assert '<option value=""${verdict ? "" : " selected"}>未审</option>' in html
+    assert '<select data-i="${i}" class="rv"><option value="approve">' not in html  # 不再默认通过
+    # 3 搜索 / 组过滤 / 状态过滤 / 可见行全选 / 已审计数
+    for element in ("evalSearch", "evalGroupFilter", "evalStatusFilter", "evalSelectAll",
+                    "evalReviewedCount", "evalFilterCount", "evalBatchApprove",
+                    "evalBatchReject"):
+        assert f'id="{element}"' in html, element
+    assert "function applyEvalFilter" in html and 'status === "pending"' in html
+    assert "全选可见行" in html and "row.hidden" in html
+    assert "已审 ${reviewed}/${evalItems.length}" in html
+    # 4 批量通过二次确认，并把质量自检摘要带进提示
+    assert "confirm(`把所选 ${rows.length} 条标为通过？" in html
+    assert "质量自检：${evalQualitySummary" in html
+    # 5 提交只发有 verdict 的行；成功后刷新 items + status
+    assert ".filter(d=>d.verdict)" in html
+    assert "没有已审的行" in html
+    assert "await loadEvalData(evalset)" in html
