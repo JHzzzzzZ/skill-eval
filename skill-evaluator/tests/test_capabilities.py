@@ -66,10 +66,57 @@ def test_container_tier_ok_with_docker_and_adapter(adapter_ok):
     assert any("模型代理" in warning for warning in result["warnings"])
 
 
+def test_container_missing_offers_confirmed_host_fallback(adapter_ok):
+    result = capabilities.check("t2a",
+                                sandbox_status=status(False, "缺少 docker CLI：需要容器运行时"))
+    fallback = result["fallback"]
+    assert fallback["isolation"] == "host" and fallback["available"] is True
+    assert fallback["reason"]
+    # 默认仍是 fail closed：require() 不会因为存在 fallback 就放行
+    assert result["ok"] is False
+    with pytest.raises(capabilities.CapabilityError):
+        capabilities.require("t2a", sandbox_status=status(False, "缺少 docker CLI"))
+
+
+def test_missing_adapter_disables_host_fallback(monkeypatch):
+    monkeypatch.setattr(capabilities.adapter_registry, "is_available", lambda name: False)
+    result = capabilities.check("t3", sandbox_status=status(False, "缺少 docker CLI"))
+    assert "adapter" in result["missing"]
+    assert result["fallback"]["isolation"] == "host"
+    assert result["fallback"]["available"] is False
+
+
+def test_no_host_fallback_when_container_is_available(adapter_ok):
+    result = capabilities.check("t2a", sandbox_status=status(True))
+    assert result["ok"] is True and result["fallback"]["available"] is False
+
+
+def test_daemon_or_image_missing_also_offers_fallback(adapter_ok):
+    daemon_down = sandbox.SandboxStatus("docker", executable="/usr/bin/docker",
+                                        client_version="27.0.0", image="i",
+                                        reason="daemon 不可达")
+    assert capabilities.check("t2b", sandbox_status=daemon_down)["fallback"]["available"] is True
+    no_image = sandbox.SandboxStatus("docker", executable="/usr/bin/docker",
+                                     client_version="27.0.0", daemon_version="27.0.0",
+                                     image="i", image_present=False, reason="镜像未构建")
+    assert capabilities.check("t3", sandbox_status=no_image)["fallback"]["available"] is True
+
+
 def test_explicit_host_isolation_is_dev_only(adapter_ok):
     result = capabilities.check("t2a", isolation="host", sandbox_status=status(False, "no docker"))
-    assert result["ok"] is True
-    assert any("仅供本地开发" in warning for warning in result["warnings"])
+    assert result["ok"] is True and result["missing"] == []
+    assert any("宿主临时目录" in warning and "不是安全边界" in warning
+               for warning in result["warnings"])
+
+
+def test_host_isolation_still_requires_adapter(monkeypatch):
+    monkeypatch.setattr(capabilities.adapter_registry, "is_available", lambda name: False)
+    result = capabilities.check("t2a", isolation="host")
+    assert result["ok"] is False
+    assert result["missing"] == ["adapter"]
+    assert any("adapter" in reason or "执行载体" in reason for reason in result["reasons"])
+    with pytest.raises(capabilities.CapabilityError):
+        capabilities.require("t2a", isolation="host")
 
 
 def test_unknown_tier_or_isolation_is_value_error(adapter_ok):

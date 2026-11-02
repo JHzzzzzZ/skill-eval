@@ -18,9 +18,11 @@ SKILL.md 的细则层。16 条指标编号见 ADR-0032（按档位连续）。�
 
 ## 沙箱
 
-T2/T3 默认走 Docker 一次性容器（`scripts/sandbox.py`）：workdir 是 `results/sandbox` 的副本，容器只挂载该目录到 `/work`，rootfs 只读，`--network none`、`--cap-drop ALL`、pids/memory/cpu 限制，结束即销毁；不挂宿主 `$HOME`、`~/.pi`、凭据或 docker.sock。T0/T1 不经过容器。`--isolation host` 仅是显式本地开发逃生门，不是安全边界，也不会自动回退。
+T2/T3 默认走 Docker 一次性容器（`scripts/sandbox.py`）：workdir 是 `results/sandbox` 的副本，容器只挂载该目录到 `/work`，rootfs 只读，`--network none`、`--cap-drop ALL`、pids/memory/cpu 限制，结束即销毁；不挂宿主 `$HOME`、`~/.pi`、凭据或 docker.sock。T0/T1 不经过容器。
 
-能力判定由 `scripts/capabilities.py` 统一：T0/T1 只查基础依赖；T2/T3 还要求 Docker daemon、沙箱镜像和可用 adapter，缺失时 runner 退出码 3、页面 412，不建 run、不扣配额。`scripts/check-deps.sh --tier t2a` 是同一判定的 CLI 入口；无参数只查基础依赖，保证游客 T0/T1 不被 Docker 卡死。模型代理尚未实现：容器没有真实 API key，`--network none` 下需要模型的 T2/T3 会失败并明确提示，不会改用宿主执行。**在代理落地前，T2/T3 只能验证容器/依赖链路，不能完成需要模型的评估。**
+没有可用容器时**默认不静默回退**：页面点运行会弹出确认，用户确认后才以 `--isolation host` 在临时目录（`results/sandbox`）用宿主执行；CLI 必须显式传 `--isolation host`。宿主临时目录只是 cwd 副本，**不是安全边界**——被测 skill 仍可能读到宿主文件、访问网络。
+
+能力判定由 `scripts/capabilities.py` 统一：T0/T1 只查基础依赖；T2/T3 还要求 Docker daemon、沙箱镜像和可用 adapter，缺失时 runner 退出码 3、页面 412，不建 run、不扣配额。结果带 `fallback`：缺容器但 adapter 可用时 `available=true`（宿主临时目录），页面据此提示确认、只有 POST 显式带布尔 `allow_unsafe_host: true` 才改走宿主；缺 adapter 时 `fallback.available=false`，仍然 412/退出 3。容器可用时 `allow_unsafe_host` 不会绕过容器。`scripts/check-deps.sh --tier t2a` 是同一判定的 CLI 入口，缺容器只给 `[warn]`；无参数只查基础依赖，保证游客 T0/T1 不被 Docker 卡死。模型代理尚未实现：容器没有真实 API key，`--network none` 下需要模型的 T2/T3 会失败并明确提示，不会改用宿主执行。**在代理落地前，T2/T3 只能验证容器/依赖链路，不能完成需要模型的评估。**
 
 host 模式的隔离边界（ADR-0018/0027）：副本只限定 cwd，不限定 agent 的写权限——实测带真实仓库路径的 prompt 会让 agent 走出副本，改了评估器仓库自己的 `README.md`（已回滚）。评测集里的 prompt 只能引用沙箱内路径；`evalset_check.py` 会把绝对路径 / `..` 逃逸报成 `out_of_sandbox`（clean=false）。
 
@@ -161,7 +163,7 @@ T1 评审走 `llm` 接口层（ADR-0034）：模型 `--model` > `llm.model` > `S
 
 ## 访问控制与审计
 
-访问矩阵：T0/T1 游客可跑；T2A/T2B/T3 必须带有效 token；评测集接口只对 token 开放；管理员不登录网页，只用 CLI 发/停 token。token 是**访问控制**，不是执行沙箱。T2/T3 默认由 `scripts/sandbox.py` 放进一次性 Docker 容器；`--isolation host` 只用于显式本地开发。模型代理落地前容器不能访问模型，缺依赖时 fail closed。
+访问矩阵：T0/T1 游客可跑；T2A/T2B/T3 必须带有效 token；评测集接口只对 token 开放；管理员不登录网页，只用 CLI 发/停 token。token 是**访问控制**，不是执行沙箱。T2/T3 默认由 `scripts/sandbox.py` 放进一次性 Docker 容器；没有容器的页面回退需要用户确认（`allow_unsafe_host: true`）后才在宿主临时目录执行，CLI 则必须显式 `--isolation host`。模型代理落地前容器不能访问模型；缺 adapter 时仍 fail closed。
 
 - 持久 token：`web/token_admin.py` 读写 `web/tokens.json`（gitignore），结构 `{"tokens":[{id,name,note,hash,created_at,active}]}`；只存 `sha256(token)`，明文只在 `issue` 时打印一次。格式 `se_<urlsafe 32 bytes>`。路径只来自模块常量与 CLI 全局参数 `--tokens-file` / `--audit-file`（默认 `web/tokens.json` / `web/audit.jsonl`），不新增环境变量。
 - CLI（无网页注册，全局参数写在子命令前）：`python web/token_admin.py [--tokens-file PATH] [--audit-file PATH] issue --name "张三" [--note "申请表 #12"]` / `list` / `revoke --id tok_ab12cd34`。停用后下一次校验立即失败；`list` 不显示 hash 与明文。
@@ -314,7 +316,8 @@ evalsets/<name>/results/<version>/
 | 硬依赖缺失（`bash scripts/check-deps.sh` 报 FAIL） | 终止：缺 python≥3.9/git 时会静默降级，先装齐再跑 |
 | 缺 pi/Claude CLI 或模型（自检仅 warn） | T1 直连模型仍可跑；T2/T3 缺 adapter 时失败，沙箱类指标标 `skipped`，报告注明原因 |
 | 未配置 `llm.base_url`/模型 | T1 `--backend auto` 回落 pi；显式 `--backend llm` 报错，该指标 skipped |
-| T2/T3 缺 Docker/daemon/镜像/adapter | fail closed：runner 退出码 3；页面 412；不建 run、不扣配额；**不回退宿主** |
+| T2/T3 缺 Docker/daemon/镜像 | 不静默回退：页面 412 并提示“可回退宿主（需确认）”，用户确认后带 `allow_unsafe_host: true` 重发，改用宿主临时目录；CLI 退出码 3，必须显式加 `--isolation host`。不建 run、不扣配额 |
+| T2/T3 缺 adapter | fail closed：runner 退出码 3；页面 412（`fallback.available=false`）；宿主执行同样需要 adapter CLI |
 | T2/T3 容器无模型代理 | 容器默认断网且无真实 key：需要模型的 case 失败并明确提示；不注入宿主 key、不改用宿主执行 |
 | T2B 未提供真实输入 | #11/#12 标 `skipped`，不自动生成“真实”输入 |
 | 沙箱复制失败 | 换临时目录 + 提示隔离降级，继续跑（host 模式）；T2/T3 容器路径失败则 fail closed |

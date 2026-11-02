@@ -5,7 +5,9 @@
 
 分层原则（设计见 docs/design/sandbox-and-rate-limit.md §3）：
 - T0/T1 不要求容器：缺 Docker 不能把游客卡死。
-- T2/T3 要求容器运行时 + 沙箱镜像 + 可用执行载体；缺失即 fail closed，不回退宿主。
+- T2/T3 要求容器运行时 + 沙箱镜像 + 可用执行载体；默认 docker 缺失即 fail closed。
+- 缺容器但 adapter 可用时给出 `fallback`（宿主临时目录）：Web 必须由用户显式确认后才走，
+  CLI 必须显式 `--isolation host`；两者都不是安全边界，也不会静默发生。
 - 模型代理未实现：容器默认断网，提示里明说，不静默用宿主执行或宿主 key 兜底。
 """
 from __future__ import annotations
@@ -22,6 +24,8 @@ CONTAINER_TIERS = ("t2a", "t2b", "t3")
 CONTAINER_ISOLATION = "docker"
 MODEL_PROXY_NOTE = ("模型代理尚未实现：容器默认 --network none，T2/T3 的模型调用需要宿主代理；"
                     "不会改用宿主执行或注入宿主 API key")
+HOST_ISOLATION_WARNING = ("宿主临时目录，不是安全边界：被测 skill 仍可能读到宿主文件、访问网络；"
+                          "只在确认可信任时使用")
 
 
 class CapabilityError(RuntimeError):
@@ -60,13 +64,17 @@ def check(tier: str, *, adapter: str | None = None, isolation: str | None = None
     if iso not in ("host", "docker"):
         raise ValueError(f"未知 isolation：{iso}；可用：host, docker")
     result = {"tier": tier, "isolation": iso, "ok": True, "missing": [], "reasons": [],
-              "fix": [], "warnings": [], "container": None, "adapter": adapter_info(adapter)}
+              "fix": [], "warnings": [], "container": None, "fallback": None,
+              "adapter": adapter_info(adapter)}
     if not requires_container(tier):
         # T0/T1 不需要容器，也不经过执行载体（T1 直连 LLM）：缺 Docker 不影响这一档。
         return result
     if iso == "host":
-        # 仅显式开发用法：runner 不会自动回退，Web 也不提供这个选项。
-        result["warnings"].append("显式 host 隔离：仅供本地开发，不是安全边界")
+        # 显式宿主执行：CLI 传 --isolation host，或 Web 用户确认回退后传 host。
+        # 跳过容器不等于跳过 adapter 检查——宿主执行同样要有可用的 agent CLI。
+        _gate_adapter(result, in_container=False)
+        result["warnings"].append(HOST_ISOLATION_WARNING)
+        result["ok"] = not result["missing"]
         return result
 
     status = sandbox_status or sandbox.DockerBackend().status()
@@ -83,13 +91,33 @@ def check(tier: str, *, adapter: str | None = None, isolation: str | None = None
         result["missing"].append("docker_image")
         result["reasons"].append(status.reason)
         result["fix"].append(f"docker build -t {status.image} sandbox/")
-    if not result["adapter"]["available"]:
-        result["missing"].append("adapter")
-        result["reasons"].append(result["adapter"]["reason"])
-        result["fix"].append("安装执行载体 CLI（容器内同样需要，见 sandbox/README.md）")
+    _gate_adapter(result, in_container=True)
     result["warnings"].append(MODEL_PROXY_NOTE)
     result["ok"] = not result["missing"]
+    result["fallback"] = _host_fallback(result)
     return result
+
+
+def _gate_adapter(result: dict, *, in_container: bool) -> None:
+    """adapter 是两种隔离共同的硬依赖：宿主执行同样需要 agent CLI。"""
+    if result["adapter"]["available"]:
+        return
+    result["missing"].append("adapter")
+    result["reasons"].append(result["adapter"]["reason"])
+    result["fix"].append("安装执行载体 CLI（容器内与宿主执行都需要，见 sandbox/README.md）"
+                         if in_container else "安装执行载体 CLI（宿主回退同样需要）")
+
+
+def _host_fallback(result: dict) -> dict:
+    """缺容器时是否允许用户确认后改走宿主临时目录；缺 adapter 则连回退也跑不起来。"""
+    if not result["adapter"]["available"]:
+        return {"isolation": "host", "available": False,
+                "reason": "缺执行载体 CLI：容器与宿主回退都无法运行"}
+    container_missing = [item for item in result["missing"] if item.startswith("docker")]
+    if not container_missing:
+        return {"isolation": "host", "available": False, "reason": "容器可用，不需要宿主回退"}
+    return {"isolation": "host", "available": True,
+            "reason": "没有可用容器运行时：确认后可在宿主临时目录执行，隔离较弱"}
 
 
 def require(tier: str, *, adapter: str | None = None, isolation: str | None = None,

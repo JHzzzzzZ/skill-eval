@@ -30,7 +30,7 @@ skill-evaluator/
 ├── scripts/            # CLI + runner + llm/harness 适配层 + sandbox/capabilities；check-deps.sh = 前置自检（#7）
 ├── sandbox/            # 容器镜像模板与边界说明（T2/T3，Docker `--network none`）
 ├── web/                # 本地前端（stdlib HTTP + SSE + 原生 JS）
-└── tests/              # 455 个测试，全部走 subprocess seam
+└── tests/              # 464 个测试，全部走 subprocess seam
 docs/adr/               # 41 条架构决策记录
 ```
 
@@ -40,7 +40,7 @@ docs/adr/               # 41 条架构决策记录
 
 1. 安装：把 `skill-evaluator/` 复制到 `~/.pi/agent/skills/`
 2. 前置自检：`bash scripts/check-deps.sh`（python ≥ 3.9 / git / pytest / agent adapter（pi / Claude Code）/ config.yaml 可解析）。
-   加 `--tier t2a`（或 `t2b` / `t3`）会追加检查 Docker daemon 与沙箱镜像；缺失时 T2/T3 fail closed（runner 退出码 3、页面 412），T0/T1 照常可用。
+   加 `--tier t2a`（或 `t2b` / `t3`）会追加检查 Docker daemon 与沙箱镜像；缺失时只给 warn：T2/T3 不静默回退——页面会先弹确认，确认后在宿主临时目录执行（隔离较弱），CLI 必须显式加 `--isolation host`。T0/T1 照常可用。
 3. 会话里说：*"评估这个 skill：`<路径>`"*；外部人员可在本地 UI 上传 `.zip`。上传按内容 hash 落到工作区，同内容复用；评测集路径自动填好。
    T2/T3 需要持久访问 token（T0/T1 游客可直接用）。审批流由外部表单维护，审批后用 `python web/token_admin.py issue --name "申请人"` 发 token；明文只显示一次，客户端保存。
 4. 或直接用确定性流水线 / 本地前端：
@@ -55,7 +55,7 @@ docs/adr/               # 41 条架构决策记录
 
 - `SKILL_EVAL_MODEL=<provider/id>`：固定 T2+ 沙箱运行用的模型（默认用 pi 当前模型）
 - 执行适配器：`pi`（默认）与 `claude-code`；新增 agent 只需加 adapter，不改 runner/report/score。页面只列出本机已安装的 adapter。
-- T2/T3 隔离：`--isolation docker`（默认）把每个 case 放进一次性容器（`--read-only --network none --cap-drop ALL`）；`--isolation host` 仅是显式本地开发逃生门，不会自动回退。容器用的模型代理尚未实现，容器内没有模型访问。
+- T2/T3 隔离：`--isolation docker`（默认）把每个 case 放进一次性容器（`--read-only --network none --cap-drop ALL`）。没有容器运行时时，页面先弹确认，确认后在宿主临时目录执行（`allow_unsafe_host`）；CLI 必须显式加 `--isolation host`。两条宿主路径**都不是安全边界**——被测 skill 仍可能读到宿主文件、访问网络。容器用的模型代理尚未实现，容器内没有模型访问。
 - T1 直连 LLM：页面字段 > `config.yaml`（`llm.base_url` / `llm.model` / `llm.api_key_env`）> 标准环境变量（`OPENAI_API_KEY` / `ANTHROPIC_API_KEY`、`OPENAI_BASE_URL` / `ANTHROPIC_BASE_URL`、`SKILL_EVAL_MODEL`）> 官方端点；页面 key 只用于本次运行，不落盘；本机 pi 可用 `llm.api_key_file` + `llm.api_key_provider` 从 `~/.pi/agent/auth.json` 读 key，不复制到 config。`--backend pi` 回退旧路径
 - `SKILL_EVAL_REVIEW_MODEL=<provider/id>`：评测集 AI 审核用的模型（必须与生成阶段不同源；不设则首次运行交互选择）
 
@@ -73,7 +73,7 @@ docs/adr/               # 41 条架构决策记录
 
 ```bash
 cd skill-evaluator
-python -m pytest tests        # 455 个测试全绿
+python -m pytest tests        # 464 个测试全绿
 ```
 
 设计决策及理由见 `docs/adr/`。英文版见 `README.md`。

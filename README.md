@@ -30,7 +30,7 @@ skill-evaluator/
 ├── scripts/            # CLI + runner + llm/harness adapters + sandbox/capabilities; check-deps.sh = preflight (#7)
 ├── sandbox/            # container image template + boundary notes (T2/T3, Docker `--network none`)
 ├── web/                # local UI (stdlib HTTP + SSE + vanilla JS)
-└── tests/              # 455 tests, subprocess-seam based
+└── tests/              # 464 tests, subprocess-seam based
 docs/adr/               # 41 architecture decisions
 ```
 
@@ -40,7 +40,7 @@ The evaluator is **self-contained**: all scripts and tests live inside the skill
 
 1. Install: copy `skill-evaluator/` into `~/.pi/agent/skills/`
 2. Preflight: `bash scripts/check-deps.sh` (python >= 3.9, git, pytest, an agent adapter (pi / Claude Code), config.yaml parses).
-   Add `--tier t2a` (or `t2b` / `t3`) to also require a working Docker daemon and the sandbox image; without them T2/T3 fail closed (runner exit 3, UI 412) while T0/T1 keep working.
+   Add `--tier t2a` (or `t2b` / `t3`) to also check the Docker daemon and the sandbox image. Without them the check only warns: T2/T3 then never fall back silently — the UI asks for confirmation before running in a host temp directory (weaker isolation), and the CLI requires an explicit `--isolation host`. T0/T1 keep working either way.
 3. Say: *"evaluate this skill: <path>"* — or open the local UI and upload a `.zip`. The upload is stored in a content-hash workspace; re-uploading the same content reuses it, and the eval-set path is filled automatically.
    T2/T3 require a persistent access token (T0/T1 are open as a guest). Issue one after your approval flow: `python web/token_admin.py issue --name "applicant"`; the plaintext token is shown once and stored client-side. The form itself is external.
 4. Or run the deterministic pipeline / local UI:
@@ -55,7 +55,7 @@ Optional:
 
 - `SKILL_EVAL_MODEL=<provider/id>`: pin the model used for T2+ sandbox runs (defaults to the pi default model).
 - Agent adapters: `pi` (default) and `claude-code`; add a new adapter without touching runner/report/score. The UI lists only adapters whose CLI is installed.
-- T2/T3 isolation: `--isolation docker` (default) runs each case in a one-shot container with `--read-only --network none --cap-drop ALL`; `--isolation host` exists only as an explicit local-development escape hatch (never an automatic fallback). The model proxy for containers is not implemented yet, so containers have no model access.
+- T2/T3 isolation: `--isolation docker` (default) runs each case in a one-shot container with `--read-only --network none --cap-drop ALL`. Without a container runtime the UI asks for confirmation and then runs in a host temp directory (`allow_unsafe_host`); the CLI must pass `--isolation host` explicitly. Both paths are **not a security boundary** — the skill can still read host files and reach the network. The model proxy for containers is not implemented yet, so containers have no model access.
 - T1 direct LLM: UI fields > `config.yaml` (`llm.base_url` / `llm.model` / `llm.api_key_env`) > standard env (`OPENAI_API_KEY` / `ANTHROPIC_API_KEY`, `OPENAI_BASE_URL` / `ANTHROPIC_BASE_URL`, `SKILL_EVAL_MODEL`) > official endpoint. The UI key is used for this run only and is never written to disk. For a local pi install, `llm.api_key_file` + `llm.api_key_provider` can read the key from `~/.pi/agent/auth.json` without copying it into config. `--backend pi` falls back to the old path.
 - `SKILL_EVAL_REVIEW_MODEL=<provider/id>`: model for AI review of eval sets (must differ from the generation model; if unset, picked interactively on first run).
 
@@ -73,7 +73,7 @@ Tier entry: `--tier <t0|t1|t2a|t2b|t3>` (default T2A); higher tiers reuse lower-
 
 ```bash
 cd skill-evaluator
-python -m pytest tests        # 455 tests, all green
+python -m pytest tests        # 464 tests, all green
 ```
 
 Design decisions and their reasoning live in `docs/adr/`. See `README_CN.md` for the Chinese version.

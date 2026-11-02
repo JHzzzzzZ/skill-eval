@@ -1,6 +1,6 @@
 # T2/T3 沙箱与限流方案
 
-状态：**沙箱/限流已实现并验收（2026-11-02）；模型代理仍是明确未实现项**。T0/T1 游客可用；T2/T3 需要 token。当前 `trace_run` 只是 cwd 副本，不是安全边界，不能把 token 当沙箱。
+状态：**沙箱/限流已实现并验收（2026-11-02）；模型代理仍是明确未实现项**。T0/T1 游客可用；T2/T3 需要 token。当前 `trace_run` 只是 cwd 副本，不是安全边界，不能把 token 当沙箱。无容器时页面需用户确认后才用宿主临时目录（CLI 显式 `--isolation host`），不静默回退。
 
 ## 1. T2/T3 沙箱
 
@@ -33,7 +33,7 @@ Windows 上用 Docker Desktop（WSL2 backend）或 Podman；T2/T3 每个 case �
 - T3：每个 case 一个容器，重复运行在同一容器内完成（幂等要测“同环境重复”，不能每次重置）；case 结束销毁。
 - 产物只从 `/out` 回收；trace 由 stdout 采集；不把宿主 results 目录挂进容器。
 - 资源上限沿用 `run.trigger_max_steps/tokens/timeout`，再加容器 CPU/内存/时间；超限杀容器并记 `skipped`。
-- 没有容器运行时：T2/T3 **fail closed**（返回明确错误），不回退宿主 pi；本地开发可显式 `--unsafe-host`，不得用于 token 用户/不可信 skill。
+- 没有容器运行时：T2/T3 **不静默回退**。页面点运行先弹确认（“在临时目录用宿主执行，隔离较弱；仍可能读到宿主文件/网络”），用户确认后才以 `--isolation host` 在 `results/sandbox` 副本里跑；CLI 只能显式 `--isolation host`。取消则不启动。宿主临时目录不是安全边界，不得对 token 用户/不可信 skill 声称已隔离。缺 adapter 时连宿主回退也不成立（仍然 412/退出 3）。
 
 ### 验收
 
@@ -91,18 +91,21 @@ Windows 上用 Docker Desktop（WSL2 backend）或 Podman；T2/T3 每个 case �
 
 实现：
 
-- `scripts/check-deps.sh --tier <t0|t1|t2a|t2b|t3>`：无参数只查基础依赖（保持 T0/T1 可用）；`--tier t2a` 起加查容器 CLI/daemon、镜像、代理。`--json` 给 Web 用；退出码 0=该档可跑，1=缺依赖。
+- `scripts/check-deps.sh --tier <t0|t1|t2a|t2b|t3>`：无参数只查基础依赖（保持 T0/T1 可用）；`--tier t2a` 起加查容器 CLI/daemon、镜像、代理（含 `--json` 给 Web 用）；缺容器仅 warn，缺基础依赖才 exit 1。
 - `GET /api/capabilities`：返回 `{python, git, pi, llm, container:{engine,version,image,proxy}, tiers:{t0:true,t1:true,t2a:false}}`；UI 在档位卡显示“T2/T3 需要容器运行时”。
 - `POST /api/run` 在创建 run 目录前做同档检查：
   - T0/T1 缺容器不影响；缺模型/T1 依赖则拒绝该档。
-  - T2/T3 缺容器/镜像/代理 → **412 Precondition Failed**，返回缺什么和修复命令；**不回退宿主 pi**；不消耗配额、不创建 run 目录；审计 `dep_missing`。
+  - T2/T3 缺容器/镜像 → 412，响应带 `fallback {isolation:host, available}`；页面据 `fallback.available` 弹 `confirm()`，确认后带布尔 `allow_unsafe_host: true` 重发，服务端改用 `isolation=host` 并在 `run.json` 记 `unsafe_host: true`、审计 `run_start` 标 `unsafe_host`。**不消耗配额、不创建 run 目录直到确认后**。
+  - 缺 adapter（容器内或宿主回退都跑不了）→ 412 且 `fallback.available=false`；缺基础依赖同样 412。
+  - 容器可用时 `allow_unsafe_host` 不生效，仍走 docker。
+  - CLI 侧同一判定：runner 缺容器退出码 3，需回退时显式 `--isolation host`；不传就一直 fail closed。
 - 运行中容器引擎掉线/镜像被杀：当前 case 标 `skipped`/`error`，该阶段不写完整缓存；T0/T1 已完成结果保留。自动停止时按已完成阶段出局部报告，不把半截 T2/T3 当完整结论。
-- 当前机器实测：Docker/Podman CLI 都没有，WSL2 Ubuntu 可用。按这个门禁，T2/T3 会明确阻塞，T0/T1 继续；需要先装 Docker Desktop 或 WSL 内 Docker Engine，构建镜像后再开放 T2/T3。
+- 当前机器实测：Docker/Podman CLI 都没有，WSL2 Ubuntu 可用。按这个门禁，T2/T3 默认阻塞（412/退出 3），确认后才在宿主临时目录跑；T0/T1 继续。要获得真隔离需先装 Docker Desktop 或 WSL 内 Docker Engine，构建镜像后再开放。
 - 安装/修复命令由 preflight 输出，不在请求里自动 `docker build`/`docker pull`（可能很慢、需要网络/权限）。管理员先构建并 pin digest。
 
 ## 4. 风险与取舍
 
 - 容器每 case 启动有 1–3 秒开销；T3 会放大，但比宿主泄露便宜。
 - 默认断网会让需要联网的 skill 在 T2/T3 失败；这是安全默认，联网需求走代理 allowlist，不直接放开。
-- Windows 没有 Docker/Podman 时，使用专用 VM/Windows Sandbox；不要回退“cwd + guard”并声称安全。
+- Windows 没有 Docker/Podman 时，优先专用 VM/Windows Sandbox；页面的宿主临时目录回退需用户确认，**不得声称已隔离**。
 - T1 不走容器（无 tools、固定 prompt），但仍消耗模型额度，所以限流必须覆盖游客 T1。

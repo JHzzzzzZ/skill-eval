@@ -752,13 +752,18 @@ function refreshRunHint(warnings){
   const cap = tierCapability(tierValue());
   $("runHint").textContent = cap.ok
     ? "会先做基础检查，再按所选深度继续；停止时保留已完成阶段。"
-    : ("当前深度不可运行：" + capabilityReason(cap) + "。基础检查与文档语义评审可直接运行。");
+    : (fallbackInfo(cap).available
+      ? "当前没有可用容器：点运行时会先请你确认，确认后在临时目录用宿主执行（隔离较弱）。"
+      : ("当前深度不可运行：" + capabilityReason(cap) + "。基础检查与文档语义评审可直接运行。"));
 }
 function tierCapability(tier){
   if(CONTAINER_TIERS.indexOf(tier) < 0) return {ok:true};
   // 能力接口读失败时不误伤：服务端仍会按真实能力返回 412
   if(!capabilityTiers) return {ok:true};
   return capabilityTiers[tier] || {ok:true};
+}
+function fallbackInfo(cap){
+  return (cap && cap.fallback) || {};
 }
 function capabilityReason(cap){
   const reasons = (cap && cap.reasons) || [];
@@ -777,10 +782,19 @@ function renderCapabilities(){
   });
   const note = $("capabilityNote");
   if(blocked.length){
-    const reasons = [...new Set(blocked.map(capabilityReason))];
+    const fallbackable = blocked.filter(cap=>fallbackInfo(cap).available);
+    const hardBlocked = blocked.filter(cap=>!fallbackInfo(cap).available);
+    const parts = [];
+    if(fallbackable.length){
+      parts.push("当前没有可用容器：触发评测与完整任务运行可回退宿主（需确认），"
+        + "确认后在临时目录用宿主执行，隔离较弱");
+    }
+    if(hardBlocked.length){
+      const reasons = [...new Set(hardBlocked.map(capabilityReason))];
+      parts.push("完全不可运行：" + reasons.join("；"));
+    }
     note.hidden = false;
-    note.textContent = "当前环境缺少容器运行时，触发评测与完整任务运行暂不可用："
-      + reasons.join("；") + "。基础检查与文档语义评审不受影响。";
+    note.textContent = parts.join("。") + "。基础检查与文档语义评审不受影响。";
   }else{
     note.hidden = true; note.textContent = "";
   }
@@ -1260,12 +1274,24 @@ $("run").onclick = async () => {
     $("runHint").textContent = "T2/T3 需要访问 token；基础检查与文档评审免 token 可用。";
     return;
   }
+  let allowUnsafeHost = false;
   const capability = tierCapability(tier);
   if(!capability.ok){
-    toast("当前环境无法运行该评估深度：" + capabilityReason(capability), "err");
-    $("runHint").textContent = "当前深度不可运行：" + capabilityReason(capability)
-      + "。基础检查与文档语义评审可直接运行。";
-    return;
+    if(!fallbackInfo(capability).available){
+      toast("当前环境无法运行该评估深度：" + capabilityReason(capability), "err");
+      $("runHint").textContent = "当前深度不可运行：" + capabilityReason(capability)
+        + "。基础检查与文档语义评审可直接运行。";
+      return;
+    }
+    // 缺容器：必须由用户明确确认后才用宿主临时目录，不静默回退。
+    if(!confirm("当前环境没有可用的容器，无法提供容器隔离。\n\n"
+        + "继续会在临时目录用宿主直接执行：\n"
+        + "· 隔离较弱，被测 skill 仍可能读到宿主文件、访问网络；\n"
+        + "· 仅建议对可信任的 skill 这样做。\n\n仍要继续吗？")){
+      $("runHint").textContent = "已取消：没有容器时，需确认后才用宿主临时目录执行。";
+      return;
+    }
+    allowUnsafeHost = true;
   }
   let realCases = [];
   try{ realCases = realPayload(); }catch(e){ toast(e.message, "err"); return; }
@@ -1288,6 +1314,7 @@ $("run").onclick = async () => {
       body: JSON.stringify({skill, tier:tierValue(), harness:$("harness").value,
         model:llm.model, evalset:evalsetPath(), backend:$("backend").value,
         real_cases: realCases, llm, workspace: currentWorkspace,
+        allow_unsafe_host: allowUnsafeHost,
         rerun_t0: $("rerunT0").checked, rerun_t1: $("rerunT1").checked,
         rerun_t2a: $("rerunTrigger").checked, rerun_t2b: $("rerunReal").checked,
         rerun_t3: $("rerunFull").checked})});

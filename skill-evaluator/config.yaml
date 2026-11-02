@@ -89,7 +89,8 @@ llm:
   max_tokens: 8192
 
 sandbox:
-  # T2/T3 容器后端（capabilities/sandbox.py）。无 Docker 时 fail closed，不回退宿主。
+  # T2/T3 容器后端（capabilities/sandbox.py）。无 Docker 时不静默回退：页面需用户确认，
+  # CLI 必须显式 --isolation host（宿主临时目录，不是安全边界）。
   engine: docker
   # 沙箱镜像；生产请 pin digest。走容器时 T2/T3 必须已构建。
   image: skill-evaluator-sandbox:local

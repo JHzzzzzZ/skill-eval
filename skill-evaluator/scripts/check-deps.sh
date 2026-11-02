@@ -2,8 +2,10 @@
 # 前置自检（#7/#16）：确认评估器能在这台机器上跑起来。
 # 用法：bash scripts/check-deps.sh [--tier t0|t1|t2a|t2b|t3]
 #   无参数（或 --tier t0/t1）只查基础依赖：T0/T1 不要求容器运行时。
-#   --tier t2a|t2b|t3 起加查 Docker CLI/daemon/沙箱镜像；缺失 → exit 1。
-# 退出码：0 = 该档可跑；1 = 缺依赖（不要继续跑，否则指标会静默降级）。
+#   --tier t2a|t2b|t3 起加查 Docker CLI/daemon/沙箱镜像；缺失仅 warn（可确认后宿主回退）。
+# 退出码：0 = 该档可跑（容器或回退路径至少一条可用）；1 = 缺基础依赖（不要继续跑）。
+# 无容器时的两条回退路径：CLI 显式 `--isolation host`；页面点运行后需用户确认。
+# 宿主回退在临时目录里执行，不是安全边界。
 set -u
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -111,9 +113,9 @@ else
   warn "未设 SKILL_EVAL_MODEL：用 pi 默认模型（ADR-0009）"
 fi
 
-# --- T2/T3：容器运行时 + 沙箱镜像（fail closed；缺失即 exit 1）---
+# --- T2/T3：容器运行时 + 沙箱镜像（偏好容器；缺失仅 warn，可确认后宿主回退）---
 if [ "$NEEDS_CONTAINER" -eq 1 ]; then
-  echo "容器运行时（$TIER 必需；T0/T1 不受影响）："
+  echo "容器运行时（$TIER 优先；T0/T1 不受影响）："
   if [ -z "$PY" ]; then
     bad "没有可用的 python，无法探测容器能力"
   else
@@ -130,10 +132,11 @@ PYCODE
     if [ $? -eq 0 ]; then
       ok "$CONTAINER_REPORT"
     else
-      bad "$CONTAINER_REPORT"
+      warn "$CONTAINER_REPORT（无容器：CLI 用 --isolation host，页面点运行需确认；宿主临时目录，不是安全边界）"
     fi
   fi
   warn "模型代理未实现：容器默认 --network none，T2/T3 的模型调用需要宿主代理（本轮不开放真实 key）"
+  echo "  无容器时：CLI 用 python scripts/runner.py --tier $TIER --isolation host；页面点运行时需确认后才会在宿主临时目录执行（隔离较弱）。"
 fi
 
 echo ""

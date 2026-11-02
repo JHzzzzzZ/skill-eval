@@ -14,7 +14,7 @@ Generated: 2026-09-22T13:43:08.578Z
 | `llm.py` | 184 | 无 CLI；`chat/ask/configured/extract_json` | T1 直连 LLM（ADR-0034） |
 | `harness.py` | 75 | 无 CLI；`run_case/available` | 执行载体适配（`run_case` 的 `isolation` 透传给 trace_run） |
 | `sandbox.py` | 186 | 无 CLI；`DockerBackend.status/wrap/rewrite_argv` | T2/T3 容器命令、探测、宿主路径 → `/work` |
-| `capabilities.py` | 114 | 无 CLI；`check/require/snapshot` | tier+adapter+isolation 能力矩阵（runner 退出码 3 / Web 412） |
+| `capabilities.py` | 148 | 无 CLI；`check/require/snapshot` | tier+adapter+isolation 能力矩阵 + `fallback`（runner 退出码 3 / Web 412） |
 | `judge_run.py` | 172 | `--metric --skill --out [--backend]` | T1 评审执行器 |
 | `evalset_gen.py` | 115 | `--skill --out [--count]` | 生成 T2A 评测集草稿 |
 | `runner.py` | 870 | `--skill --tier [--evalset] [--real-input] [--model] [--harness] [--isolation host\|docker]` | 确定性编排 + NDJSON 进度（先发 plan） + 阶段级检查点 |
@@ -57,8 +57,8 @@ Generated: 2026-09-22T13:43:08.578Z
 - **stdout 契约字段恒输出**：输入缺失或非法 → 输出 `"skipped"`，**不崩溃、不打 0 分**（`score.py`、`report.py` 均如此）。
 - **LLM 调用两条路径**：T1 走 `llm.py`（OpenAI-compatible/Anthropic，无 tools）；T2+ 走 `harness.py` → adapter 注册表（pi / claude-code）。新增 agent 只加 `adapter_<name>.py` 与注册行，不改 runner/report/score。
 - **离线 seam 三件套**：`--build-only`（只打印将执行的命令）、`--events <jsonl>`（离线解析已采集事件流）、`--out <file>`。测试全靠它们，改这三个 flag 会同时打断多个测试。
-- **容器隔离只走 `sandbox.py`**：`trace_run --isolation docker` 把 adapter 命令包成 `docker run`，宿主 workdir 重写为 `/work`（只改 argv，不改 prompt）。`--build-only --isolation docker` 不需 Docker，可直接看容器命令。无 Docker 时 trace_run 返回失败 trace，runner/Web 在启动前 fail closed。
-- **能力门禁只走 `capabilities.py`**：runner（退出码 3）、Web（412）、`check-deps.sh --tier` 共用同一判定；T0/T1 不要求容器，T2+ 缺容器/镜像/载体一律 fail closed。
+- **容器隔离只走 `sandbox.py`**：`trace_run --isolation docker` 把 adapter 命令包成 `docker run`，宿主 workdir 重写为 `/work`（只改 argv，不改 prompt）。`--build-only --isolation docker` 不需 Docker，可直接看容器命令。无 Docker 时 trace_run 返回失败 trace，runner/Web 在启动前 fail closed（除非显式宿主路径）。
+- **能力门禁只走 `capabilities.py`**：runner（退出码 3）、Web（412）、`check-deps.sh --tier` 共用同一判定；T0/T1 不要求容器。T2+ 缺容器/镜像默认 fail closed；缺容器但 adapter 可用时返回 `fallback.available=true`，Web 需用户确认后带 `allow_unsafe_host: true` 才改 `--isolation host`，CLI 只能显式传 `--isolation host`。缺 adapter 时宿主回退同样不成立。
 - 阈值常量不再放文件头部：统一在 `config.yaml`（ADR-0035），脚本内用 `_config.get_*` 惰性读取（**不在 import 时读文件**，保持模块 import 无副作用）。
 
 ## ANTI-PATTERNS
@@ -68,7 +68,7 @@ Generated: 2026-09-22T13:43:08.578Z
 - 不改 stdout JSON 的字段名、不新增必填字段——`report.py` 按名读中间产物，改名即断链。
 - 不在 `main()` 之外做 IO：模块顶层不读写文件，保证 import 无副作用（`tests/test_trace_run.py:179` 会直接 import 模块）。
 - 不硬编码解释器或机器路径，一律 `sys.executable`（ADR-0009）。
-- 不把宿主 `$HOME` / `~/.pi` / 凭据 / docker.sock 挂进容器，也不在无容器时回退宿主执行：容器参数只在 `sandbox.py::wrap()` 里生成。
+- 不把宿主 `$HOME` / `~/.pi` / 凭据 / docker.sock 挂进容器，也不在无容器时**静默**回退宿主执行：回退必须由页面用户确认（`allow_unsafe_host`）或 CLI 显式 `--isolation host`；容器参数只在 `sandbox.py::wrap()` 里生成。
 - 不给容器注入真实 API key，也不把宿主环境变量整包转发；模型访问只能走尚未实现的宿主代理。
 - `DANGEROUS_PATTERNS` 里的 `su`+`do` 拼接（`static_check.py:85`）是合并前另一条线的写法，与 ADR-0012 的自排除**并存**；两条都保留，别只删其一（删自排除会让自检失败）。
 - 不把 `SECRETS_PATTERNS` 的占位符过滤（`PLACEHOLDER_RE`，`static_check.py:105`）删掉：文档里合法写 `api_key="your-key-here"` 会被误报为硬编码凭据（ADR-0013）。PII 组（`static_check.py:156`）同样在 `_pii_accept` 里先过占位符与示例白名单再进 Luhn/证件校验位/公网判断。

@@ -54,8 +54,12 @@ runner 按档位增量执行（ADR-0033）：
 前端 `web/app.py` 用 stdlib HTTP + SSE 调 runner，只绑 `127.0.0.1`。
 
 T2/T3 默认 `--isolation docker`：runner 启动前走 `capabilities.require()`（缺容器 → 退出码 3，不建 results），
-Web 在限流/建目录前返回 412（写 `dep_missing` 审计，不扣配额）。没有容器运行时时绝不回退宿主；
-`--isolation host` 只是显式开发逃生门。容器内没有模型代理（未实现），`/api/capabilities` 会显式给出提示。
+Web 在限流/建目录前检查：缺容器时先返回 412 并在 `fallback` 里标明可回退宿主（`available=true`），
+页面弹 `confirm()` 提醒“临时目录用宿主执行、隔离较弱”，用户确认后带布尔 `allow_unsafe_host: true` 重发，
+服务端改 `--isolation host` 并把 `unsafe_host` 写进 `run.json` 与 `run_start` 审计。缺 adapter 时
+`fallback.available=false`，仍然 412/退出 3（宿主执行同样需要 CLI）。容器可用时 `allow_unsafe_host`
+不会绕过容器；CLI 只能显式 `--isolation host`。宿主临时目录不是安全边界。
+容器内没有模型代理（未实现），`/api/capabilities` 会显式给出提示。
 
 ## JUDGES
 

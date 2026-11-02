@@ -1203,3 +1203,110 @@ def test_ui_loads_capabilities_and_blocks_container_tiers():
     assert "缺少容器运行时" in html
     assert "当前深度不可运行" in html
     assert "ADR" not in html and "T2B" not in html
+
+
+# --- 无容器时的宿主回退：必须由用户确认（allow_unsafe_host === true）---
+
+def fallback_capability(tier, *, adapter=None, isolation=None, sandbox_status=None):
+    """缺容器但 adapter 可用的能力桩：docker 检查失败，fallback 指向宿主。"""
+    if tier not in web.capabilities.CONTAINER_TIERS:
+        return allow_capability(tier, adapter=adapter, isolation=isolation)
+    adapter_info = {"name": adapter or "pi", "available": True, "reason": ""}
+    fallback = {"isolation": "host", "available": True,
+                "reason": "没有可用容器运行时：确认后可在宿主临时目录执行"}
+    if (isolation or "docker") == "host":
+        return {"tier": tier, "isolation": "host", "ok": True, "missing": [],
+                "reasons": [], "fix": [], "warnings": ["宿主临时目录，不是安全边界"],
+                "container": None, "adapter": adapter_info, "fallback": fallback}
+    return {"tier": tier, "isolation": "docker", "ok": False, "missing": ["docker"],
+            "reasons": ["缺少 docker CLI：需要容器运行时"],
+            "fix": ["安装 Docker Desktop"], "warnings": [], "container": None,
+            "adapter": adapter_info, "fallback": fallback}
+
+
+def test_unsafe_host_requires_boolean_true_flag(tmp_path, monkeypatch):
+    skill = make_skill(tmp_path)
+    with web_server(tmp_path, monkeypatch) as server:
+        monkeypatch.setattr(web.capabilities, "check", fallback_capability)
+        token = web.token_admin.issue("无容器用户")
+        headers = {"X-Skill-Eval-Token": token["token"]}
+        before = {p.name for p in (tmp_path / "runs").iterdir()}
+        bodies = [
+            {"skill": str(skill), "tier": "t2a"},                                  # 未确认
+            {"skill": str(skill), "tier": "t2a", "allow_unsafe_host": "true"},     # 字符串不算
+            {"skill": str(skill), "tier": "t2a", "allow_unsafe_host": 1},          # 非布尔
+        ]
+        for body in bodies:
+            status, data, _ = call(server, "POST", "/api/run", body, headers=headers)
+            assert status == 412, data
+            assert data["isolation"] == "docker"
+            assert data["fallback"]["available"] is True
+            assert "容器运行时" in data["error"]
+        assert {p.name for p in (tmp_path / "runs").iterdir()} == before   # 不建 run 目录
+        assert not (tmp_path / "usage.sqlite3").exists()                   # 不扣配额
+
+
+def test_confirmed_unsafe_host_runs_with_isolation_host(tmp_path, monkeypatch):
+    skill = make_skill(tmp_path)
+    captured = {}
+
+    class _CaptureProc(_FakeProc):
+        def __init__(self, cmd=None, **kwargs):
+            super().__init__(cmd, **kwargs)
+            captured.setdefault("cmds", []).append(list(cmd or []))
+
+    with web_server(tmp_path, monkeypatch) as server:
+        monkeypatch.setattr(web.capabilities, "check", fallback_capability)
+        monkeypatch.setattr(web.subprocess, "Popen", _CaptureProc)
+        token = web.token_admin.issue("无容器用户")
+        status, data, _ = call(server, "POST", "/api/run",
+                               {"skill": str(skill), "tier": "t2a",
+                                "allow_unsafe_host": True},
+                               headers={"X-Skill-Eval-Token": token["token"]})
+        assert status == 200, data
+        assert data["isolation"] == "host" and data["unsafe_host"] is True
+        cmd = captured["cmds"][-1]
+        assert "--isolation" in cmd and cmd[cmd.index("--isolation") + 1] == "host"
+        run_json = json.loads((tmp_path / "runs" / data["id"] / "run.json")
+                              .read_text(encoding="utf-8"))
+        assert run_json["isolation"] == "host" and run_json["unsafe_host"] is True
+        events = [json.loads(line) for line in
+                  (tmp_path / "audit.jsonl").read_text(encoding="utf-8").splitlines()]
+        started = [item for item in events if item["action"] == "run_start"]
+        assert started and started[-1]["detail"] == "unsafe_host"
+
+
+def test_allow_unsafe_host_does_not_bypass_available_container(tmp_path, monkeypatch):
+    skill = make_skill(tmp_path)
+    captured = {}
+
+    class _CaptureProc(_FakeProc):
+        def __init__(self, cmd=None, **kwargs):
+            super().__init__(cmd, **kwargs)
+            captured.setdefault("cmds", []).append(list(cmd or []))
+
+    with web_server(tmp_path, monkeypatch) as server:
+        monkeypatch.setattr(web.subprocess, "Popen", _CaptureProc)
+        token = web.token_admin.issue("容器用户")
+        status, data, _ = call(server, "POST", "/api/run",
+                               {"skill": str(skill), "tier": "t3",
+                                "allow_unsafe_host": True},
+                               headers={"X-Skill-Eval-Token": token["token"]})
+        assert status == 200, data
+        assert data["isolation"] == "docker" and data["unsafe_host"] is False
+        cmd = captured["cmds"][-1]
+        assert cmd[cmd.index("--isolation") + 1] == "docker"
+        run_json = json.loads((tmp_path / "runs" / data["id"] / "run.json")
+                              .read_text(encoding="utf-8"))
+        assert run_json["isolation"] == "docker" and run_json["unsafe_host"] is False
+
+
+def test_ui_confirms_before_unsafe_host_fallback():
+    html = (WEB_APP.parent / "index.html").read_text(encoding="utf-8")
+    assert "allow_unsafe_host: allowUnsafeHost" in html
+    assert "fallbackInfo" in html
+    assert "可回退宿主" in html and "完全不可运行" in html
+    assert "没有可用的容器" in html
+    assert "仍可能读到宿主文件" in html and "confirm(" in html
+    # 未确认时不自动回退：只有 confirm 通过后才置 allowUnsafeHost
+    assert html.index("confirm(\"当前环境没有可用的容器") < html.index("allowUnsafeHost = true")

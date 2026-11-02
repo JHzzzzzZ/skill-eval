@@ -1373,11 +1373,21 @@ class Handler(BaseHTTPRequestHandler):
                    detail="复用来源不属于当前身份")
             return _send_json(self, 403, {"error": "无权复用该运行的产物"})
         # T2/T3 能力门禁在限流与建目录之前：缺容器/镜像/载体 → 412，
-        # 不建 run 目录、不扣配额、不回退宿主执行。
+        # 不建 run 目录、不扣配额。容器可用时保持容器；缺容器但 adapter 可用时，
+        # 只有请求显式带布尔 true 的 allow_unsafe_host 才改走宿主临时目录。
+        allow_unsafe_host = data.get("allow_unsafe_host") is True
         isolation = capabilities.default_isolation(tier)
+        unsafe_host = False
         if capabilities.requires_container(tier):
-            capability = capabilities.check(tier, adapter=str(data.get("harness") or "") or None,
-                                            isolation=isolation)
+            adapter_name = str(data.get("harness") or "") or None
+            capability = capabilities.check(tier, adapter=adapter_name, isolation=isolation)
+            if not capability["ok"]:
+                fallback = capability.get("fallback") or {}
+                if allow_unsafe_host and fallback.get("available"):
+                    isolation = "host"
+                    capability = capabilities.check(tier, adapter=adapter_name,
+                                                    isolation=isolation)
+                    unsafe_host = capability["ok"]
             if not capability["ok"]:
                 _audit(self, "dep_missing", 412, tier=tier,
                        detail=",".join(capability["missing"]) or "capability")
@@ -1387,7 +1397,8 @@ class Handler(BaseHTTPRequestHandler):
                 return _send_json(self, 412, {"ok": False, "tier": tier,
                                               "isolation": isolation, "error": error,
                                               "missing": capability["missing"],
-                                              "fix": capability["fix"]})
+                                              "fix": capability["fix"],
+                                              "fallback": capability.get("fallback")})
         # 限流在创建 run 目录之前：被拒的请求不建目录、不写 run.json、不消耗额度。
         ip = _client_ip(self)
         counts = _active_counts(actor)
@@ -1495,13 +1506,15 @@ class Handler(BaseHTTPRequestHandler):
             "evalset": str(data.get("evalset") or ""), "skill_sha256": skill_sha,
             "owner_kind": actor["kind"], "owner_id": actor["id"],
             "owner_name": actor["name"], "protected": tier in PROTECTED_TIERS,
-            "isolation": isolation,
+            "isolation": isolation, "unsafe_host": unsafe_host,
             "created_at": time.strftime("%Y-%m-%dT%H:%M:%S")}
         (rdir / "run.json").write_text(json.dumps(run_meta, ensure_ascii=False, indent=2),
                                        encoding="utf-8")
         ratelimit.record(actor, tier, ip=ip)
-        _audit(self, "run_start", 200, run_id=rid, tier=tier, skill_sha256=skill_sha)
+        _audit(self, "run_start", 200, run_id=rid, tier=tier, skill_sha256=skill_sha,
+               detail="unsafe_host" if unsafe_host else "")
         return _send_json(self, 200, {"id": rid, "results": str(results),
+                                      "isolation": isolation, "unsafe_host": unsafe_host,
                                       "skill_name": _skill_name(Path(skill))})
 
     def _events(self, rid: str):

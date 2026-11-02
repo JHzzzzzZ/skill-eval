@@ -1,7 +1,8 @@
 # T2/T3 沙箱镜像与容器边界
 
-`scripts/sandbox.py` 用这个镜像给 T2/T3 的每个 case/arm 起一次性容器；**没有可用容器运行时
-时 T2/T3 fail closed**（runner 退出码 3、Web 412），不退回宿主执行。T0/T1 不经过容器。
+`scripts/sandbox.py` 用这个镜像给 T2/T3 的每个 case/arm 起一次性容器；**没有可用容器运行时**
+时不会静默回退：页面点运行会先弹确认，确认后以 `--isolation host` 在宿主临时目录执行；
+CLI 则必须显式传 `--isolation host`。宿主临时目录只是 cwd 副本，不是安全边界。T0/T1 不经过容器。
 
 ## 构建
 
@@ -19,7 +20,7 @@ docker build -t skill-evaluator-sandbox:local sandbox/
 
 ```bash
 bash scripts/check-deps.sh                 # 基础依赖（T0/T1）
-bash scripts/check-deps.sh --tier t2a      # 追加 Docker daemon + 镜像；缺一即退出 1
+bash scripts/check-deps.sh --tier t2a      # 追加 Docker daemon + 镜像；缺失仅 [warn]（可确认后宿主回退）
 docker image inspect skill-evaluator-sandbox:local
 ```
 
@@ -56,11 +57,13 @@ docker image inspect skill-evaluator-sandbox:local
 
 ```bash
 python scripts/runner.py --skill <skill目录> --tier t2a          # 默认 --isolation docker
-python scripts/runner.py --skill <skill目录> --tier t2a --isolation host   # 仅本地开发
+python scripts/runner.py --skill <skill目录> --tier t2a --isolation host   # 显式宿主执行
 python scripts/trace_run.py <沙箱目录> "<prompt>" --skill <沙箱目录> --isolation docker
 ```
 
-`--isolation host` 是显式的开发逃生门：不是安全边界，不会自动回退，Web 也不提供该选项。
+没有容器时：CLI 必须显式加 `--isolation host`（runner 不会自动回退）；页面点运行时弹出确认，
+用户确认后才发出 `allow_unsafe_host: true`。宿主临时目录（`results/sandbox`）只是 cwd 副本，
+**不是安全边界**：被测 skill 仍可能读到宿主文件、访问网络，只在可信任时使用。
 
 注意：能力检查（`capabilities.py`）探测的是**宿主**的执行载体 CLI；容器内也需要同名 CLI，
 因此 T2/T3 要求两边都有可探测的 `pi`（或所选 adapter）。
