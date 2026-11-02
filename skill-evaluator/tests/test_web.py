@@ -1276,6 +1276,39 @@ def test_ui_evidence_provenance_permissions_history_and_mobile():
     assert 'id="modeBadge"' in html and "mode-single" in html
 
 
+def test_rerun_metric_endpoint_checks_owner_and_calls_helper(tmp_path, monkeypatch):
+    with web_server(tmp_path, monkeypatch) as server:
+        token = web.token_admin.issue("重跑用户")
+        headers = {"X-Skill-Eval-Token": token["token"]}
+        rdir = write_owned_run(tmp_path / "runs", "rerunrun", owner_kind="token",
+                               owner_id=token["id"], protected=False, tier="t1")
+        (rdir / "results" / "judges").mkdir()
+        for metric in ("brevity", "redundancy", "fallback", "precheck", "contract", "deps", "pii"):
+            (rdir / "results" / "judges" / f"{metric}.json").write_text(
+                json.dumps({"items": [], "score": 1.0}), encoding="utf-8")
+        calls = []
+        monkeypatch.setattr(web.rerun_metrics, "rerun_metric",
+                            lambda results, metric, **kw: calls.append((str(results), metric, kw))
+                            or {"ok": True, "metric": metric, "rubric": "brevity"})
+        status, data, _ = call(server, "POST", "/api/rerun-metrics",
+                               {"id": "rerunrun", "metric": "#2", "llm": {"model": "m"}},
+                               headers=headers)
+        assert status == 200 and data["ok"] is True
+        assert calls and calls[0][1] == "#2"
+        events = [json.loads(line) for line in (tmp_path / "audit.jsonl").read_text(encoding="utf-8").splitlines()]
+        assert any(e["action"] == "rerun_metric" and e["run_id"] == "rerunrun" for e in events)
+        other = web.token_admin.issue("别人")
+        assert call(server, "POST", "/api/rerun-metrics",
+                    {"id": "rerunrun", "metric": "#2"},
+                    headers={"X-Skill-Eval-Token": other["token"]})[0] == 403
+
+
+def test_ui_wires_single_metric_rerun():
+    html = (WEB_APP.parent / "index.html").read_text(encoding="utf-8")
+    assert "RERUN_METRICS" in html and 'class="btn btn-ghost btn-sm rerun-btn"' in html
+    assert "/api/rerun-metrics" in html and "只重跑 ${metric}" in html
+
+
 def test_ui_loads_capabilities_and_blocks_container_tiers():
     html = (WEB_APP.parent / "index.html").read_text(encoding="utf-8")
     assert 'fetch("/api/capabilities?adapter="' in html

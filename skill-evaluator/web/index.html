@@ -2379,6 +2379,8 @@ const ADVICE_EFFORT_RANK = {quick: 0, medium: 1, large: 2};
 const ADVICE_EFFORT_LABELS = {quick: "快速", medium: "中等", large: "较大"};
 const ADVICE_SEVERITY_LABELS = {fail: "失败", warn: "警告", info: "未测"};
 const ADVICE_SEVERITY_CLASS = {fail: "fail", warn: "warn", info: "skipped"};
+const RERUN_METRICS = {"#2":"brevity", "#4":"pii", "#5":"redundancy", "#6":"fallback",
+  "#7":"precheck", "#8":"contract", "#9":"contract", "#12":"deps"};
 function metricId(metric){ return "m-" + String(metric || "").replace(/^#/, ""); }
 function advicePriority(item){
   const value = Number(item && item.priority);
@@ -2499,6 +2501,25 @@ document.querySelectorAll("#metricFilters .filter-btn").forEach(btn=>{
   btn.onclick = () => applyMetricFilter(btn.dataset.filter);
 });
 
+async function rerunMetric(metric){
+  if(!runId || !RERUN_METRICS[metric]){ toast("当前报告不支持单指标重跑", "err"); return; }
+  const rubric = RERUN_METRICS[metric];
+  const shared = metric === "#8" || metric === "#9" ? "（#8/#9 共用 contract rubric，会一起更新）" : "";
+  if(!confirm(`只重跑 ${metric} 的文档评审？
+预计 1 次模型调用；其他指标与文件保持不变。${shared}`)) return;
+  const llm = {protocol:$("provider").value, base_url:$("base_url").value.trim(),
+               model:$("model").value.trim(), api_key:$("api_key").value};
+  toast("正在重跑 " + metric + "…", "info");
+  try{
+    const r = await fetch("/api/rerun-metrics", {method:"POST",
+      headers:authHeaders({"Content-Type":"application/json"}),
+      body: JSON.stringify({id:runId, metric, llm})});
+    const d = await r.json();
+    if(!r.ok) throw new Error(d.error || "重跑失败");
+    await showReport(runId);
+    toast(`${metric} 已重跑（${rubric}），报告已刷新`, "ok");
+  }catch(e){ toast("重跑失败：" + e.message, "err"); }
+}
 async function showReport(id){
   try{
     const r = await fetch("/api/report?id="+id, {headers: authHeaders()});
@@ -2570,13 +2591,17 @@ async function showReport(id){
             <div class="verdict-menu" role="listbox">${opts}</div>
           </div></td>
           <td class="metric-note" data-label="摘要">${esc(publicText(v.note||""))}</td>
-          <td data-label="证据"><button type="button" class="btn btn-ghost btn-sm evidence-btn" data-metric="${k}">证据</button></td></tr>`;
+          <td data-label="证据"><button type="button" class="btn btn-ghost btn-sm evidence-btn" data-metric="${k}">证据</button>${
+            RERUN_METRICS[k] ? `<button type="button" class="btn btn-ghost btn-sm rerun-btn" data-metric="${k}" title="只重跑这条文档评审，预计 1 次模型调用">重跑</button>` : ""}</td></tr>`;
       }
     }
     rows += '<tr class="metric-empty" id="metricEmpty" hidden><td colspan="4">没有符合筛选的指标</td></tr>';
     $("metrics").innerHTML = rows + "</tbody>";
     document.querySelectorAll(".evidence-btn").forEach(btn=>{
       btn.addEventListener("click", (e)=>{ e.stopPropagation(); openEvidence(btn.dataset.metric); });
+    });
+    document.querySelectorAll(".rerun-btn").forEach(btn=>{
+      btn.addEventListener("click", (e)=>{ e.stopPropagation(); rerunMetric(btn.dataset.metric); });
     });
     document.querySelectorAll(".verdict-picker").forEach(picker=>{
       const btn = picker.querySelector(".verdict-btn");

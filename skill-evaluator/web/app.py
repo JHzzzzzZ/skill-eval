@@ -35,6 +35,7 @@ import llm as llm_layer  # noqa: E402
 import capabilities  # noqa: E402
 import ratelimit  # noqa: E402
 import runner as runner_mod  # noqa: E402
+import rerun_metrics  # noqa: E402
 import static_check  # noqa: E402
 import token_admin  # noqa: E402
 RUNS = WEB / "runs"
@@ -1512,6 +1513,37 @@ class Handler(BaseHTTPRequestHandler):
             _audit(self, "override", 200, run_id=rid, tier=run.get("tier") or "",
                    detail=",".join(changes))
             return _send_json(self, 200, payload)
+        if path == "/api/rerun-metrics":
+            data = _json_body(self)
+            rid = str(data.get("id") or "")
+            if _run_access(self, rid) is False:
+                return _deny_run(self, rid, "rerun_denied")
+            if not rid:
+                return _send_json(self, 400, {"error": "需要 run id"})
+            if rid in ACTIVE and ACTIVE[rid]["proc"].poll() is None:
+                return _send_json(self, 409, {"error": "运行尚未结束，不能单指标重跑"})
+            metric = str(data.get("metric") or "")
+            results = _results_dir(rid)
+            if results is None or not (results / "report.json").is_file():
+                return _send_json(self, 404, {"error": "报告不存在"})
+            meta = _load_json(results / "run-meta.json", {}) or {}
+            llm_cfg = data.get("llm") if isinstance(data.get("llm"), dict) else {}
+            judge_meta = meta.get("judge") if isinstance(meta.get("judge"), dict) else {}
+            try:
+                out = rerun_metrics.rerun_metric(
+                    results, metric, skill=meta.get("skill"),
+                    model=llm_cfg.get("model") or meta.get("model"),
+                    backend=judge_meta.get("backend") or "auto",
+                    base_url=llm_cfg.get("base_url") or meta.get("base_url"),
+                    api_key=llm_cfg.get("api_key") or "",
+                    protocol=llm_cfg.get("protocol") or meta.get("llm_protocol"))
+            except ValueError as exc:
+                return _send_json(self, 400, {"error": str(exc)})
+            except Exception as exc:
+                return _send_json(self, 500, {"error": str(exc)})
+            _audit(self, "rerun_metric", 200, run_id=rid, tier=meta.get("tier") or "",
+                   detail=metric)
+            return _send_json(self, 200, out)
         if path != "/api/run":
             return _send_json(self, 404, {"error": "not found"})
         data = _json_body(self)

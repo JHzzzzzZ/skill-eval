@@ -11,6 +11,7 @@ Generated: 2026-09-22T13:43:08.578Z
 | 脚本 | 行数 | CLI seam | 服务指标 |
 |---|---|---|---|
 | `_config.py` | 204 | 无 CLI；`get/get_int/get_float/pick` | config.yaml 读取（ADR-0035） |
+| `rerun_metrics.py` | 160 | 无 CLI；`rerun_metric/normalize_metric` | 单指标重跑：目标 rubric 原子替换 + report 重出 |
 | `estimate.py` | 212 | 无 CLI；`estimate(tier, *, evalset, real_cases, real_expects, repeat, cached_stages)` | 成本预估（calls/agent/tokens/minutes/weights）；Web `/api/estimate` 与页面共用 |
 | `llm.py` | 184 | 无 CLI；`chat/ask/configured/extract_json` | T1 直连 LLM（ADR-0034） |
 | `harness.py` | 75 | 无 CLI；`run_case/available` | 执行载体适配（`run_case` 的 `isolation` 透传给 trace_run） |

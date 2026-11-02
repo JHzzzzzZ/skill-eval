@@ -1,6 +1,6 @@
 # 可用性下一批：实现方案
 
-状态：**Phase A/B/C 已实现并验收；Phase D 待 spike**。设计见 `usability-next.md`；本文件只写改哪些文件、接口、测试与顺序。
+状态：**Phase A–D 已实现并验收**。设计见 `usability-next.md`；本文件只写改哪些文件、接口、测试与顺序。
 
 ## Phase A：预估 + 进度 + 配置记忆
 

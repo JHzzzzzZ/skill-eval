@@ -13,8 +13,9 @@ Generated: 2026-09-22T13:43:08.578Z
 | `test_static_check.py` | `scripts/static_check.py`（六组规则 + PII + 依赖全面性 + 字符/行阈值） | 63 |
 | `test_config.py` | `scripts/_config.py`（YAML 子集解析/优先级/类型） | 7 |
 | `test_evalset_gen.py` | `scripts/evalset_gen.py`（prompt/条目归一化） | 2 |
-| `test_web.py` | `web/app.py`（zip 上传安全边界 / UI 术语 / 停止进程 / 复用拷贝与复用归属 / 工作区 / 评测集版本与导入导出 / 磁盘 history 回退 / 局部报告 / ACTIVE 运行态 / 内容保真 / provenance / 审核人 400 / 预检接线 / 评测集前置 / 历史对比与可比性判定 / 报告导出 / T2-T3 token 门禁与 run 归属 / 游客 T0-T1 / legacy 在无 token 时才放行 / 审计 / 限流 / 容器能力 412 / 确认后宿主回退 / T0-T1 不传评测集 / 证据/溯源/403/改判/移动端 / 单用户历史 / `/api/estimate` 与前端成本条、配置记忆、动态权重 / 报告锚点与筛选、统一弹窗焦点锁、下一步建议卡与建议弹层、手机卡片 data-label / 评测集质量面板、默认未审、过滤与可见行全选、review 增量合并） | 81 |
+| `test_web.py` | `web/app.py`（zip 上传安全边界 / UI 术语 / 停止进程 / 复用拷贝与复用归属 / 工作区 / 评测集版本与导入导出 / 磁盘 history 回退 / 局部报告 / ACTIVE 运行态 / 内容保真 / provenance / 审核人 400 / 预检接线 / 评测集前置 / 历史对比与可比性判定 / 报告导出 / T2-T3 token 门禁与 run 归属 / 游客 T0-T1 / legacy 在无 token 时才放行 / 审计 / 限流 / 容器能力 412 / 确认后宿主回退 / T0-T1 不传评测集 / 证据/溯源/403/改判/移动端 / 单用户历史 / `/api/estimate` 与前端成本条、配置记忆、动态权重 / 报告锚点与筛选、统一弹窗焦点锁、下一步建议卡与建议弹层、手机卡片 data-label / 评测集质量面板、默认未审、过滤与可见行全选、review 增量合并 / 单指标重跑端点与 UI） | 83 |
 | `test_estimate.py` | `scripts/estimate.py`（各档位计数 / T2A 0–N 判定 / T2B expect 分支 / T3 repeat / 缓存裁剪 / 空评测集 / config 默认值） | 9 |
+| `test_rerun_metrics.py` | `scripts/rerun_metrics.py`（只替换目标 rubric / 其他文件字节不变 / 失败不动原文件 / 缺 judge 拒绝 / 指标映射） | 5 |
 | `test_token_admin.py` | `web/token_admin.py`（issue 只返一次明文、只落 hash / list 不泄 hash / revoke 即时失效 / CLI 全局 `--tokens-file`/`--audit-file` / 路径不走环境变量 / 审计写失败不抛 / 损坏库 fail closed） | 9 |
 | `test_llm.py` | `scripts/llm.py`（协议/无 tools/JSON 提取） | 5 |
 | `test_judge_run.py` | `scripts/judge_run.py`（文件收集/prompt/SKILL.md 优先） | 5 |
@@ -69,5 +70,5 @@ Generated: 2026-09-22T13:43:08.578Z
 - `test_static_check.py::test_evaluator_self_check_passes` 是自检回归锁：保证 `python scripts/static_check.py skill-evaluator` 输出 `passed: true`（ADR-0012/0013）。
 - `test_web.py::test_override_rejects_empty_reviewer` 是本仓最早的临时 HTTP 服务用例（端口 0 + daemon 线程，结束 `shutdown()`）；新增的访问门禁用例共用 `web_server`/`call` 帮手，并用 `_FakeProc` 替掉 `subprocess.Popen`（不真跑 runner），否则每个用例都会拉起真实子进程。
 - `test_web.py` 里带非 ASCII 字符的绝对路径不能直接拼进请求行（`http.client` 按 ASCII 编码）：访问门禁用例改用固定的 ASCII 评测集名，避免 Windows 中文用户名环境假阴性。
-- `test_web.py` 是最大测试文件（81 test）：`static_check` 的 #4 扩为六组规则后每组都要正向+负向用例，加规则时必须同时加“不该误报”的负向用例（尤其 `secrets` 的占位符、`obfuscation`/`pii` 的 warn 分级与示例白名单）。
+- `test_web.py` 是最大测试文件（83 test）：`static_check` 的 #4 扩为六组规则后每组都要正向+负向用例，加规则时必须同时加“不该误报”的负向用例（尤其 `secrets` 的占位符、`obfuscation`/`pii` 的 warn 分级与示例白名单）。
 - 前端交互（Phase B：`#m-N` 锚点/筛选/弹窗焦点锁/下一步建议/手机卡片）只做 `index.html` 的字符串接线断言，不引入浏览器或 DOM 依赖；JS 语法用 `node --check` 校验。
