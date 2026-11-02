@@ -25,6 +25,7 @@ import _config
 import capabilities
 import llm as llm_layer
 import report as report_mod
+import rerun_metrics as rerun_mod
 
 SCRIPTS = Path(__file__).resolve().parent
 ROOT = SCRIPTS.parent
@@ -843,7 +844,7 @@ def main():
         skill = None; tier = "t2a"; results = None; evalset = None; real_input = None
         model = None; backend = "auto"; progress = None; version = None
         dry_run = False; sandbox = None; harness = None
-        isolation = None
+        isolation = None; rerun_metrics = None
         llm_protocol = None; base_url = None; api_key = None
         rerun_t0 = False; rerun_t1 = False; rerun_t2a = False; rerun_t2b = False; rerun_t3 = False
         no_cache = False
@@ -852,7 +853,8 @@ def main():
         key = args[i]
         if key in ("--skill", "--tier", "--results", "--evalset", "--real-input", "--model",
                    "--backend", "--progress", "--version", "--sandbox", "--harness",
-                   "--llm-protocol", "--base-url", "--api-key", "--isolation"):
+                   "--llm-protocol", "--base-url", "--api-key", "--isolation",
+                   "--rerun-metrics"):
             if i + 1 >= len(args):
                 print(f"{key} 缺值", file=sys.stderr); return 2
             setattr(A, key[2:].replace("-", "_"), args[i + 1]); i += 2
@@ -872,11 +874,26 @@ def main():
             A.no_cache = True; i += 1
         else:
             print(f"未知参数: {key}", file=sys.stderr); return 2
+    if A.rerun_metrics:
+        if not A.skill or not A.results:
+            print("--rerun-metrics 需要 --skill 与 --results（已有 run 目录）", file=sys.stderr)
+            return 2
+        for metric in [x.strip() for x in str(A.rerun_metrics).split(",") if x.strip()]:
+            try:
+                print(json.dumps(rerun_mod.rerun_metric(
+                    A.results, metric, skill=A.skill, model=A.model,
+                    backend=A.backend or "auto", base_url=A.base_url,
+                    api_key=A.api_key, protocol=A.llm_protocol), ensure_ascii=False))
+            except Exception as exc:
+                print(json.dumps({"ok": False, "metric": metric, "error": str(exc)},
+                                 ensure_ascii=False))
+                return 2
+        return 0
     if not A.skill:
         print("usage: runner.py --skill <dir> [--tier t0|t1|t2a|t2b|t3] "
               "[--evalset <dir>] [--real-input <file>] [--results <dir>] [--model m] "
               "[--backend auto|llm|pi] [--harness pi] [--isolation host|docker] "
-              "[--progress <file>] [--rerun-t0] [--rerun-t1] [--rerun-t2a] [--rerun-t2b] [--rerun-t3] [--no-cache] [--dry-run]", file=sys.stderr)
+              "[--rerun-metrics '#2,#5'] [--progress <file>] [--rerun-t0] [--rerun-t1] [--rerun-t2a] [--rerun-t2b] [--rerun-t3] [--no-cache] [--dry-run]", file=sys.stderr)
         return 2
     try:
         return run(A)

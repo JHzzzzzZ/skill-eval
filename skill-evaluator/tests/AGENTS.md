@@ -19,7 +19,7 @@ Generated: 2026-09-22T13:43:08.578Z
 | `test_token_admin.py` | `web/token_admin.py`（issue 只返一次明文、只落 hash / list 不泄 hash / revoke 即时失效 / CLI 全局 `--tokens-file`/`--audit-file` / 路径不走环境变量 / 审计写失败不抛 / 损坏库 fail closed） | 9 |
 | `test_llm.py` | `scripts/llm.py`（协议/无 tools/JSON 提取） | 5 |
 | `test_judge_run.py` | `scripts/judge_run.py`（文件收集/prompt/SKILL.md 优先） | 5 |
-| `test_runner.py` | `scripts/runner.py`（dry-run/T0 端到端 / T0-T1 忽略失效评测集 / 进度计时 / 复用与跨目录缓存 / 阶段级完成判定 / 半截 T1 不缓存 / 真实输入解析） | 15 |
+| `test_runner.py` | `scripts/runner.py`（dry-run/T0 端到端 / T0-T1 忽略失效评测集 / 进度计时 / 复用与跨目录缓存 / 阶段级完成判定 / 半截 T1 不缓存 / 真实输入解析 / 单指标重跑委托） | 16 |
 | `test_report.py` | `report.py` 16-key 契约基线 + 局部报告 + 徽章中文化 + 内容保真 / 报告头 provenance | 57 |
 | `test_trace_run.py` | `scripts/trace_run.py`（pi + fake Claude 事件流 / adapter 契约） | 53 |
 | `test_sandbox.py` | `scripts/sandbox.py`（命令参数/路径重写/状态探测）+ `trace_run --isolation docker` 的 build-only 与 fail closed | 13 |

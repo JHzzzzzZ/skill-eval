@@ -8,6 +8,7 @@ import pytest
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 from runner import RunnerError, _real_cases  # noqa: E402
+import runner  # noqa: E402
 
 SCRIPT = Path(__file__).parent.parent / "scripts" / "runner.py"
 
@@ -169,6 +170,18 @@ def test_t1_reuses_valid_judges_without_llm(tmp_path):
     t1 = next(e for e in events if e["type"] == "stage" and e.get("name") == "T1"
               and e.get("status") == "done")
     assert t1["cached"] is True
+
+
+def test_runner_rerun_metrics_delegates(monkeypatch, capsys):
+    calls = []
+    monkeypatch.setattr("runner.rerun_mod.rerun_metric",
+                        lambda results, metric, **kw: calls.append((results, metric, kw))
+                        or {"ok": True, "metric": metric})
+    monkeypatch.setattr(sys, "argv", ["runner.py", "--skill", ".", "--results", "results",
+                                      "--rerun-metrics", "#2,#5"])
+    assert runner.main() == 0
+    assert [c[1] for c in calls] == ["#2", "#5"]
+    assert '"ok": true' in capsys.readouterr().out
 
 
 def test_missing_skill_is_error(tmp_path):
