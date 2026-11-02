@@ -1,7 +1,8 @@
 """执行载体适配层（ADR-0034）。
 
-当前只实现 pi：把一次 case 交给 trace_run.py（它负责 pi 事件流 → trace）。
-Code Agent 留接口不实现；前端只显示 available() 里的项。
+载体 = adapter 注册表里的一项（pi / claude-code…）：本层只把一次 case 交给
+trace_run.py（它负责 adapter 命令与事件流 → trace），不再硬编码具体 agent。
+配置里的 `--harness` 是 `--adapter` 的旧名，两者等价。
 """
 from __future__ import annotations
 
@@ -15,10 +16,11 @@ import _console
 _console.fix()
 
 import _config
+import adapter_registry
 
 SCRIPTS = Path(__file__).resolve().parent
 TRACE_RUN = SCRIPTS / "trace_run.py"
-IMPLEMENTED = ("pi",)
+DEFAULT = adapter_registry.DEFAULT
 
 
 class HarnessError(RuntimeError):
@@ -26,22 +28,27 @@ class HarnessError(RuntimeError):
 
 
 def available() -> list:
-    declared = _config.get_list("harness.available", ["pi"])
-    out = [a for a in declared if isinstance(a, str) and a in IMPLEMENTED]
-    return out or ["pi"]
+    """config 声明的 adapter 中，已注册且二进制可用的项（前端只显示这些）。"""
+    declared = _config.get_list("harness.available", adapter_registry.names())
+    usable = adapter_registry.available()
+    return [name for name in declared if isinstance(name, str) and name in usable]
 
 
 def current(override: str | None = None) -> str:
-    name = (override or _config.get_str("harness.adapter", "pi")).strip()
-    if name not in IMPLEMENTED:
-        raise HarnessError(f"执行载体 {name!r} 未实现；可用：{', '.join(available())}")
+    name = (override or _config.get_str("harness.adapter", DEFAULT)).strip()
+    try:
+        adapter_registry.get(name)
+    except adapter_registry.UnknownAdapterError as exc:
+        raise HarnessError(f"执行载体 {name!r} 未实现；可用：{', '.join(adapter_registry.names())}") from exc
     return name
 
 
-def _cmd(prompt: str, cwd: str | Path, *, skill_dir=None, no_skill=False,
+def _cmd(adapter: str, prompt: str, cwd: str | Path, *, skill_dir=None, no_skill=False,
          early_exit=False, model=None, thinking=None, out=None, guard_repo=None,
-         extra=None) -> list:
-    cmd = [sys.executable, str(TRACE_RUN), str(cwd), prompt]
+         isolation=None, extra=None) -> list:
+    cmd = [sys.executable, str(TRACE_RUN), str(cwd), prompt, "--adapter", adapter]
+    if isolation:
+        cmd += ["--isolation", str(isolation)]
     if no_skill:
         cmd.append("--no-skill")
     elif skill_dir:
@@ -65,14 +72,17 @@ def _cmd(prompt: str, cwd: str | Path, *, skill_dir=None, no_skill=False,
 
 def run_case(prompt: str, cwd: str | Path, *, skill_dir=None, no_skill=False,
              early_exit=False, model=None, thinking=None, out=None,
-             guard_repo=None, timeout=None, build_only=False, adapter=None) -> dict:
-    """跑一次 case，返回 trace dict；build_only 返回 {"command": [...]}。"""
+             guard_repo=None, timeout=None, build_only=False, adapter=None,
+             isolation=None) -> dict:
+    """跑一次 case，返回 trace dict；build_only 返回 {"command": [...]}。
+
+    isolation=None 保持旧调用：trace_run 默认 host；runner 在 T2/T3 显式传 docker。
+    """
     name = current(adapter)
-    if name != "pi":
-        raise HarnessError(f"执行载体 {name!r} 未实现")
-    cmd = _cmd(prompt, cwd, skill_dir=skill_dir, no_skill=no_skill,
+    cmd = _cmd(name, prompt, cwd, skill_dir=skill_dir, no_skill=no_skill,
                early_exit=early_exit, model=model, thinking=thinking, out=out,
-               guard_repo=guard_repo, extra=["--build-only"] if build_only else None)
+               guard_repo=guard_repo, isolation=isolation,
+               extra=["--build-only"] if build_only else None)
     if build_only:
         return {"command": cmd}
     timeout = timeout or _config.get_int("run.timeout_s", 300)

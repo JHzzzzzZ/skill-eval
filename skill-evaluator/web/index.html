@@ -141,6 +141,8 @@
     box-shadow:0 0 0 3px color-mix(in srgb,var(--brand) 14%,transparent);
   }
   .tier-opt input:checked + label b{color:var(--brand)}
+  .tier-opt.blocked label{opacity:.55}
+  .tier-opt.blocked label b{color:var(--muted)}
 
   details.advanced{border:1px solid var(--line);border-radius:14px;background:var(--card-soft);padding:0 14px}
   details.advanced summary{cursor:pointer;list-style:none;padding:12px 0;font-size:12.5px;font-weight:650;color:var(--ink-2);display:flex;justify-content:space-between;align-items:center}
@@ -157,6 +159,7 @@
   .real-extra input{font-size:12px;padding:8px 10px}
   .real-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px}
   .inline-note{font-size:11.5px;color:var(--muted);line-height:1.45}
+  .inline-note[hidden]{display:none}
   .inline-note code{font-family:var(--mono);font-size:11px;background:var(--card);padding:1px 5px;border-radius:5px;border:1px solid var(--line)}
 
   .progress-slot{position:relative;min-width:0}
@@ -423,6 +426,7 @@
           <div class="tier-opt"><input type="radio" name="tier" id="t2b" value="t2b"><label for="t2b"><b>真实输入对比</b><small>5–40 分钟 · 2×case · 需申请 token</small><small>#11 #12</small></label></div>
           <div class="tier-opt"><input type="radio" name="tier" id="t3" value="t3"><label for="t3"><b>完整任务运行</b><small>30 分钟–数小时 · 重复×3 · 需申请 token</small><small>#13–#16</small></label></div>
         </div>
+        <div class="inline-note" id="capabilityNote" hidden></div>
         <div class="inline-note" style="margin-top:8px">时间为范围，取决于模型、评测集与 case 数。</div>
 
         <div class="grid-2" style="margin-top:14px">
@@ -626,6 +630,9 @@ let workspaceMap = new Map(), reconnectAttempt = 0, errorRunId = "";
 let progressValue = 0, currentPlan = TIER_PLANS.t2a, planTotal = 1;
 let runStartedAt = 0, timingTimer = null, isRunning = false, currentTier = "t2a";
 let serverLlmConfigured = false;
+// 容器能力：只影响需要容器运行时的评估深度（触发评测/真实输入对比/完整任务运行）
+const CONTAINER_TIERS = ["t2a","t2b","t3"];
+let capabilityTiers = null;
 
 function label(name){ return STAGE_LABELS[name] || name; }
 function conclusionText(code){ return CONCLUSION_LABELS[code] || code || "—"; }
@@ -663,7 +670,7 @@ function syncRerun(){
     if(el.disabled) el.checked = false;
   });
 }
-document.querySelectorAll('input[name="tier"]').forEach(el=>el.addEventListener("change", ()=>{ syncRerun(); refreshRunPrereq(); }));
+document.querySelectorAll('input[name="tier"]').forEach(el=>el.addEventListener("change", ()=>{ syncRerun(); refreshRunPrereq(); refreshRunHint(); }));
 syncRerun();
 refreshRunPrereq();
 $("rerunAll").onclick = () => {
@@ -738,10 +745,79 @@ function preflightWarnings(){
   return warnings;
 }
 function refreshRunHint(warnings){
-  $("runHint").textContent = warnings.length
-    ? "运行前检查：" + warnings.join("；") + "。"
-    : "会先做基础检查，再按所选深度继续；停止时保留已完成阶段。";
+  if((warnings || []).length){
+    $("runHint").textContent = "运行前检查：" + warnings.join("；") + "。";
+    return;
+  }
+  const cap = tierCapability(tierValue());
+  $("runHint").textContent = cap.ok
+    ? "会先做基础检查，再按所选深度继续；停止时保留已完成阶段。"
+    : ("当前深度不可运行：" + capabilityReason(cap) + "。基础检查与文档语义评审可直接运行。");
 }
+function tierCapability(tier){
+  if(CONTAINER_TIERS.indexOf(tier) < 0) return {ok:true};
+  // 能力接口读失败时不误伤：服务端仍会按真实能力返回 412
+  if(!capabilityTiers) return {ok:true};
+  return capabilityTiers[tier] || {ok:true};
+}
+function capabilityReason(cap){
+  const reasons = (cap && cap.reasons) || [];
+  return reasons.length ? reasons.join("；") : "缺少容器运行时";
+}
+function renderCapabilities(){
+  let blocked = [];
+  document.querySelectorAll(".tier-opt").forEach(opt=>{
+    const input = opt.querySelector('input[name="tier"]');
+    if(!input) return;
+    const cap = tierCapability(input.value);
+    opt.classList.toggle("blocked", !cap.ok);
+    const label = opt.querySelector("label");
+    if(label) label.title = cap.ok ? "" : capabilityReason(cap);
+    if(!cap.ok) blocked.push(cap);
+  });
+  const note = $("capabilityNote");
+  if(blocked.length){
+    const reasons = [...new Set(blocked.map(capabilityReason))];
+    note.hidden = false;
+    note.textContent = "当前环境缺少容器运行时，触发评测与完整任务运行暂不可用："
+      + reasons.join("；") + "。基础检查与文档语义评审不受影响。";
+  }else{
+    note.hidden = true; note.textContent = "";
+  }
+  refreshRunHint();
+}
+function adapterLabel(name){
+  return ({pi:"本机命令行（pi）", "claude-code":"Claude Code"})[name] || name;
+}
+function renderAdapterOptions(payload){
+  const list = (payload && payload.adapters) || [];
+  if(!list.length) return;
+  const select = $("harness"), current = select.value;
+  select.innerHTML = list.map(a=>{
+    const ok = !!a.available;
+    return `<option value="${esc(a.name)}"${ok ? "" : " disabled"}>`
+      + esc(adapterLabel(a.name)) + (ok ? "" : "（未安装）") + "</option>";
+  }).join("");
+  const preferred = list.find(a=>a.name===current && a.available)
+    || list.find(a=>a.available) || list[0];
+  if(preferred) select.value = preferred.name;
+}
+async function loadCapabilities(){
+  const adapter = $("harness").value;
+  try{
+    const r = await fetch("/api/capabilities?adapter=" + encodeURIComponent(adapter));
+    if(!r.ok) throw new Error("HTTP " + r.status);
+    const d = await r.json();
+    capabilityTiers = d && d.tiers ? d.tiers : null;
+    renderAdapterOptions(d);
+    if($("harness").value !== adapter){
+      // 初始下拉只有 pi：渲染出全部 adapter 后，再按当前选择取一次能力。
+      return loadCapabilities();
+    }
+  }catch(e){ capabilityTiers = null; }
+  renderCapabilities();
+}
+$("harness").addEventListener("change", loadCapabilities);
 function selectedEvalsetVersion(){
   const ws = workspaceMap.get($("workspace").value);
   const path = evalsetPath();
@@ -950,6 +1026,7 @@ $("evalVersion").onchange = () => {
 };
 loadWorkspaces();
 loadRuns();
+loadCapabilities();
 
 // upload
 const drop = $("dropzone");
@@ -1183,6 +1260,13 @@ $("run").onclick = async () => {
     $("runHint").textContent = "T2/T3 需要访问 token；基础检查与文档评审免 token 可用。";
     return;
   }
+  const capability = tierCapability(tier);
+  if(!capability.ok){
+    toast("当前环境无法运行该评估深度：" + capabilityReason(capability), "err");
+    $("runHint").textContent = "当前深度不可运行：" + capabilityReason(capability)
+      + "。基础检查与文档语义评审可直接运行。";
+    return;
+  }
   let realCases = [];
   try{ realCases = realPayload(); }catch(e){ toast(e.message, "err"); return; }
   const warnings = preflightWarnings();
@@ -1208,6 +1292,12 @@ $("run").onclick = async () => {
         rerun_t2a: $("rerunTrigger").checked, rerun_t2b: $("rerunReal").checked,
         rerun_t3: $("rerunFull").checked})});
     const data = await r.json();
+    if(r.status === 429){
+      // 限流：错误条保留服务端说明，并补上“多久后能再试”，不吞掉原因
+      const wait = Number(data.retry_after || 0);
+      throw new Error((data.error || "运行配额已用完，请稍后重试")
+        + (wait > 0 ? "（约 " + waitText(wait) + "后可重试）" : ""));
+    }
     if(!r.ok) throw new Error(data.error||"启动失败");
     runId = data.id;
     history.replaceState(null, "", "?run=" + encodeURIComponent(data.id));
@@ -1367,6 +1457,11 @@ function showError(msg, id, retry){
   $("errorRun").textContent = id ? id.slice(0, 12) : "";
   $("errorRetry").style.display = retry ? "" : "none";
   $("errorBar").hidden = false;
+}
+function waitText(seconds){
+  if(seconds >= 3600) return Math.ceil(seconds / 3600) + " 小时";
+  if(seconds >= 60) return Math.ceil(seconds / 60) + " 分钟";
+  return Math.ceil(seconds) + " 秒";
 }
 function hideError(){ $("errorBar").hidden = true; }
 $("errorClose").onclick = () => hideError();

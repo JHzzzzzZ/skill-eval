@@ -1,6 +1,6 @@
 # 执行适配器抽象（Agent Adapter + Sandbox Backend）
 
-状态：**设计，待实现**。目标是让 pi 换成 Claude Code / Codex / 其他 agent 时，只新增一个 adapter 文件，不改 runner/report/score/前端。
+状态：**已实现并验收（2026-11-02）**。pi 适配器保留原行为；Claude Code 已完成真机冒烟（`claude -p` 事件流、early-exit、tokens）。目标是让 pi 换成 Claude Code / Codex / 其他 agent 时，只新增一个 adapter 文件，不改 runner/report/score/前端。
 
 ## 1. 现状的问题
 

@@ -24,3 +24,9 @@ web/tokens.json
 web/audit.jsonl
 skill-evaluator/web/tokens.json
 skill-evaluator/web/audit.jsonl
+
+# 限流计数与本地额度配置（limits.example.json 是入库样例）
+web/usage.sqlite3*
+skill-evaluator/web/usage.sqlite3*
+web/limits.json
+skill-evaluator/web/limits.json

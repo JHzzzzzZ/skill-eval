@@ -6,9 +6,11 @@ import inspect
 import io
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import threading
+import time
 import zipfile
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -612,6 +614,25 @@ class _FakeProc:
         return None
 
 
+def allow_capability(tier, *, adapter=None, isolation=None, sandbox_status=None):
+    """能力检查的测试桩：默认环境可用（容器类用例各自覆盖）。"""
+    return {"tier": tier, "isolation": isolation or web.capabilities.default_isolation(tier),
+            "ok": True, "missing": [], "reasons": [], "fix": [], "warnings": [],
+            "container": None,
+            "adapter": {"name": adapter or "pi", "available": True, "reason": ""}}
+
+
+def fake_capability_snapshot(*, adapter=None, sandbox_status=None):
+    return {"tiers": {tier: allow_capability(tier, adapter=adapter)
+                      for tier in web.capabilities.TIERS},
+            "container": {"engine": "docker", "available": True, "reason": ""},
+            "adapter": {"name": adapter or "pi", "available": True, "reason": ""},
+            "adapters": [{"name": "pi", "available": True, "reason": ""},
+                         {"name": "claude-code", "available": False,
+                          "reason": "未安装"}],
+            "model_proxy": {"configured": False, "note": "模型代理尚未实现（测试桩）"}}
+
+
 def write_owned_run(root: Path, rid: str, *, owner_kind="guest", owner_id="", protected=False,
                     tier="t2a") -> Path:
     rdir = root / rid
@@ -640,6 +661,10 @@ def web_server(tmp_path, monkeypatch):
     monkeypatch.setattr(web, "ACTIVE", {})
     monkeypatch.setattr(web.token_admin, "TOKENS_FILE", tmp_path / "tokens.json")
     monkeypatch.setattr(web.token_admin, "AUDIT_FILE", tmp_path / "audit.jsonl")
+    monkeypatch.setattr(web.ratelimit, "DB", tmp_path / "usage.sqlite3")
+    monkeypatch.setattr(web.ratelimit, "LIMITS_FILE", tmp_path / "limits.json")
+    monkeypatch.setattr(web.capabilities, "check", allow_capability)
+    monkeypatch.setattr(web.capabilities, "snapshot", fake_capability_snapshot)
     monkeypatch.setattr(web.subprocess, "Popen", _FakeProc)
     server = ThreadingHTTPServer(("127.0.0.1", 0), web.Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -650,7 +675,8 @@ def web_server(tmp_path, monkeypatch):
         server.server_close()
 
 
-def call(server, method, path, body=None, headers=None, cookie=""):
+def request(server, method, path, body=None, headers=None, cookie=""):
+    """返回 (status, json, 响应头, Set-Cookie 首段)；call() 是它的三元组包装。"""
     conn = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=5)
     hdrs = dict(headers or {})
     payload = None
@@ -662,13 +688,19 @@ def call(server, method, path, body=None, headers=None, cookie=""):
     conn.request(method, path, body=payload, headers=hdrs)
     resp = conn.getresponse()
     raw = resp.read()
+    resp_headers = {key.lower(): value for key, value in resp.getheaders()}
     set_cookie = resp.getheader("Set-Cookie") or ""
     conn.close()
     try:
         data = json.loads(raw)
     except ValueError:
         data = None
-    return resp.status, data, set_cookie.split(";", 1)[0]
+    return resp.status, data, resp_headers, set_cookie.split(";", 1)[0]
+
+
+def call(server, method, path, body=None, headers=None, cookie=""):
+    status, data, _headers, set_cookie = request(server, method, path, body, headers, cookie)
+    return status, data, set_cookie
 
 
 def make_skill(tmp_path: Path) -> Path:
@@ -700,6 +732,8 @@ def test_guests_can_run_t0_t1_but_t2a_needs_token(tmp_path, monkeypatch):
             assert run_meta["owner_name"] == "游客"
             assert run_meta["protected"] is False
             assert run_meta["tier"] == tier and run_meta["skill_sha256"]
+            # 假进程一直 running：不清掉会被游客并发额度（1）拒绝下一次
+            web.ACTIVE.clear()
 
 
 def test_t2a_with_token_is_owner_scoped(tmp_path, monkeypatch):
@@ -890,3 +924,282 @@ def test_ui_token_gate_hides_evalset_and_sends_header():
     assert "headers: authHeaders()" in html
     assert 'fetch("/api/export?id=" + encodeURIComponent(rid), {headers: authHeaders()})' in html
     assert "blobDownload(await r.blob()" in html
+
+
+# --- 限流：游客 T1 额度、token 覆盖、并发、429 不建 run、审计 ---
+
+def usage_rows(tmp_path: Path) -> int:
+    """读限流计数库的行数（测试直连，验证“拒绝不消耗额度”）。"""
+    conn = sqlite3.connect(str(tmp_path / "usage.sqlite3"))
+    try:
+        return int(conn.execute("SELECT COUNT(*) FROM usage").fetchone()[0])
+    finally:
+        conn.close()
+
+
+def patch_token_quota(path: Path, token_id: str, **fields) -> None:
+    """给已签发的 token 记录补配额字段（issue 不签发配额，限流只读取）。"""
+    data = json.loads(path.read_text(encoding="utf-8"))
+    for record in data["tokens"]:
+        if record["id"] == token_id:
+            record.update(fields)
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+
+def test_limits_example_matches_code_defaults():
+    # 入库样例是给人改的模板；与代码默认漂移会让“抄样例”改出意料外的额度
+    example = json.loads((WEB_APP.parent / "limits.example.json").read_text(encoding="utf-8"))
+    assert example == web.ratelimit.DEFAULTS
+
+
+def test_guest_t1_quota_returns_429_without_creating_run(tmp_path, monkeypatch):
+    skill = make_skill(tmp_path)
+    audit = tmp_path / "audit.jsonl"
+    with web_server(tmp_path, monkeypatch) as server:
+        status, _, cookie = call(server, "POST", "/api/run",
+                                 {"skill": str(skill), "tier": "t1"})
+        assert status == 200
+        web.ACTIVE.clear()
+        for _ in range(2):                      # 游客 T1 默认 3 次/小时
+            assert call(server, "POST", "/api/run",
+                        {"skill": str(skill), "tier": "t1"}, cookie=cookie)[0] == 200
+            web.ACTIVE.clear()
+        assert usage_rows(tmp_path) == 3
+
+        before = {p.name for p in (tmp_path / "runs").iterdir()}
+        status, data, headers, _ = request(server, "POST", "/api/run",
+                                          {"skill": str(skill), "tier": "t1"}, cookie=cookie)
+        assert status == 429
+        assert data["reason"] == "hourly" and data["scope"] == "actor"
+        assert data["retry_after"] > 0 and int(headers["retry-after"]) == data["retry_after"]
+        assert "配额" in data["error"]
+        assert {p.name for p in (tmp_path / "runs").iterdir()} == before   # 不建 run 目录
+        assert usage_rows(tmp_path) == 3                                   # 拒绝不消耗额度
+
+        limited = [json.loads(line) for line in audit.read_text(encoding="utf-8").splitlines()
+                   if json.loads(line)["action"] == "rate_limited"]
+        assert limited and limited[-1]["status"] == 429
+        assert limited[-1]["tier"] == "t1" and limited[-1]["actor_kind"] == "guest"
+        assert "hourly" in limited[-1]["detail"]
+
+
+def test_guest_t1_exhausted_still_allows_t0(tmp_path, monkeypatch):
+    skill = make_skill(tmp_path)
+    with web_server(tmp_path, monkeypatch) as server:
+        _, _, cookie = call(server, "POST", "/api/run", {"skill": str(skill), "tier": "t1"})
+        web.ACTIVE.clear()
+        for _ in range(2):
+            call(server, "POST", "/api/run", {"skill": str(skill), "tier": "t1"}, cookie=cookie)
+            web.ACTIVE.clear()
+        assert call(server, "POST", "/api/run", {"skill": str(skill), "tier": "t1"},
+                    cookie=cookie)[0] == 429
+        # 游客 T1 与 T0 是两个额度桶：T1 用完仍能跑基础检查
+        status, data, _ = call(server, "POST", "/api/run",
+                               {"skill": str(skill), "tier": "t0"}, cookie=cookie)
+        assert status == 200, data
+
+
+def test_token_quota_is_not_shared_by_ip(tmp_path, monkeypatch):
+    """token 有明确身份，不能被同一 NAT 的其他 token 连坐。"""
+    monkeypatch.setattr(web.ratelimit, "DB", tmp_path / "usage.sqlite3")
+    monkeypatch.setattr(web.ratelimit, "LIMITS_FILE", tmp_path / "limits.json")
+    a = {"kind": "token", "id": "tok_a", "name": "A"}
+    b = {"kind": "token", "id": "tok_b", "name": "B"}
+    for _ in range(3):
+        assert web.ratelimit.record(a, "t2a", ip="203.0.113.9")
+    result = web.ratelimit.check(b, "t2a", ip="203.0.113.9")
+    assert result["allowed"] is True, result
+    denied = web.ratelimit.check(a, "t2a", ip="203.0.113.9")
+    assert denied["allowed"] is False and denied["scope"] == "actor"
+
+def test_guest_cookie_rotation_cannot_bypass_ip_limit(tmp_path, monkeypatch):
+    skill = make_skill(tmp_path)
+    with web_server(tmp_path, monkeypatch) as server:
+        _, _, cookie = call(server, "POST", "/api/run", {"skill": str(skill), "tier": "t1"})
+        web.ACTIVE.clear()
+        for _ in range(2):
+            call(server, "POST", "/api/run", {"skill": str(skill), "tier": "t1"}, cookie=cookie)
+            web.ACTIVE.clear()
+        # 换一个游客 cookie（新 id）仍被 IP 桶挡住：IP 只辅助，但换 cookie 不是绕过手段
+        status, data, _ = call(server, "POST", "/api/run",
+                               {"skill": str(skill), "tier": "t1"},
+                               cookie="se_guest=" + "c" * 32)
+        assert status == 429 and data["scope"] == "ip" and data["reason"] == "hourly"
+
+
+def test_token_quota_override_from_record(tmp_path, monkeypatch):
+    skill = make_skill(tmp_path)
+    tokens = tmp_path / "tokens.json"
+    with web_server(tmp_path, monkeypatch) as server:
+        token = web.token_admin.issue("限额用户")
+        patch_token_quota(tokens, token["id"], daily_runs=2)
+        headers = {"X-Skill-Eval-Token": token["token"]}
+        for _ in range(2):
+            status, data, _ = call(server, "POST", "/api/run",
+                                   {"skill": str(skill), "tier": "t2a"}, headers=headers)
+            assert status == 200, data
+            web.ACTIVE.clear()
+        status, data, _ = call(server, "POST", "/api/run",
+                               {"skill": str(skill), "tier": "t2a"}, headers=headers)
+        assert status == 429 and data["reason"] == "daily"
+
+        # 额度按 token 独立：没带覆盖字段的另一个 token 仍按默认 8 次/天
+        other = web.token_admin.issue("普通用户")
+        status, data, _ = call(server, "POST", "/api/run", {"skill": str(skill), "tier": "t2a"},
+                               headers={"X-Skill-Eval-Token": other["token"]})
+        assert status == 200, data
+
+
+def test_token_concurrency_override_and_per_actor_counting(tmp_path, monkeypatch):
+    skill = make_skill(tmp_path)
+    tokens = tmp_path / "tokens.json"
+    with web_server(tmp_path, monkeypatch) as server:
+        token = web.token_admin.issue("单并发用户")
+        patch_token_quota(tokens, token["id"], max_concurrent=1)
+        headers = {"X-Skill-Eval-Token": token["token"]}
+        assert call(server, "POST", "/api/run",
+                    {"skill": str(skill), "tier": "t2a"}, headers=headers)[0] == 200
+        status, data, _ = call(server, "POST", "/api/run",
+                               {"skill": str(skill), "tier": "t2a"}, headers=headers)
+        assert status == 429 and data["reason"] == "concurrent" and data["scope"] == "actor"
+        # 并发按身份算：另一个 token 还能起（全局默认 4 并发）
+        other = web.token_admin.issue("另一个用户")
+        status, data, _ = call(server, "POST", "/api/run", {"skill": str(skill), "tier": "t2a"},
+                               headers={"X-Skill-Eval-Token": other["token"]})
+        assert status == 200, data
+
+
+def test_global_concurrency_blocks_other_actor(tmp_path, monkeypatch):
+    skill = make_skill(tmp_path)
+    with web_server(tmp_path, monkeypatch) as server:
+        # 本地额度配置在 check 时读取：不重启服务即可生效
+        (tmp_path / "limits.json").write_text(json.dumps({"global": {"concurrent": 1}}),
+                                              encoding="utf-8")
+        assert call(server, "POST", "/api/run", {"skill": str(skill), "tier": "t0"})[0] == 200
+        status, data, _ = call(server, "POST", "/api/run",
+                               {"skill": str(skill), "tier": "t0"},
+                               cookie="se_guest=" + "d" * 32)
+        assert status == 429 and data["scope"] == "global" and data["reason"] == "concurrent"
+
+
+def test_cleanup_drops_records_older_than_retention(tmp_path, monkeypatch):
+    monkeypatch.setattr(web.ratelimit, "DB", tmp_path / "usage.sqlite3")
+    actor = {"kind": "guest", "id": "g" * 32, "name": "游客"}
+    assert web.ratelimit.record(actor, "t0") is True
+    conn = sqlite3.connect(str(tmp_path / "usage.sqlite3"))
+    conn.execute("INSERT INTO usage (ts, bucket, actor_id, ip, action) VALUES (?, ?, ?, ?, ?)",
+                 (time.time() - 40 * 86400, "guest.t0", "old", "127.0.0.1", "run"))
+    conn.commit()
+    conn.close()
+    assert web.ratelimit.cleanup() == 1
+    assert usage_rows(tmp_path) == 1
+
+
+def test_ui_shows_quota_error_for_429():
+    html = (WEB_APP.parent / "index.html").read_text(encoding="utf-8")
+    assert 'r.status === 429' in html
+    assert "配额已用完" in html and "retry_after" in html
+    assert 'id="errorBar"' in html          # 沿用现有错误条，不另起一套提示
+
+
+def test_quota_survives_server_restart(tmp_path, monkeypatch):
+    skill = make_skill(tmp_path)
+    with web_server(tmp_path, monkeypatch) as server:
+        _, _, cookie = call(server, "POST", "/api/run", {"skill": str(skill), "tier": "t1"})
+        web.ACTIVE.clear()
+        for _ in range(2):
+            call(server, "POST", "/api/run", {"skill": str(skill), "tier": "t1"}, cookie=cookie)
+            web.ACTIVE.clear()
+    # 重启等价：ACTIVE 清空、计数库留在磁盘上，额度不因重启复位
+    with web_server(tmp_path, monkeypatch) as server:
+        status, data, _ = call(server, "POST", "/api/run",
+                               {"skill": str(skill), "tier": "t1"}, cookie=cookie)
+        assert status == 429 and data["reason"] == "hourly"
+
+
+# --- 容器能力：/api/capabilities、T2/T3 412、T0/T1 不受影响 ---
+
+def deny_container_capability(tier, *, adapter=None, isolation=None, sandbox_status=None):
+    if tier in web.capabilities.CONTAINER_TIERS:
+        return {"tier": tier, "isolation": "docker", "ok": False,
+                "missing": ["docker"], "reasons": ["缺少 docker CLI：需要容器运行时"],
+                "fix": ["安装 Docker Desktop"], "warnings": [], "container": None,
+                "adapter": {"name": adapter or "pi", "available": True, "reason": ""}}
+    return allow_capability(tier, adapter=adapter, isolation=isolation)
+
+
+def test_capabilities_endpoint_lists_every_tier(tmp_path, monkeypatch):
+    with web_server(tmp_path, monkeypatch) as server:
+        status, data, _ = call(server, "GET", "/api/capabilities")
+    assert status == 200
+    assert set(data["tiers"]) == {"t0", "t1", "t2a", "t2b", "t3"}
+    assert data["tiers"]["t0"]["ok"] is True
+    assert data["container"]["engine"] == "docker"
+    assert data["model_proxy"]["configured"] is False
+
+
+def test_t2_without_container_returns_412_without_side_effects(tmp_path, monkeypatch):
+    skill = make_skill(tmp_path)
+    audit = tmp_path / "audit.jsonl"
+    with web_server(tmp_path, monkeypatch) as server:
+        monkeypatch.setattr(web.capabilities, "check", deny_container_capability)
+        token = web.token_admin.issue("容器缺失用户")
+        before = {p.name for p in (tmp_path / "runs").iterdir()}
+        status, data, headers, _ = request(
+            server, "POST", "/api/run", {"skill": str(skill), "tier": "t2a"},
+            headers={"X-Skill-Eval-Token": token["token"]})
+        assert status == 412
+        assert data["missing"] == ["docker"] and data["isolation"] == "docker"
+        assert "容器运行时" in data["error"] and data["fix"]
+        assert {p.name for p in (tmp_path / "runs").iterdir()} == before   # 不建 run 目录
+        assert not (tmp_path / "usage.sqlite3").exists()                   # 不扣配额
+        events = [json.loads(line) for line in audit.read_text(encoding="utf-8").splitlines()]
+        missing = [e for e in events if e["action"] == "dep_missing"]
+        assert missing and missing[-1]["status"] == 412 and missing[-1]["tier"] == "t2a"
+        assert "docker" in missing[-1]["detail"]
+
+
+def test_t0_t1_still_run_when_container_missing(tmp_path, monkeypatch):
+    skill = make_skill(tmp_path)
+    with web_server(tmp_path, monkeypatch) as server:
+        monkeypatch.setattr(web.capabilities, "check", deny_container_capability)
+        for tier in ("t0", "t1"):
+            status, data, _ = call(server, "POST", "/api/run",
+                                   {"skill": str(skill), "tier": tier})
+            assert status == 200, data
+            web.ACTIVE.clear()
+        token = web.token_admin.issue("容器缺失用户")
+        status, data, _ = call(server, "POST", "/api/run",
+                               {"skill": str(skill), "tier": "t2a"},
+                               headers={"X-Skill-Eval-Token": token["token"]})
+        assert status == 412
+
+
+def test_container_run_passes_isolation_to_runner(tmp_path, monkeypatch):
+    skill = make_skill(tmp_path)
+    captured = {}
+
+    class _CaptureProc(_FakeProc):
+        def __init__(self, cmd=None, **kwargs):
+            super().__init__(cmd, **kwargs)
+            captured.setdefault("cmds", []).append(list(cmd or []))
+
+    with web_server(tmp_path, monkeypatch) as server:
+        monkeypatch.setattr(web.subprocess, "Popen", _CaptureProc)
+        token = web.token_admin.issue("容器用户")
+        status, data, _ = call(server, "POST", "/api/run",
+                               {"skill": str(skill), "tier": "t3"},
+                               headers={"X-Skill-Eval-Token": token["token"]})
+        assert status == 200, data
+        cmd = captured["cmds"][-1]
+        assert "--isolation" in cmd and cmd[cmd.index("--isolation") + 1] == "docker"
+
+
+def test_ui_loads_capabilities_and_blocks_container_tiers():
+    html = (WEB_APP.parent / "index.html").read_text(encoding="utf-8")
+    assert 'fetch("/api/capabilities?adapter="' in html
+    assert 'id="capabilityNote"' in html
+    assert "adapterLabel" in html and "claude-code" in html
+    assert "缺少容器运行时" in html
+    assert "当前深度不可运行" in html
+    assert "ADR" not in html and "T2B" not in html

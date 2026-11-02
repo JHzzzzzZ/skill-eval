@@ -1,8 +1,10 @@
-"""运行引擎（#10/#13/#11/#12/#15/#16 的数据源）。Seam: python trace_run.py <沙箱目录> <prompt> [--skill <path>|--no-skill]
+"""运行引擎（#10/#13/#11/#12/#15/#16 的数据源）。Seam: python trace_run.py <沙箱目录> <prompt> [--skill <path>|--no-skill] [--adapter <name>] [--isolation host|docker]
 
-实跑模式调用 pi CLI --mode json --no-session 采集事件流，聚合为 trace JSON 输出。
---events <jsonl>  : 离线解析已采集的事件流（测试/重算用），跳过实跑
+实跑模式按 --adapter（默认 pi，--harness 为同义别名）构造命令、采集事件流，聚合为 trace JSON 输出。
+--events <jsonl>  : 离线解析已采集的事件流（测试/重算用），跳过实跑；同样接受 --adapter
 --build-only      : 只输出将要执行的命令，不运行（调试用）
+--isolation docker: 用 sandbox.py 把 agent 命令包进一次性容器（workdir → /work）；
+                    无容器运行时直接失败，不回退宿主。默认 host（旧测试与 T0/T1 行为不变）。
 trace 中的 triggered 判定：agent 是否执行了至少一次工具调用。
 """
 import _console
@@ -12,8 +14,6 @@ _console.fix()
 import hashlib
 import json
 import os
-import posixpath
-import re
 import shutil
 import subprocess
 import sys
@@ -24,37 +24,38 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from _subprocess import kill_tree as _kill_tree  # 共享：杀进程树（Windows cmd 壳问题）
 import _config
+import adapter_registry
+import sandbox
+from adapter_contract import ParseState, RunRequest, resolve_executable
+
+ISOLATIONS = ("host", "docker")
 
 # 供测试/外部直接导入（test_trace_run.test_kill_tree_terminates_wrapped_process）
 kill_tree = _kill_tree
 
 
-# 读取类动词（ADR-0007 修订二）：token 只报文件名时，要求同一条命令里有读取动词才算加载；
-# `find . -name SKILL.md` 这类只列名字、不读内容的调用不算——旧口径会在这一步误杀 should-not。
-READ_VERBS = re.compile(r"\b(?:cat|bat|less|more|head|tail|sed|awk|nl|open|type|gc|get-content|"
-                        r"read|read_text|readlines|wc|grep|rg|strings|diff|source|cut|sort|tr)\b")
-
-
 class EventAggregator:
-    """逐行聚合 pi --mode json 事件流。feed(line) 增量消费，result() 出 trace。
+    """逐行聚合 adapter 输出的规范化事件。feed(line) 增量消费，result() 出 trace。
 
-    early_exit=True（ADR-0007，触发评测专用）：检测到“已加载被测 skill”即置 stop，
-    编排层据此 kill 子进程，不再花 token 跑完剩余回答。精确判定仍由 trigger_judge.py 兜底。
+    默认 adapter=pi：旧构造签名、trace 字段与早停口径保持不变（ADR-0007）。
+    early_exit=True（触发评测专用）：收到 adapter 的 skill_loaded 事件即置 stop，编排层据此
+    kill 子进程，不再花 token 跑完剩余回答；精确判定仍由 trigger_judge.py 兜底。
+    skill_marker=None（没有加载被测 skill）→ adapter 不会报加载，恒不早停（跑完整）。
 
-    停止条件（ADR-0007 修订）：pi 是渐进式披露——启动时只有 name/description 进上下文，
-    SKILL.md 全文由模型决定使用时自己 read（实测 golden 全部第 0 步 read，但
-    trig-shouldnot-3 实证过“先探索 4 步才加载”）。因此停止条件是首次
-    args 指向被测 SKILL.md 的工具调用（= 加载事件本身），而不是任意首次工具调用：
-    后者会在 agent 先探索后加载时把触发 run 误杀成假阴性，系统性低估 recall。
-    skill_marker=None（没有加载被测 skill）→ 无可匹配的加载事件，恒不早停（跑完整）。"""
+    停止条件是首次 args 指向被测 SKILL.md 的工具调用（= 加载事件本身），而不是任意首次
+    工具调用：后者会在 agent 先探索后加载时把触发 run 误杀成假阴性，系统性低估 recall。
+    判定逻辑由 adapter 用共享的 SkillLoadMatcher 完成，core 只认规范化事件。"""
 
     def __init__(self, early_exit: bool = False, skill_marker: str | None = None,
-                 cwd: str | None = None, max_steps: int = 0, max_tokens: int = 0):
+                 cwd: str | None = None, max_steps: int = 0, max_tokens: int = 0,
+                 adapter=None):
         self.early_exit = early_exit
         self.skill_marker = skill_marker
         self.cwd = cwd  # 解析相对路径 token 的基准（实测：agent 用 `cd <dir> && cat SKILL.md`）
         self.max_steps = max(0, int(max_steps or 0))
         self.max_tokens = max(0, int(max_tokens or 0))
+        self.adapter = adapter or adapter_registry.get("pi")
+        self.state = ParseState(skill_marker=skill_marker, cwd=cwd, early_exit=bool(early_exit))
         self.limit_hit = None
         self.stop = False
         self.steps, self.errors, self.usage_totals, self.answer_parts = [], [], [], []
@@ -68,123 +69,45 @@ class EventAggregator:
         if self.max_tokens and (total or 0) >= self.max_tokens:
             self._limit("token", self.max_tokens)
 
+    def _step_entry(self, event: dict) -> dict:
+        raw_args = event.get("args")
+        args_hash = hashlib.sha256(json.dumps(raw_args, sort_keys=True).encode()).hexdigest()[:8]
+        step = {"tool": event.get("tool") or "?", "args": raw_args, "args_hash": args_hash}
+        # 有界保留原始 args（ISS-3：触发判定/过程审计要第一手证据）。旧版上限 200 字符：
+        # 实测 pi 的 bash/read 工具 args 是 **dict**（{"command": ...}），该分支对它们从未生效，
+        # 而字符串形态的工具参数会被切到 200。上限提到 2000 并在截断时留标记（ADR-0024）。
+        args_limit = _config.get_int("run.args_max_chars", 2000)
+        if isinstance(raw_args, str) and len(raw_args) > args_limit:
+            step["args"] = raw_args[:args_limit]
+            step["args_truncated"] = True
+        return step
+
     def feed(self, line: str):
-        line = line.strip()
-        if not line or self.stop:
+        if not line or not line.strip() or self.stop:
             return
-        try:
-            ev = json.loads(line)
-        except json.JSONDecodeError as e:
-            self.errors.append(f"非法事件行: {e}")
-            return
-        if not isinstance(ev, dict) or "type" not in ev:
-            self.errors.append(f"事件缺 type 字段: {line[:80]}")
-            return
-        t = ev["type"]
-        if t == "tool_execution_start":
-            raw_args = ev.get("args")
-            args_hash = hashlib.sha256(json.dumps(raw_args, sort_keys=True).encode()).hexdigest()[:8]
-            hit = self.early_exit and self._hit_marker(raw_args, ev.get("toolName"))  # 用完整 args 判命中
-            step = {"tool": ev.get("toolName", "?"), "args": raw_args, "args_hash": args_hash}
-            # 有界保留原始 args（ISS-3：触发判定/过程审计要第一手证据）。旧版上限 200 字符：
-            # 实测 pi 的 bash/read 工具 args 是 **dict**（{"command": ...}），该分支对它们从未生效，
-            # 而字符串形态的工具参数会被切到 200。上限提到 2000 并在截断时留标记（ADR-0024）。
-            args_limit = _config.get_int("run.args_max_chars", 2000)
-            if isinstance(raw_args, str) and len(raw_args) > args_limit:
-                step["args"] = raw_args[:args_limit]
-                step["args_truncated"] = True
-            self.steps.append(step)
-            if hit:
-                self.stop = True  # 加载事件 = 触发决定点：后续 token 不再花
-                return
-            if self.max_steps and len(self.steps) >= self.max_steps:
-                self._limit("步数", self.max_steps)
-                return
-        elif t == "tool_execution_end" and ev.get("isError"):
-            self.errors.append(f"工具错误 {ev.get('toolCallId')}: {str(ev.get('result'))[:200]}")
-        if t == "turn_end":
-            u = ev.get("usage") or {}
-            self._usage(u.get("totalTokens") or u.get("tokens", {}).get("total") or 0)
-        elif t == "agent_end":
-            for msg in ev.get("messages", []):
-                if isinstance(msg, dict) and msg.get("role") == "assistant":
-                    self._usage((msg.get("usage") or {}).get("totalTokens") or 0)
-                    for c in msg.get("content", []):
-                        if isinstance(c, dict) and c.get("type") == "text" and c.get("text"):
-                            self.answer_parts.append(c["text"])  # ISS-3: 最终回答全文
-                    if self.stop:
-                        return
-
-    def _hit_marker(self, raw_args, tool: str | None = None) -> bool:
-        """停止条件：args 解析到被测 SKILL.md 才算命中；无 marker → 恒不命中（跑完整）。
-
-        匹配用 args 的原始值（dict/list 递归取值）而不是 json.dumps——dumps 会把
-        Windows 路径的 \\ 转义成 \\\\，归一化后与 marker 永远对不上（冒烟实测踩坑）。
-        分隔符/连续斜杠/大小写归一（模型回读时可能用 / 或 \\）。
-
-        ADR-0007 修订二（实测：4 条触发探针 0 次早停）：agent 普遍用
-        `cd <skill目录> && cat SKILL.md` 这种**相对路径**加载，而旧实现只做绝对路径
-        子串匹配 → 加载了也不停，白跑完整 run（单条 85~358s / 3.7 万~9.4 万 token）。
-        现按“路径解析”判：逐 token 解析到 <skill目录>/SKILL.md——相对路径按同一条
-        命令里最近的 `cd` 目标解析，否则按运行 cwd（self.cwd）；裸文件名还要求**同一条
-        简单命令**（按管道/`;`/`&&` 切分）里有读取动词——`find . -name SKILL.md | head -20`
-        这类只列名字、不读内容的调用不算加载（实测误报两次）。
-        """
-        if not self.skill_marker:
-            return False
-
-        def strings(x):
-            if isinstance(x, str):
-                yield x
-            elif isinstance(x, dict):
-                for v in x.values():
-                    yield from strings(v)
-            elif isinstance(x, (list, tuple)):
-                for v in x:
-                    yield from strings(v)
-
-        norm = lambda s: re.sub(r"/+", "/", str(s).replace("\\", "/")).lower()
-
-        def absolute(p: str) -> str:
-            """归一化后是真绝对路径才返回（盘符或根目录开头），否则空串。"""
-            p = posixpath.normpath(p)
-            return p if re.match(r"^[a-z]:/", p) or p.startswith("/") else ""
-
-        marker = absolute(norm(self.skill_marker))
-        if not marker:
-            return False
-        # marker 可传目录（--skill <dir>）或文件（--skill <dir>/SKILL.md）：统一成文件路径
-        file_marker = marker if marker.endswith(".md") else marker + "/skill.md"
-        root = absolute(norm(self.cwd)) if self.cwd else ""
-        if marker in norm(" ".join(strings(raw_args))):
-            return True  # 绝对路径直配（read 工具 / 显式传绝对路径）
-
-        def resolve(tok: str, base: str) -> str:
-            got = absolute(tok)
-            if got:
-                return got
-            return posixpath.normpath(f"{base}/{tok}") if base else ""
-
-        for s in strings(raw_args):
-            base = root
-            # 按管道/命令分隔符切成“简单命令”：读取动词与 SKILL.md 必须落在同一段里
-            # （实测误报：`find . -name SKILL.md | head -20` 里的 head 曾让整个调用命中）
-            for seg in re.split(r"[;&|\n]+", norm(s)):
-                toks = [t for t in re.split(r"[\s'\"`()<>]+", seg) if t]
-                for i, tok in enumerate(toks):
-                    if tok == "cd" and i + 1 < len(toks):  # 同一串里跟踪 cd 目标
-                        base = resolve(toks[i + 1], base) or base
-                targets = [t for t in toks
-                           if t.endswith("skill.md") and resolve(t, base) == file_marker]
-                if not targets:
-                    continue
-                if any("/" in t for t in targets):
-                    return True  # 带目录分隔符 = 明确指到文件
-                if tool and READ_VERBS.search(str(tool)):
-                    return True  # read 工具本身就是读取动词（args 只有裸 SKILL.md）
-                if READ_VERBS.search(seg):
-                    return True  # bash 裸文件名：同一段里要真有读取动词
-        return False
+        events = self.adapter.parse(line.strip(), self.state)
+        step_added = False
+        for event in events:
+            if self.stop:
+                break  # 加载事件/上限已定：同一条输出行里剩余事件不再计入
+            kind = event.get("type")
+            if kind == "step":
+                self.steps.append(self._step_entry(event))
+                step_added = True
+            elif kind == "tool_error":
+                self.errors.append(f"工具错误 {event.get('id')}: {event.get('message')}")
+            elif kind == "usage":
+                self._usage(event.get("tokens"))
+            elif kind == "answer":
+                self.answer_parts.append(event.get("text"))
+            elif kind == "skill_loaded":
+                if self.early_exit:
+                    self.stop = True
+            elif kind == "adapter_error":
+                self.errors.append(str(event.get("message")))
+        # 步数上限放在整行事件之后判：同行的加载事件优先（否则 marker 命中会被误记成 limit）
+        if step_added and not self.stop and self.max_steps and len(self.steps) >= self.max_steps:
+            self._limit("步数", self.max_steps)
 
     def result(self) -> dict:
         trace = {
@@ -198,6 +121,9 @@ class EventAggregator:
             "triggered": bool(self.steps),
             "passed": not self.errors,
         }
+        # adapter 特有字段（如 cost_usd）不得覆盖 core 的 trace 字段
+        for key, value in (self.adapter.finalize(self.state) or {}).items():
+            trace.setdefault(key, value)
         if self.limit_hit:
             trace["limit_hit"] = self.limit_hit
             trace["errors"].append(f"触发上限：{self.limit_hit}")
@@ -208,9 +134,10 @@ class EventAggregator:
 
 
 def parse_events(lines, early_exit: bool = False, skill_marker: str | None = None,
-                 cwd: str | None = None, max_steps: int = 0, max_tokens: int = 0) -> dict:
-    """把 pi --mode json 的事件流聚合为 trace。非法行计入 errors，不中断。"""
-    agg = EventAggregator(early_exit, skill_marker, cwd, max_steps, max_tokens)
+                 cwd: str | None = None, max_steps: int = 0, max_tokens: int = 0,
+                 adapter=None) -> dict:
+    """把事件流聚合为 trace。非法行计入 errors，不中断。adapter 默认 pi。"""
+    agg = EventAggregator(early_exit, skill_marker, cwd, max_steps, max_tokens, adapter=adapter)
     for line in lines:
         agg.feed(line)
         if agg.stop:
@@ -250,34 +177,43 @@ def _revert_escape(repo: str, lines) -> list:
 
 def build_args(worktree: str, prompt: str, skill=None,
                model: str = None, thinking: str = None, provider: str = None) -> list:
-    """pi CLI 命令。模型：--model 显式传参 > SKILL_EVAL_MODEL 环境变量 > pi 默认。
+    """兼容封装：pi 命令构造（实现已移到 adapter_pi.build_args）。
 
     skill 可为单个路径、路径列表或逗号分隔串；可重复传 --skill（补丁 B5）。
-    始终带 --no-skills（关闭 skill 自动发现）：否则发现到的全局同名 skill 会
-    屏蔽被测版本（故--skill 会被静默忽略），测量不再可复现（补丁 B3）。"""
-    cmd = ["pi", "--mode", "json", "--no-session", "--no-skills"]
+    """
     if isinstance(skill, str):
         skills = [s.strip() for s in skill.split(",") if s.strip()]
     else:
         skills = [s for s in (skill or []) if s]
-    for s in skills:
-        # 解析为绝对路径：子进程 cwd=worktree，相对路径会按 worktree 解析
-        # 导致 skill 静默不加载（实测冒烟踩坑）
-        cmd += ["--skill", str(Path(s).resolve())]
-    eff_model = model or os.environ.get(DEFAULT_MODEL_ENV)
-    if eff_model:
-        if provider and "/" not in eff_model:
-            cmd += ["--provider", provider]
-        cmd += ["--model", eff_model]
-    if thinking:
-        cmd += ["--thinking", thinking]
-    cmd += ["--", prompt]
-    return cmd
+    request = RunRequest(prompt=prompt, cwd=worktree or "", skill_dir=skills[0] if skills else None,
+                         skill_dirs=tuple(skills), model=model, thinking=thinking, provider=provider)
+    return adapter_registry.get("pi").command(request)
+
+
+def _make_request(worktree, prompt, skills, no_skill, model, thinking, provider,
+                  early_exit=False, max_steps=0, max_tokens=0) -> RunRequest:
+    """CLI 参数 → RunRequest（no_skill 时不把 skill 交给 adapter；env=None = 继承进程环境）。"""
+    chosen = [] if no_skill else [s for s in skills or [] if s]
+    return RunRequest(prompt=prompt or "", cwd=worktree or "",
+                      skill_dir=chosen[0] if chosen else None, skill_dirs=tuple(chosen),
+                      no_skill=bool(no_skill), model=model, thinking=thinking, provider=provider,
+                      early_exit=bool(early_exit), max_steps=max_steps, max_tokens=max_tokens)
+
+
+def _error_trace(adapter, message: str, version: str = "") -> dict:
+    trace = parse_events([], adapter=adapter)
+    trace["errors"] = [message]
+    trace["passed"] = False
+    trace["adapter"] = adapter.name
+    trace["adapter_version"] = version
+    return trace
 
 
 def main():
     args = sys.argv[1:]
     worktree = prompt = model = thinking = provider = out_path = None
+    adapter_name = adapter_registry.DEFAULT
+    isolation = "host"
     skills = []
     guard_repos = []
     guard_revert = False
@@ -285,10 +221,11 @@ def main():
     # 位置参数形式（seam 声明）：trace_run.py <worktree> <prompt>
     positional = [a for i, a in enumerate(args) if a not in (
         "--events", "--build-only", "--worktree", "--prompt", "--skill", "--no-skill", "--early-exit",
-        "--out", "--model", "--thinking", "--provider", "--guard-repo", "--guard-revert", "--")
+        "--out", "--model", "--thinking", "--provider", "--guard-repo", "--guard-revert",
+        "--adapter", "--harness", "--isolation", "--")
         and (i == 0 or args[i - 1] not in (
             "--events", "--worktree", "--prompt", "--skill", "--out", "--model", "--thinking",
-            "--provider", "--guard-repo"))
+            "--provider", "--guard-repo", "--adapter", "--harness", "--isolation"))
     ]
     i = 0
     while i < len(args):
@@ -318,11 +255,34 @@ def main():
             guard_repos.append(args[i + 1]); i += 2
         elif args[i] == "--guard-revert":
             guard_revert = True; i += 1
+        elif args[i] in ("--adapter", "--harness"):  # --harness 是旧名，等价 --adapter
+            adapter_name = args[i + 1]; i += 2
+        elif args[i] == "--isolation":
+            isolation = args[i + 1]; i += 2
         else:
             i += 1
 
+    try:
+        adapter = adapter_registry.get(adapter_name)
+    except adapter_registry.UnknownAdapterError as exc:
+        print(str(exc), file=sys.stderr)  # 不静默回退 pi：未知载体直接失败
+        sys.exit(2)
+    if isolation not in ISOLATIONS:
+        print(f"--isolation 只支持 {'|'.join(ISOLATIONS)}，当前：{isolation}", file=sys.stderr)
+        sys.exit(2)
+
+    if not worktree and len(positional) >= 2:
+        worktree, prompt = positional[0], positional[1]  # 位置参数形式（build-only/events 也认）
+
     if build_only:
-        print(json.dumps({"command": build_args(worktree, prompt, skills, model, thinking, provider)}, ensure_ascii=False))
+        request = _make_request(worktree, prompt, skills, no_skill, model, thinking, provider)
+        command = adapter.command(request)
+        if isolation == "docker":
+            if not worktree:
+                print("docker 模式需要 worktree 目录", file=sys.stderr)
+                sys.exit(2)
+            command = sandbox.DockerBackend().wrap(command, worktree, prompt=request.prompt)
+        print(json.dumps({"command": command}, ensure_ascii=False))
         return
 
     if events_file:
@@ -333,66 +293,84 @@ def main():
         trace = parse_events(Path(events_file).read_text(encoding="utf-8", errors="replace").splitlines(),
                              early_exit=bool(early_exit), skill_marker=marker, cwd=worktree,
                              max_steps=_config.get_int("run.trigger_max_steps", 30) if early_exit else 0,
-                             max_tokens=_config.get_int("run.trigger_max_tokens", 120000) if early_exit else 0)
+                             max_tokens=_config.get_int("run.trigger_max_tokens", 120000) if early_exit else 0,
+                             adapter=adapter)
         trace["model"] = model or os.environ.get(DEFAULT_MODEL_ENV)  # 宿主 pin：离线重算时至少记意图
+        trace["adapter"] = adapter.name
+        trace["adapter_version"] = ""  # 离线解析不探测二进制，避免测试依赖本机安装
         if out_path:
             _console.write_text(out_path, json.dumps(trace, ensure_ascii=False, indent=2))
         print(json.dumps(trace, ensure_ascii=False))
         return
 
-    if not worktree and len(positional) >= 2:
-        worktree, prompt = positional[0], positional[1]  # 位置参数形式
     if not worktree or not prompt:
-        print("usage: trace_run.py <worktree> <prompt> [--skill <path>|--no-skill] [--events <jsonl>] [--out <file>]",
-              file=sys.stderr)
+        print("usage: trace_run.py <worktree> <prompt> [--skill <path>|--no-skill] [--adapter <name>] "
+              "[--isolation host|docker] [--events <jsonl>] [--out <file>]", file=sys.stderr)
         sys.exit(2)
 
-    cmd = build_args(worktree, prompt, None if no_skill else skills, model, thinking, provider)
-    # Windows 上 pi 是 pi.cmd，subprocess 不解析 PATHEXT，需显式解析绝对路径
-    resolved = shutil.which("pi") or shutil.which("pi.cmd") or shutil.which("pi.exe")
-    if not resolved:
-        trace = parse_events([])
-        trace["errors"] = ["pi CLI 不存在：请先安装 pi（npm i -g @earendil-works/pi-coding-agent）"]
-        trace["passed"] = False
-        print(json.dumps(trace, ensure_ascii=False))
+    trigger_timeout = max(1, _config.get_int("run.trigger_timeout_s", 90))
+    trigger_max_steps = max(0, _config.get_int("run.trigger_max_steps", 30))
+    trigger_max_tokens = max(0, _config.get_int("run.trigger_max_tokens", 120000))
+    request = _make_request(worktree, prompt, skills, no_skill, model, thinking, provider,
+                            early_exit=bool(early_exit),
+                            max_steps=trigger_max_steps if early_exit else 0,
+                            max_tokens=trigger_max_tokens if early_exit else 0)
+    available, version = adapter.available()
+    if not available:
+        print(json.dumps(_error_trace(adapter, version), ensure_ascii=False))
         return
-    cmd[0] = resolved
+    cmd = adapter.command(request)
+    # Windows 上 pi 是 pi.cmd，subprocess 不解析 PATHEXT，需显式解析绝对路径。
+    # docker 模式解析宿主路径没有意义：容器里用自己的 PATH。
+    resolved = resolve_executable(adapter.binary)
+    if resolved and isolation == "host":
+        cmd[0] = resolved
     # 宿主 pin（ADR-0009 延伸）：trace 记录实际执行环境，事后可归因（同题方差分析/复现）
     host = {"model": model or os.environ.get(DEFAULT_MODEL_ENV),
-            "pi": Path(resolved).name, "platform": sys.platform}
-    try:
-        pi_ver = subprocess.run([resolved, "--version"], capture_output=True, text=True,
-                                timeout=15, errors="replace")
-        if pi_ver.returncode == 0:
-            host["pi"] = (pi_ver.stdout or "").strip().splitlines()[-1][:80] if (pi_ver.stdout or "").strip() else host["pi"]
-    except (OSError, subprocess.TimeoutExpired):
-        pass  # 版本探测失败不阻断主流程
+            "adapter": adapter.name, "adapter_version": version, "platform": sys.platform,
+            "isolation": isolation}
+    if adapter.name == "pi":
+        host["pi"] = version  # 旧字段保留：历史归因脚本按名读它
     if not Path(worktree).is_dir():
-        trace = parse_events([])
-        trace["errors"] = [f"worktree 目录不存在: {worktree}"]
-        trace["passed"] = False
-        print(json.dumps(trace, ensure_ascii=False))
+        print(json.dumps(_error_trace(adapter, f"worktree 目录不存在: {worktree}", version),
+                         ensure_ascii=False))
         return
+    backend = None
+    if isolation == "docker":
+        backend = sandbox.DockerBackend()
+        status = backend.status()
+        if not status.available:
+            print(json.dumps(_error_trace(
+                adapter, f"容器不可用：{status.summary()}；T2/T3 不回退宿主执行", version),
+                ensure_ascii=False))
+            return
+        cmd = backend.wrap(cmd, worktree, prompt=request.prompt)
+        host["sandbox"] = status.as_dict()
+    try:
+        adapter.prepare(request)  # 如 Claude 装项目级 skill；pi 无需安装
+    except OSError as exc:
+        print(json.dumps(_error_trace(adapter, f"adapter 准备失败（{adapter.name}）: {exc}", version),
+                         ensure_ascii=False))
+        return
+    # docker 隔离只挂 workdir：宿主写入检测不适用，明确标记而不是静默跳过。
+    guard_applicable = isolation == "host"
     guard_before = {}
-    for repo in guard_repos:
+    for repo in (guard_repos if guard_applicable else []):
         if Path(repo).is_dir():
             guard_before[repo] = _porcelain(repo)
         else:
             print(f"[guard] 仓库不存在，跳过: {repo}", file=sys.stderr)
-    trigger_timeout = max(1, _config.get_int("run.trigger_timeout_s", 90))
-    trigger_max_steps = max(0, _config.get_int("run.trigger_max_steps", 30))
-    trigger_max_tokens = max(0, _config.get_int("run.trigger_max_tokens", 120000))
     t0 = time.time()
     try:
         if not early_exit:
-            # 全量模式：等 pi 跑完再聚合，保留 600s 超时语义
+            # 全量模式：等载体跑完再聚合，保留 600s 超时语义
             proc = subprocess.run(cmd, cwd=worktree, capture_output=True, text=True,
                                   encoding="utf-8", errors="replace", timeout=600)
             elapsed = time.time() - t0
-            trace = parse_events(proc.stdout.splitlines())
+            trace = parse_events(proc.stdout.splitlines(), adapter=adapter)
             trace["seconds"] = round(elapsed, 2)
             if proc.returncode != 0 and not trace["errors"]:
-                trace["errors"].append(f"pi 退出码 {proc.returncode}: {proc.stderr[-300:]}")
+                trace["errors"].append(f"{adapter.name} 退出码 {proc.returncode}: {proc.stderr[-300:]}")
                 trace["passed"] = False
         else:
             # ADR-0007 early-exit：流式消费事件流，检测到 skill 已使用即 kill
@@ -403,10 +381,13 @@ def main():
             watchdog = threading.Timer(trigger_timeout,
                                        lambda: (killed_by_watchdog.set(), _kill_tree(proc)))
             watchdog.start()
-            agg = EventAggregator(early_exit=True,
-                                  skill_marker=str(Path(skills[0]).resolve()) if (skills and not no_skill) else None,
-                                  cwd=worktree, max_steps=trigger_max_steps,
-                                  max_tokens=trigger_max_tokens)
+            marker = str(Path(skills[0]).resolve()) if (skills and not no_skill) else None
+            if marker and backend:
+                marker = backend.rewrite_path(marker, worktree)  # 容器内看到的是 /work/...
+            agg = EventAggregator(early_exit=True, skill_marker=marker,
+                                  cwd=backend.workdir if backend else worktree,
+                                  max_steps=trigger_max_steps,
+                                  max_tokens=trigger_max_tokens, adapter=adapter)
             try:
                 for line in proc.stdout:
                     agg.feed(line)
@@ -438,16 +419,22 @@ def main():
             except (OSError, ValueError):
                 pass
             if timed_out:
-                # watchdog 杀的树：明确报超时，而不是误导性的「pi 退出码」；保留部分 steps 作证据
+                # watchdog 杀的树：明确报超时，而不是误导性的「退出码」；保留部分 steps 作证据
                 trace["errors"] = [f"运行超时（{trigger_timeout}s）"]
                 trace["passed"] = False
             elif proc.returncode not in (0, None) and not trace["errors"] and not agg.stop:
-                trace["errors"].append(f"pi 退出码 {proc.returncode}: {stderr[-300:]}")
+                trace["errors"].append(f"{adapter.name} 退出码 {proc.returncode}: {stderr[-300:]}")
                 trace["passed"] = False
     except subprocess.TimeoutExpired:
-        trace = parse_events([])
+        trace = parse_events([], adapter=adapter)
         trace["errors"] = ["运行超时（600s）"]
         trace["passed"] = False
+    trace["adapter"] = adapter.name
+    trace["adapter_version"] = version
+    if guard_repos and not guard_applicable:
+        trace["guard"] = {"applicable": False, "repos": [], "escaped_writes": [],
+                          "reverted": [],
+                          "reason": "docker 隔离：只挂载 workdir，不检测宿主写入"}
     if guard_before:
         # 越界写入检测（ADR-0027）：沙箱副本只限定 cwd，不限定写权限——实测 agent 会走出沙箱
         # 改真实仓库（README.md、judges/*.md、自己造 scratch/）。run 前后各拍一次 git 脏状态，

@@ -18,9 +18,11 @@ SKILL.md 的细则层。16 条指标编号见 ADR-0032（按档位连续）。�
 
 ## 沙箱
 
-沙箱 = `results/sandbox` 的**普通副本 + git 初始化**：runner 把被测 skill 复制到结果目录，`git init` 后提交一次快照；运行 cwd 固定在该副本内。不建 git worktree，也不在每次 run 前清理副本。未来若替换为 Docker，只改本节定义，SKILL.md 流程不变。
+T2/T3 默认走 Docker 一次性容器（`scripts/sandbox.py`）：workdir 是 `results/sandbox` 的副本，容器只挂载该目录到 `/work`，rootfs 只读，`--network none`、`--cap-drop ALL`、pids/memory/cpu 限制，结束即销毁；不挂宿主 `$HOME`、`~/.pi`、凭据或 docker.sock。T0/T1 不经过容器。`--isolation host` 仅是显式本地开发逃生门，不是安全边界，也不会自动回退。
 
-隔离边界（ADR-0018/0027）：副本只限定 cwd，不限定 agent 的写权限——实测带真实仓库路径的 prompt 会让 agent 走出副本，改了评估器仓库自己的 `README.md`（已回滚）。评测集里的 prompt 只能引用沙箱内路径；`evalset_check.py` 会把绝对路径 / `..` 逃逸报成 `out_of_sandbox`（clean=false）。
+能力判定由 `scripts/capabilities.py` 统一：T0/T1 只查基础依赖；T2/T3 还要求 Docker daemon、沙箱镜像和可用 adapter，缺失时 runner 退出码 3、页面 412，不建 run、不扣配额。`scripts/check-deps.sh --tier t2a` 是同一判定的 CLI 入口；无参数只查基础依赖，保证游客 T0/T1 不被 Docker 卡死。模型代理尚未实现：容器没有真实 API key，`--network none` 下需要模型的 T2/T3 会失败并明确提示，不会改用宿主执行。**在代理落地前，T2/T3 只能验证容器/依赖链路，不能完成需要模型的评估。**
+
+host 模式的隔离边界（ADR-0018/0027）：副本只限定 cwd，不限定 agent 的写权限——实测带真实仓库路径的 prompt 会让 agent 走出副本，改了评估器仓库自己的 `README.md`（已回滚）。评测集里的 prompt 只能引用沙箱内路径；`evalset_check.py` 会把绝对路径 / `..` 逃逸报成 `out_of_sandbox`（clean=false）。
 
 越界检测（ADR-0027）：跑 run 时带上 `--guard-repo <评估器仓库>`（可重复），trace 里会多出 `guard.escaped_writes`（run 前后 `git status` 的新增条目）；`--guard-revert` 才回退（未跟踪→删、已跟踪改动→`git checkout --`）。默认只报告，避免吃掉并行写入者的改动。
 
@@ -28,7 +30,7 @@ Windows 上杀 pi 子进程树用 `taskkill /T`（`_subprocess.py` 的硬依赖�
 
 权限边界（#4）：副本沙箱下只能做到静态扫描 + trace 审计（看 trace 里是否出现了不该有的命令），做不到强制拦截。扫描规则见 `scripts/static_check.py` 内的六组正则（ADR-0013/0029）：危险命令 / 硬编码凭据 / 注入指令 / 数据外发 / 混淆 / 个人信息。前四组命中即 fail，后两组仅 warn。
 
-依赖全面性（#12 静态面，ADR-0031）：`static_check.py` 报「用了什么 vs 声明了什么」——`deps_used`（shebang 解释器 / python import / `subprocess` 字面量 argv[0]）、`deps_declared`（SKILL.md 正文 + reference.md + `requirements.txt` + `check-deps.sh` 里出现过的名字，**任意出现即算声明，含随口提到——偏宽，漏报方向**）、`deps_missing`（差集）。缺声明只把 #12 降到 warn。已知漏检：argv 由变量拼时取不到 argv[0]；声明面是同义词不敏感的子串匹配（“Python3” 与 “python” 会漏判）。宿主基座（python/bash/sh/cmd/powershell…）不算未声明。
+依赖全面性（#12 静态面，ADR-0031）：`static_check.py` 报「用了什么 vs 声明了什么」——`deps_used`（shebang 解释器 / python import / `subprocess` 字面量 argv[0]）、`deps_declared`（SKILL.md 正文 + reference.md + `requirements.txt` + `check-deps.sh` 里出现过的名字，**任意出现即算声明，含随口提到——偏宽，漏报方向**）、`deps_missing`（差集）。缺声明只把 #12 降到 warn。运行期依赖探测由 capabilities 模块（`scripts/capabilities.py`）与 sandbox 模块（`scripts/sandbox.py`）承担（T2/T3 的 Docker/镜像/代理/adapter）；本段的静态声明面只判文档与包内声明。已知漏检：argv 由变量拼时取不到 argv[0]；声明面是同义词不敏感的子串匹配（“Python3” 与 “python” 会漏判）。宿主基座（python/bash/sh/cmd/powershell…）不算未声明。
 
 已知漏检（如实告知，不要当成"扫过就是安全"）：自造格式的高熵 token、改写的语义注入、跨段拼接的注入、无读取动词的 `.env` 引用。混淆与个人信息类命中仅警告，需人工复核。PII 静态面的边界：只能认格式化的个人标识（邮箱/手机号/身份证/银行卡/公网 IP，带 Luhn 与证件校验位），自造示例（如真实号段格式的假号码）会误报、工号与客户名会漏报——后者靠 `judges/pii.md` 四项检查点补。
 
@@ -129,7 +131,7 @@ T1 评审走 `llm` 接口层（ADR-0034）：模型 `--model` > `llm.model` > `S
 
 ## 执行载体与扩展点（ADR-0034）
 
-`scripts/harness.py` 是执行载体适配层：接口 `run_case(prompt, cwd, ...)`，当前只实现 `pi`（内部调用 `trace_run.py`，逐 case 一次 `pi --mode json --no-session`），触发评测带 `--early-exit`。`code_agent` 留接口不实现，前端只显示 `harness.available` 里的项。**不使用 subagent 机制**。
+`scripts/harness.py` 是执行载体适配层：接口 `run_case(prompt, cwd, ...)`，内部调用 `trace_run.py`，由 `scripts/adapter_registry.py` 选择 `pi` / `claude-code`。adapter 负责命令、事件翻译、skill 安装与早停能力；`trace_run` 只做通用聚合/上限/杀进程。前端只显示二进制可用的 adapter。新增 agent = 新增 `scripts/adapter_<name>.py` + 注册行 + fake 事件流测试，不改 runner/report/score。**不使用 subagent 机制**。
 
 ## 工作区
 
@@ -143,7 +145,7 @@ T1 评审走 `llm` 接口层（ADR-0034）：模型 `--model` > `llm.model` > `S
 - `POST /api/upload`：浏览器直接以 `application/zip` 流式上传，安全解压到临时目录后复制进工作区；返回 `workspace_id`/`workspace`/`skill`/`evalset`/`evalset_version`/`evalset_versions`/`skill_sha256`；拒绝 `..`/绝对路径/符号链接，限制 1GB 压缩包、2GB 解压体积、20000 个文件。旧 base64 分支仅兼容，UI 不使用。
 - `GET /api/workspaces`：返回 `{"workspaces": [{id,name,skill_sha256,skill,evalset,evalset_version,evalset_versions}]}`，供工作区与评测集版本下拉。
 - `GET /api/llm/config`、`POST /api/llm/test`：返回非敏感默认配置 / 测试连接。
-- `POST /api/run`：启动 runner；可带 `llm`（protocol/base_url/model/api_key）与 `real_cases`（数组，每条 `{prompt,note,expect}`；也兼容旧 `real_input` 字符串）。T2A/T2B/T3 必须带有效 `X-Skill-Eval-Token`，否则 401 且不启动；T0/T1 游客或 token 都可创建。`reuse_from`（复用另一个活动 run 的已完成产物）先校验该 run 归属，不匹配返回 403 并审计 `reuse_denied`，且不建新 run 目录。启动时写 `web/runs/<id>/run.json`（skill 名/tier/评测集/创建时间/skill_sha256/owner_kind/owner_id/owner_name/protected），供重启后历史列表与归属校验。
+- `POST /api/run`：启动 runner；可带 `llm`（protocol/base_url/model/api_key）与 `real_cases`（数组，每条 `{prompt,note,expect}`；也兼容旧 `real_input` 字符串）。T2A/T2B/T3 必须带有效 `X-Skill-Eval-Token`，否则 401 且不启动；T0/T1 游客或 token 都可创建。`reuse_from`（复用另一个活动 run 的已完成产物）先校验该 run 归属，不匹配返回 403 并审计 `reuse_denied`，且不建新 run 目录。**创建 run 目录之前先过限流**（见 § 限流）：超限返回 429 + `Retry-After` 与 `{ok:false,error,reason,scope,retry_after}`，审计 `rate_limited`，不建目录、不写 `run.json`、不消耗额度。启动时写 `web/runs/<id>/run.json`（skill 名/tier/评测集/创建时间/skill_sha256/owner_kind/owner_id/owner_name/protected），供重启后历史列表与归属校验。
 - `POST /api/stop`：终止当前 runner 后按产物做一次完成度判定，取**最高完整阶段**生成局部报告（`report.py --partial --completed-stages ...`，档位 = 该阶段）；响应带 `report`/`partial`/`completed_stages`/`error`。连 T0 都没完成时不生成空报告。
 - `GET /api/token/check`：校验 `X-Skill-Eval-Token`，返回 `{ok,id,name}`；无/未知/停用一律 401（不区分“格式错”与“不存在”，避免枚举），也不返回 hash。
 - `GET /api/status?id=`：先查活动 run，再回退 `web/runs/<id>/results/` 磁盘产物；返回 `running`/`returncode`/`stopped`/`partial`/`completed_stages`/`results`/`report`/`log`。
@@ -159,7 +161,7 @@ T1 评审走 `llm` 接口层（ADR-0034）：模型 `--model` > `llm.model` > `S
 
 ## 访问控制与审计
 
-访问矩阵：T0/T1 游客可跑；T2A/T2B/T3 必须带有效 token；评测集接口只对 token 开放；管理员不登录网页，只用 CLI 发/停 token。token 是**访问控制**，不是执行沙箱——`trace_run` 仍继承宿主环境、只限定 cwd。
+访问矩阵：T0/T1 游客可跑；T2A/T2B/T3 必须带有效 token；评测集接口只对 token 开放；管理员不登录网页，只用 CLI 发/停 token。token 是**访问控制**，不是执行沙箱。T2/T3 默认由 `scripts/sandbox.py` 放进一次性 Docker 容器；`--isolation host` 只用于显式本地开发。模型代理落地前容器不能访问模型，缺依赖时 fail closed。
 
 - 持久 token：`web/token_admin.py` 读写 `web/tokens.json`（gitignore），结构 `{"tokens":[{id,name,note,hash,created_at,active}]}`；只存 `sha256(token)`，明文只在 `issue` 时打印一次。格式 `se_<urlsafe 32 bytes>`。路径只来自模块常量与 CLI 全局参数 `--tokens-file` / `--audit-file`（默认 `web/tokens.json` / `web/audit.jsonl`），不新增环境变量。
 - CLI（无网页注册，全局参数写在子命令前）：`python web/token_admin.py [--tokens-file PATH] [--audit-file PATH] issue --name "张三" [--note "申请表 #12"]` / `list` / `revoke --id tok_ab12cd34`。停用后下一次校验立即失败；`list` 不显示 hash 与明文。
@@ -167,6 +169,27 @@ T1 评审走 `llm` 接口层（ADR-0034）：模型 `--model` > `llm.model` > `S
 - run 归属：`run.json` 的 `owner_kind` = `guest`/`token`/`legacy`（目录存在但没有 `run.json`，或缺字段，按 legacy）；`protected` = tier ∈ {t2a,t2b,t3}。按 run id 的接口（`/api/status`、`/api/report`、`/report`、`/api/log`、`/api/export`、`/api/compare`、`/api/stop`、`/api/override`、`/api/events`）先校验归属：kind 与 id 都必须匹配；legacy 只在 token 库为空时放行（一旦有任意 token，旧 run 对谁都不可见也不可读）；不存在仍 404，无权 403。`/api/compare` 双方都校验。
 - 审计：追加写 `web/audit.jsonl`（gitignore，尽量 0600），一行一事件，字段固定为 `ts`/`ip`/`x_forwarded_for`/`user_agent`/`actor_kind`/`actor_id`/`actor_name`/`action`/`method`/`path`/`status`/`run_id`/`tier`/`skill_sha256`/`detail`。IP 取 `client_address[0]`；`X-Forwarded-For` 只原样记录、不参与授权；不记录 token、API key、prompt/回答正文（`path` 去掉查询串）。写失败只告警 stderr，不阻断主流程。必记事件：token 校验、run 启动/拒绝/停止、report·log·export 读取、compare、override、评测集 review/import/export；评测集其余接口的 401 也各记一笔。
 - 前端：顶栏 token 输入存 `localStorage["se-token"]`，启动与点「验证」都调 `/api/token/check`，失效即清空并回到游客；所有需鉴权请求带 `X-Skill-Eval-Token`（进度流用 fetch 读 SSE，因为 EventSource 不能带请求头）；报告与 zip 导出走 fetch + blob；复制链接只带 `?run=<id>`，不带 token。游客隐藏评测集卡；T2/T3 可显示但标注需申请 token，无有效 token 时点击不启动。
+
+### 限流
+
+`POST /api/run` 在创建 run 目录前调 `web/ratelimit.py::check()`，放行且 runner 真正启动后才 `record()`——429 不建目录、不写 `run.json`、不消耗额度。计数落 `web/usage.sqlite3`（stdlib sqlite3，gitignore），按**自然小时/自然日**窗口计数（不是滑动窗口），服务启动时 `cleanup()` 删 30 天前记录。
+
+| 身份 | 档位 | 每小时 | 每天 | 并发 |
+|---|---|---|---|---|
+| 游客 | T0 | 20 | 60 | 1 |
+| 游客 | T1 | 3 | 10 | 1 |
+| token | T0/T1 | 20 | 50 | 1 |
+| token | T2A/T2B/T3 | 3 | 8 | 2 |
+| 全局 | 所有 | — | — | 4 |
+
+- 默认值在 `ratelimit.DEFAULTS`；`web/limits.json`（本地配置，gitignore；入库样例 `web/limits.example.json`）按同样形状覆盖，未知键与非正整数忽略。每次 `check()` 重新读，改配置不用重启。样例与 `DEFAULTS` 必须一致（测试锁住）。
+- 额度桶：游客 T0 与 T1 各自一桶（T1 用完仍可跑 T0）；token 的 T0/T1 共用 `low`、T2A/T2B/T3 共用 `high`。
+- token 记录可带 `hourly_runs`/`daily_runs`/`max_concurrent` 覆盖该 token 的额度（对它的每个桶生效）；`token_admin.py issue` 不写这些字段，需要时手工补进 `web/tokens.json`。
+- 游客按 `se_guest` cookie + IP 双桶计数，两者任一超限即 429：换 cookie 不能绕过 IP 桶，但 NAT 后的多人会共享 IP 桶（IP 只作辅助）。IP 取 `client_address`，`X-Forwarded-For` 仍只进审计、不参与限流。
+- 并发由 `ACTIVE` 里同身份/全局在跑的 run 数判定（进程已退出的不算）；`ACTIVE` 记 `owner_kind`/`owner_id`。
+- 429：`Retry-After`（秒）+ JSON `{ok:false,error,reason,scope,retry_after}`；`reason` ∈ `hourly`/`daily`/`concurrent`，`scope` ∈ `actor`/`ip`/`global`。审计 `rate_limited`（status 429，detail 带 reason/scope/retry_after）。前端在错误条里补“约 N 分钟后可重试”。
+- 计数库打不开/写不进时放行并告警 stderr（与审计写失败同口径），不把 T0/T1 一起锁死。
+- 未做：模型调用次数配额（设计里的全局 100/小时、500/天）留给模型代理的二级限流；token 校验失败的反枚举限流。
 
 前端不重算指标。页面启动解析 `?run=<id>`（刷新/深链恢复），运行开始时用 `history.replaceState` 写 URL 并存 `localStorage`；右栏「最近报告」来自 `/api/runs`。SSE 断线不直接收尾：先查 `/api/status`，仍在跑就指数退避重连并显示常驻错误条，已结束则加载报告。错误条与日志弹层常驻，不自动消失。
 
@@ -289,11 +312,13 @@ evalsets/<name>/results/<version>/
 | 被测路径无 SKILL.md | 终止，报告"不是合法 skill 包" |
 | scripts/judges 缺失 | 报告评估器自身损坏，列出缺失项，终止 |
 | 硬依赖缺失（`bash scripts/check-deps.sh` 报 FAIL） | 终止：缺 python≥3.9/git 时会静默降级，先装齐再跑 |
-| 缺 pi CLI 或模型（自检仅 warn） | 只能跑静态检查；沙箱类指标标 `skipped`，报告注明原因 |
+| 缺 pi/Claude CLI 或模型（自检仅 warn） | T1 直连模型仍可跑；T2/T3 缺 adapter 时失败，沙箱类指标标 `skipped`，报告注明原因 |
 | 未配置 `llm.base_url`/模型 | T1 `--backend auto` 回落 pi；显式 `--backend llm` 报错，该指标 skipped |
+| T2/T3 缺 Docker/daemon/镜像/adapter | fail closed：runner 退出码 3；页面 412；不建 run、不扣配额；**不回退宿主** |
+| T2/T3 容器无模型代理 | 容器默认断网且无真实 key：需要模型的 case 失败并明确提示；不注入宿主 key、不改用宿主执行 |
 | T2B 未提供真实输入 | #11/#12 标 `skipped`，不自动生成“真实”输入 |
-| 沙箱复制失败 | 换临时目录 + 提示隔离降级，继续跑 |
-| 沙箱运行崩溃 | 降级（fallback）到最近一个已完成的低档：报告标注缺失指标与原因，不静默丢指标 |
+| 沙箱复制失败 | 换临时目录 + 提示隔离降级，继续跑（host 模式）；T2/T3 容器路径失败则 fail closed |
+| 沙箱运行崩溃 | 降级（fallback）到最近一个已完成的低档：报告标注缺失指标与原因，不静默丢指标；半截阶段不写缓存 |
 | 审核模型不可用 | 评测集保持未冻结状态，提示人工审核路径，不阻塞已完成的低档位报告 |
 | 评测集未审核 | #10/#11/#14 标 `skipped`，其余照常 |
 | 触发集未做质量自检 | #10 只按 F1 判（不降级），meta.json 里评测集来源照记 |

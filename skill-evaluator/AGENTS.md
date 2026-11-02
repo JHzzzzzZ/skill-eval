@@ -5,7 +5,7 @@ Generated: 2026-11-01（v2 更新：ADR-0032–0041）
 ## OVERVIEW
 
 评估器 skill 包本体：`SKILL.md`（入口/路由）+ `reference.md`（契约全集）+ `config.yaml`（阈值）+
-`scripts/`（CLI + runner + llm/harness）+ `judges/`（rubric）+ `web/`（本地前端）。
+`scripts/`（CLI + runner + llm/harness + adapter_* + sandbox/capabilities）+ `judges/`（rubric）+ `web/`（本地前端）+ `sandbox/`（T2/T3 镜像模板）。
 评估一个 skill 包，产出 16 条指标（ADR-0032）的 `report.json` / `report.md` / `report.html`。实现流程见根 `AGENTS.md § IMPLEMENTATION WORKFLOW`。
 
 ## WHERE TO LOOK
@@ -17,7 +17,10 @@ Generated: 2026-11-01（v2 更新：ADR-0032–0041）
 | 改报告呈现（表格化/折叠/建议/✓✗） | ADR-0030 + `report.py` 的 `_tables()` / `_advice()` / `_HTML_TMPL` |
 | 改 rubric | `judges/<metric>.md`（输出节必须保持统一 JSON 契约） |
 | 改评测集结构/冻结 | `reference.md § 评测集冻结` + ADR-0002 |
-| 改沙箱/执行载体 | `reference.md § 沙箱` / `§ 执行载体` + `scripts/harness.py`（ADR-0034） |
+| 改执行载体/adapter | `reference.md § 执行载体` + `scripts/adapter_*.py` / `adapter_registry.py`；新增 agent 只加 adapter + 注册行 |
+| 改沙箱/宿主隔离 | `reference.md § 沙箱` + `scripts/sandbox.py` / `scripts/harness.py`（ADR-0034） |
+| 改容器隔离（T2/T3） | `scripts/sandbox.py`（命令/探测/路径重写）+ `sandbox/Dockerfile` / `sandbox/README.md`；禁止挂宿主 `$HOME`、`~/.pi`、docker.sock |
+| 改档位能力/依赖门禁 | `scripts/capabilities.py`（tier+adapter+isolation 矩阵）+ `scripts/check-deps.sh --tier` + `web/app.py` 的 `/api/capabilities` / 412 |
 | 改中间产物名 | `reference.md § 中间产物契约`（下游按名读，改名即断链） |
 | 改版本号/指纹 | ADR-0003/0010 + `report.py` 的指纹+meta 层 |
 | 改档位/增量补跑 | ADR-0033 + `SKILL.md` + `report.py` 的 `tier` |
@@ -33,6 +36,7 @@ Generated: 2026-11-01（v2 更新：ADR-0032–0041）
 | 改运行历史/日志/重连 | `web/app.py` 的 `_runs` / `_status_payload` / `_tail_log` / `Handler._events`（无硬截止，15s 心跳） |
 | 改访问控制/token 门禁 | `web/token_admin.py`（`web/tokens.json` 只存 hash + issue/list/revoke CLI）+ `web/app.py` 的 `_token_record` / `_run_access` / `/api/token/check`；T2/T3 需 token，T0/T1 游客可用 |
 | 改审计字段/落盘 | `web/app.py::_audit` + `web/token_admin.py::append_audit`（`web/audit.jsonl`，字段固定；不写 token/API key/正文） |
+| 改限流/配额 | `web/ratelimit.py`（SQLite 自然窗口计数 + `DEFAULTS`）+ `web/limits.json`（本地配置，样例 `limits.example.json`）+ `web/app.py` 的 `_active_counts` / `/api/run` 429 |
 
 ## PIPELINE
 
@@ -48,6 +52,10 @@ runner 按档位增量执行（ADR-0033）：
 阶段产物完成后才写缓存（`.skill-eval-cache/`）；阶段开始只恢复完整阶段，T1 半截 / T2A·T2B·T3 半截一律整档重跑。报告 meta 记录所选评测集版本与 `skill_sha256`。
 
 前端 `web/app.py` 用 stdlib HTTP + SSE 调 runner，只绑 `127.0.0.1`。
+
+T2/T3 默认 `--isolation docker`：runner 启动前走 `capabilities.require()`（缺容器 → 退出码 3，不建 results），
+Web 在限流/建目录前返回 412（写 `dep_missing` 审计，不扣配额）。没有容器运行时时绝不回退宿主；
+`--isolation host` 只是显式开发逃生门。容器内没有模型代理（未实现），`/api/capabilities` 会显式给出提示。
 
 ## JUDGES
 
@@ -89,5 +97,6 @@ runner 按档位增量执行（ADR-0033）：
 - 优化建议必须从裁决确定性派生，不得 LLM 生成（ADR-0030）。
 - T2/T3 必须带有效 token，T0/T1 游客可用；游客不能访问评测集接口。token 是访问控制，不是执行沙箱——不要把它说成“已隔离”。
 - 审计不记录 token/API key/prompt 正文；IP 取 `client_address`，`X-Forwarded-For` 只记录不授权（见 `reference.md § 访问控制与审计`）。
+- 限流在创建 run 目录之前判定：429 不建目录、不写 `run.json`、不消耗额度，且必须带 `Retry-After` 并审计 `rate_limited`。改默认额度改 `web/limits.json`，不要只改 `DEFAULTS`（样例与代码默认由测试锁住）。
 - T4 的 `attic/` 内容不随包分发、不跑测试（ADR-0032）。
 - 前端不重算指标，只调 runner；报告契约以 `report.py` 为准（ADR-0036）。

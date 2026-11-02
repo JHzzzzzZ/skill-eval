@@ -1,17 +1,38 @@
 #!/usr/bin/env bash
-# 前置自检（#16）：确认评估器能在这台机器上跑起来。
-# 用法：bash scripts/check-deps.sh    （退出码 0 = 可跑；1 = 缺硬依赖）
-# 硬依赖缺失 → FAIL；可选能力缺失（pi CLI / 模型变量）→ warn，不阻断静态与 LLM 评审。
+# 前置自检（#7/#16）：确认评估器能在这台机器上跑起来。
+# 用法：bash scripts/check-deps.sh [--tier t0|t1|t2a|t2b|t3]
+#   无参数（或 --tier t0/t1）只查基础依赖：T0/T1 不要求容器运行时。
+#   --tier t2a|t2b|t3 起加查 Docker CLI/daemon/沙箱镜像；缺失 → exit 1。
+# 退出码：0 = 该档可跑；1 = 缺依赖（不要继续跑，否则指标会静默降级）。
 set -u
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(dirname "$HERE")"
 FAIL=0
+TIER="t0"
 ok()   { printf "  [ok]   %s\n" "$1"; }
 bad()  { printf "  [FAIL] %s\n" "$1"; FAIL=1; }
 warn() { printf "  [warn] %s\n" "$1"; }
 
-echo "skill-evaluator 依赖自检（python3 >= 3.9 / git / pytest / pi CLI / config.yaml）"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --tier)
+      if [ $# -lt 2 ]; then echo "--tier 缺值（t0|t1|t2a|t2b|t3）" >&2; exit 2; fi
+      TIER="$2"; shift 2 ;;
+    -h|--help)
+      echo "用法：bash scripts/check-deps.sh [--tier t0|t1|t2a|t2b|t3]"; exit 0 ;;
+    *)
+      echo "未知参数: $1（只支持 --tier）" >&2; exit 2 ;;
+  esac
+done
+
+case "$TIER" in
+  t0|t1) NEEDS_CONTAINER=0 ;;
+  t2a|t2b|t3) NEEDS_CONTAINER=1 ;;
+  *) echo "--tier 只支持 t0|t1|t2a|t2b|t3，当前：$TIER" >&2; exit 2 ;;
+esac
+
+echo "skill-evaluator 依赖自检（档位 $TIER；python3 >= 3.9 / git / pytest / pi CLI / config.yaml）"
 
 # --- python3 >= 3.9 ---
 # 注意：Windows 上 `python3` 是应用商店占位符，能 command -v 找到但跑不起来 → 必须实跑验证再采纳。
@@ -55,6 +76,7 @@ else
   warn "pytest 未装：pip install -r requirements.txt（仅跑 tests 需要）"
 fi
 
+# 分层依赖的共享模块：sandbox 与 capabilities 由 runner 与 web 共用（web 直接 import capabilities）。
 # --- 包内文件齐备（#16「声明与实现一致」：正文说“包内文件齐备”，就得真查齐）---
 # 为什么用显式清单而不是 `for f in "$ROOT"/scripts/*.py`：glob 只会展开成**已存在**的文件，
 # 删掉任何一个都拓不到（实测：删 report.py + contract.md 仍退出 0）。清单 = 流程声明要用的东西。
@@ -62,6 +84,8 @@ REQUIRED="SKILL.md reference.md requirements.txt LICENSE config.yaml scripts/_co
 scripts/static_check.py scripts/evalset_count.py scripts/evalset_check.py scripts/trace_run.py
 scripts/trigger_judge.py scripts/judge_runner.py scripts/score.py scripts/idem.py scripts/compare.py
 scripts/report.py scripts/model_robust.py scripts/runner.py scripts/judge_run.py scripts/llm.py scripts/harness.py scripts/evalset_gen.py scripts/calibrate.py
+scripts/adapter_contract.py scripts/adapter_registry.py scripts/adapter_pi.py scripts/adapter_claude.py
+scripts/sandbox.py scripts/capabilities.py sandbox/Dockerfile sandbox/README.md
 judges/brevity.md judges/redundancy.md judges/fallback.md judges/precheck.md judges/contract.md
 judges/deps.md judges/trigger.md
 web/app.py web/index.html"
@@ -76,6 +100,8 @@ fi
 # --- 可选：pi CLI 与模型（沙箱运行 + LLM 评审用；ADR-0007/0009）---
 if command -v pi >/dev/null 2>&1 || command -v pi.cmd >/dev/null 2>&1; then
   ok "pi CLI（沙箱运行与 LLM 评审可用）"
+elif [ "$NEEDS_CONTAINER" -eq 1 ]; then
+  warn "宿主找不到 pi CLI：镜像内仍需 pi（见 sandbox/README.md）"
 else
   warn "找不到 pi CLI：只能跑静态检查，沙箱类指标将 skipped"
 fi
@@ -85,9 +111,34 @@ else
   warn "未设 SKILL_EVAL_MODEL：用 pi 默认模型（ADR-0009）"
 fi
 
+# --- T2/T3：容器运行时 + 沙箱镜像（fail closed；缺失即 exit 1）---
+if [ "$NEEDS_CONTAINER" -eq 1 ]; then
+  echo "容器运行时（$TIER 必需；T0/T1 不受影响）："
+  if [ -z "$PY" ]; then
+    bad "没有可用的 python，无法探测容器能力"
+  else
+    # 统一走 sandbox.py 的探测（含 config.yaml 覆盖的 engine/image 与 daemon 检查）
+    CONTAINER_REPORT="$("$PY" - "$HERE" <<'PYCODE' 2>&1
+import sys
+sys.path.insert(0, sys.argv[1])
+import sandbox
+status = sandbox.DockerBackend().status()
+print(status.summary())
+sys.exit(0 if status.available else 1)
+PYCODE
+)"
+    if [ $? -eq 0 ]; then
+      ok "$CONTAINER_REPORT"
+    else
+      bad "$CONTAINER_REPORT"
+    fi
+  fi
+  warn "模型代理未实现：容器默认 --network none，T2/T3 的模型调用需要宿主代理（本轮不开放真实 key）"
+fi
+
 echo ""
 if [ "$FAIL" -eq 0 ]; then
-  echo "自检通过：可以开始评估。"
+  echo "自检通过：档位 $TIER 可以开始评估。"
 else
   echo "自检失败：先补齐上面 [FAIL] 项，不要继续跑（否则指标会静默降级）。"
 fi

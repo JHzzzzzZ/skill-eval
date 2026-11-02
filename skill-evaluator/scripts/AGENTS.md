@@ -4,7 +4,7 @@ Generated: 2026-09-22T13:43:08.578Z
 
 ## OVERVIEW
 
-16 个确定性 Python CLI + 5 个共享模块（`_config`/`_console`/`_subprocess`/`llm`/`harness`）+ `check-deps.sh` 前置自检，扁平单层。另有 3 个 T4 脚本在 `attic/scripts/`（不进包、不跑测试）。每个脚本 = 一个有文档的 CLI seam：输出 stdout JSON 或落盘中间产物。测量脚本之间无 subprocess 调用；runner/harness 是编排层例外。
+命令行脚本 + 共享模块（`_config`/`_console`/`_subprocess`/`llm`/`harness`/`adapter_*`/`sandbox`/`capabilities`）+ `check-deps.sh` 前置自检，扁平单层。另有 3 个 T4 脚本在 `attic/scripts/`（不进包、不跑测试）。每个脚本 = 一个有文档的 CLI seam：输出 stdout JSON 或落盘中间产物。测量脚本之间无 subprocess 调用；runner/harness 是编排层例外。
 
 ## WHERE TO LOOK
 
@@ -12,13 +12,15 @@ Generated: 2026-09-22T13:43:08.578Z
 |---|---|---|---|
 | `_config.py` | 204 | 无 CLI；`get/get_int/get_float/pick` | config.yaml 读取（ADR-0035） |
 | `llm.py` | 184 | 无 CLI；`chat/ask/configured/extract_json` | T1 直连 LLM（ADR-0034） |
-| `harness.py` | 75 | 无 CLI；`run_case/available` | 执行载体适配（当前 pi） |
+| `harness.py` | 75 | 无 CLI；`run_case/available` | 执行载体适配（`run_case` 的 `isolation` 透传给 trace_run） |
+| `sandbox.py` | 186 | 无 CLI；`DockerBackend.status/wrap/rewrite_argv` | T2/T3 容器命令、探测、宿主路径 → `/work` |
+| `capabilities.py` | 114 | 无 CLI；`check/require/snapshot` | tier+adapter+isolation 能力矩阵（runner 退出码 3 / Web 412） |
 | `judge_run.py` | 172 | `--metric --skill --out [--backend]` | T1 评审执行器 |
 | `evalset_gen.py` | 115 | `--skill --out [--count]` | 生成 T2A 评测集草稿 |
-| `runner.py` | 870 | `--skill --tier [--evalset] [--real-input] [--model] [--harness]` | 确定性编排 + NDJSON 进度（先发 plan） + 阶段级检查点 |
+| `runner.py` | 870 | `--skill --tier [--evalset] [--real-input] [--model] [--harness] [--isolation host\|docker]` | 确定性编排 + NDJSON 进度（先发 plan） + 阶段级检查点 |
 | `report.py` | 1550 | `<results目录> [--html] [--evalset <vN>] [--skill <dir>] [--tier <t>] [--model <m>] [--harness <h>] [--partial --completed-stages t0,t1]` | 汇总 16 条 + 优化建议 + 报告页 + provenance + 局部报告 |
 | `static_check.py` | 714 | `<skill目录> [--exclude <p>]... [--no-default-excludes]` | #1/#3/#4 六组 + 可移植性闸门 + #12 依赖全面性 |
-| `trace_run.py` | 474 | `<沙箱目录> <prompt> [--skill\|--no-skill] [--early-exit] [--model] [--events] [--out] [--build-only]` | #10/#13/#11/#12/#15/#16 数据源 |
+| `trace_run.py` | 474 | `<沙箱目录> <prompt> [--skill\|--no-skill] [--early-exit] [--isolation host\|docker] [--model] [--events] [--out] [--build-only]` | #10/#13/#11/#12/#15/#16 数据源 |
 | `evalset_check.py` | 180 | `<evalset目录> --skill <skill目录> [--out]` | #10 可信度（触发集质量） |
 | `evalset_count.py` | 111 | `<evalsets/<name>/vN> [--min*] [--out]` | #10 冻结前条数闸门 |
 | `model_robust.py` | 173 | `<results目录> [--out]` | #15 跨模型 |
@@ -29,7 +31,7 @@ Generated: 2026-09-22T13:43:08.578Z
 | `idem.py` | 41 | `<trace1.json> <trace2.json>` | #16 |
 | `pairwise.py` | 104 | `--prompt --a --b [--out] [--build-only]` | T2B 无标签 A/B 盲评 |
 | `calibrate.py` | 207 | `--metric <name> [--cases] [--samples] [--workers]` | Judge 校准（agreement/accuracy） |
-| `check-deps.sh` | — | `bash scripts/check-deps.sh`（退出码 0/1） | #7 前置自检，非 Python |
+| `check-deps.sh` | — | `bash scripts/check-deps.sh [--tier t0\|t1\|t2a\|t2b\|t3]`（退出码 0/1） | #7 前置自检，非 Python；T2+ 追加容器/镜像检查 |
 
 ## SYMBOL MAP
 
@@ -53,17 +55,21 @@ Generated: 2026-09-22T13:43:08.578Z
 - **同目录导入靠 `sys.path.insert(0, Path(__file__).parent)`**（每个 `main()` 里）。因此脚本必须以 `scripts/` 为基准被调用。
 - **argv 手写解析**（`while i < len(args)`），不用 argparse。16 个脚本各写一遍——加参数时跟随既有写法。
 - **stdout 契约字段恒输出**：输入缺失或非法 → 输出 `"skipped"`，**不崩溃、不打 0 分**（`score.py`、`report.py` 均如此）。
-- **LLM 调用两条路径**：T1 走 `llm.py`（OpenAI-compatible/Anthropic，无 tools）；T2+ 走 `harness.py`（当前 pi CLI）。旧 `_subprocess` 形态只在 `--backend pi` 回退时用。
+- **LLM 调用两条路径**：T1 走 `llm.py`（OpenAI-compatible/Anthropic，无 tools）；T2+ 走 `harness.py` → adapter 注册表（pi / claude-code）。新增 agent 只加 `adapter_<name>.py` 与注册行，不改 runner/report/score。
 - **离线 seam 三件套**：`--build-only`（只打印将执行的命令）、`--events <jsonl>`（离线解析已采集事件流）、`--out <file>`。测试全靠它们，改这三个 flag 会同时打断多个测试。
+- **容器隔离只走 `sandbox.py`**：`trace_run --isolation docker` 把 adapter 命令包成 `docker run`，宿主 workdir 重写为 `/work`（只改 argv，不改 prompt）。`--build-only --isolation docker` 不需 Docker，可直接看容器命令。无 Docker 时 trace_run 返回失败 trace，runner/Web 在启动前 fail closed。
+- **能力门禁只走 `capabilities.py`**：runner（退出码 3）、Web（412）、`check-deps.sh --tier` 共用同一判定；T0/T1 不要求容器，T2+ 缺容器/镜像/载体一律 fail closed。
 - 阈值常量不再放文件头部：统一在 `config.yaml`（ADR-0035），脚本内用 `_config.get_*` 惰性读取（**不在 import 时读文件**，保持模块 import 无副作用）。
 
 ## ANTI-PATTERNS
 
 - 不用 argparse / click 重写 argv 解析。
-- 测量脚本之间不互相 subprocess 调用：串联只靠 `results/<version>/` 下的产物文件。例外是编排层 `runner.py`（调 CLI）与 `harness.py`（调 trace_run 的 pi 子进程）。
+- 测量脚本之间不互相 subprocess 调用：串联只靠 `results/<version>/` 下的产物文件。例外是编排层 `runner.py`（调 CLI）与 `harness.py`（调 trace_run 的 agent 子进程）。
 - 不改 stdout JSON 的字段名、不新增必填字段——`report.py` 按名读中间产物，改名即断链。
 - 不在 `main()` 之外做 IO：模块顶层不读写文件，保证 import 无副作用（`tests/test_trace_run.py:179` 会直接 import 模块）。
 - 不硬编码解释器或机器路径，一律 `sys.executable`（ADR-0009）。
+- 不把宿主 `$HOME` / `~/.pi` / 凭据 / docker.sock 挂进容器，也不在无容器时回退宿主执行：容器参数只在 `sandbox.py::wrap()` 里生成。
+- 不给容器注入真实 API key，也不把宿主环境变量整包转发；模型访问只能走尚未实现的宿主代理。
 - `DANGEROUS_PATTERNS` 里的 `su`+`do` 拼接（`static_check.py:85`）是合并前另一条线的写法，与 ADR-0012 的自排除**并存**；两条都保留，别只删其一（删自排除会让自检失败）。
 - 不把 `SECRETS_PATTERNS` 的占位符过滤（`PLACEHOLDER_RE`，`static_check.py:105`）删掉：文档里合法写 `api_key="your-key-here"` 会被误报为硬编码凭据（ADR-0013）。PII 组（`static_check.py:156`）同样在 `_pii_accept` 里先过占位符与示例白名单再进 Luhn/证件校验位/公网判断。
 - 不把 `OBFUSCATION_PATTERNS` / `PII_PATTERNS` 的裁决提到 fail：两组只能 warn，命中多为打包产物或合法示例（ADR-0013/0029，`report.py:188` 的 `from_static`）。

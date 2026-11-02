@@ -30,6 +30,8 @@ RUNNER = ROOT / "scripts" / "runner.py"
 sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(WEB))
 import llm as llm_layer  # noqa: E402
+import capabilities  # noqa: E402
+import ratelimit  # noqa: E402
 import runner as runner_mod  # noqa: E402
 import static_check  # noqa: E402
 import token_admin  # noqa: E402
@@ -69,12 +71,12 @@ def _send_headers(handler, extra: list | None = None) -> None:
     handler.end_headers()
 
 
-def _send_json(handler, code: int, payload):
+def _send_json(handler, code: int, payload, headers: list | None = None):
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     handler.send_response(code)
     handler.send_header("Content-Type", "application/json; charset=utf-8")
     handler.send_header("Content-Length", str(len(body)))
-    _send_headers(handler)
+    _send_headers(handler, headers)
     handler.wfile.write(body)
 
 
@@ -138,6 +140,27 @@ def _actor(handler) -> dict:
     return {"kind": "guest", "id": _guest_id(handler), "name": "游客"}
 
 
+def _client_ip(handler) -> str:
+    """客户端 IP：只取连接地址；`X-Forwarded-For` 可伪造，只进审计不参与限流。"""
+    try:
+        return str(handler.client_address[0])
+    except (AttributeError, IndexError, TypeError):
+        return ""
+
+
+def _active_counts(actor: dict) -> dict:
+    """在跑的 run 数：同身份与全局（进程已退出的不算）。"""
+    mine = total = 0
+    for run in list(ACTIVE.values()):        # 快照：并发请求会同时增删 ACTIVE
+        proc = run.get("proc")
+        if proc is not None and proc.poll() is not None:
+            continue
+        total += 1
+        if run.get("owner_kind") == actor["kind"] and run.get("owner_id") == actor["id"]:
+            mine += 1
+    return {"actor": mine, "global": total}
+
+
 def _run_owner(rid: str):
     """run 归属；目录存在但没有 run.json 的旧 run 按 legacy。"""
     rdir = _run_dir(rid)
@@ -172,10 +195,7 @@ def _audit(handler, action: str, status: int, *, run_id: str = "", tier: str = "
            skill_sha256: str = "", detail: str = "") -> None:
     """追加一行审计；不写 token / API key / prompt 正文。IP 取 client_address。"""
     actor = _actor(handler)
-    try:
-        ip = str(handler.client_address[0])
-    except (AttributeError, IndexError, TypeError):
-        ip = ""
+    ip = _client_ip(handler)
     record = {
         "ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "ip": ip,
         "x_forwarded_for": handler.headers.get("X-Forwarded-For") or "",
@@ -201,6 +221,17 @@ def _require_token(handler, action: str) -> bool:
 def _deny_run(handler, rid: str, action: str = "run_denied") -> None:
     _audit(handler, action, 403, run_id=rid, detail="不属于当前身份")
     _send_json(handler, 403, {"error": "无权访问该运行"})
+
+
+def _limit_message(actor: dict, limit: dict) -> str:
+    """429 文案：说清是并发占满还是配额用完，不暴露内部档位代号。"""
+    if limit["scope"] == "global":
+        return "同时运行的评估已达上限，请等当前运行结束后重试"
+    if limit["reason"] == "concurrent":
+        return "你已有一个评估在运行，请等它结束后再启动"
+    if actor["kind"] == "guest":
+        return "游客配额已用完：可稍后重试，或申请访问 token 继续"
+    return "本次评估的配额已用完，请稍后重试"
 
 
 def _safe_extract(zip_path: Path, dest: Path, *, max_zip_bytes: int = MAX_UPLOAD_BYTES,
@@ -937,6 +968,10 @@ class Handler(BaseHTTPRequestHandler):
                                           "name": record.get("name") or ""})
         if path == "/api/llm/config":
             return _send_json(self, 200, llm_layer.status())
+        if path == "/api/capabilities":
+            # 能力快照：前端据此提示/阻止 T2/T3；不改 run 状态，不消耗额度
+            adapter = (q.get("adapter") or [""])[0] or None
+            return _send_json(self, 200, capabilities.snapshot(adapter=adapter))
         if path == "/api/workspaces":
             return _send_json(self, 200, {"workspaces": _workspaces()})
         if path == "/api/runs":
@@ -1337,6 +1372,36 @@ class Handler(BaseHTTPRequestHandler):
             _audit(self, "reuse_denied", 403, run_id=reuse_from, tier=tier,
                    detail="复用来源不属于当前身份")
             return _send_json(self, 403, {"error": "无权复用该运行的产物"})
+        # T2/T3 能力门禁在限流与建目录之前：缺容器/镜像/载体 → 412，
+        # 不建 run 目录、不扣配额、不回退宿主执行。
+        isolation = capabilities.default_isolation(tier)
+        if capabilities.requires_container(tier):
+            capability = capabilities.check(tier, adapter=str(data.get("harness") or "") or None,
+                                            isolation=isolation)
+            if not capability["ok"]:
+                _audit(self, "dep_missing", 412, tier=tier,
+                       detail=",".join(capability["missing"]) or "capability")
+                error = "当前环境无法运行该评估深度：" + "；".join(capability["reasons"])
+                if capability["fix"]:
+                    error += "。修复：" + "；".join(capability["fix"])
+                return _send_json(self, 412, {"ok": False, "tier": tier,
+                                              "isolation": isolation, "error": error,
+                                              "missing": capability["missing"],
+                                              "fix": capability["fix"]})
+        # 限流在创建 run 目录之前：被拒的请求不建目录、不写 run.json、不消耗额度。
+        ip = _client_ip(self)
+        counts = _active_counts(actor)
+        limit = ratelimit.check(actor, tier, counts["actor"], ip=ip,
+                                global_active=counts["global"])
+        if not limit["allowed"]:
+            _audit(self, "rate_limited", 429, tier=tier,
+                   detail=f"{limit['reason']}/{limit['scope'] or '-'} "
+                          f"retry_after={limit['retry_after']}")
+            return _send_json(self, 429,
+                              {"ok": False, "error": _limit_message(actor, limit),
+                               "reason": limit["reason"], "scope": limit["scope"],
+                               "retry_after": limit["retry_after"]},
+                              headers=[("Retry-After", str(limit["retry_after"]))])
         try:
             skill_sha = runner_mod._skill_digest(Path(skill))
         except OSError:
@@ -1368,6 +1433,8 @@ class Handler(BaseHTTPRequestHandler):
             cmd += ["--evalset", str(data["evalset"])]
         if data.get("harness"):
             cmd += ["--harness", str(data["harness"])]
+        if capabilities.requires_container(tier):
+            cmd += ["--isolation", isolation]
         if data.get("rerun_t0"):
             cmd += ["--rerun-t0"]
         if data.get("rerun_t1"):
@@ -1420,16 +1487,19 @@ class Handler(BaseHTTPRequestHandler):
         proc = subprocess.Popen(cmd, **popen_kwargs)
         ACTIVE[rid] = {"proc": proc, "dir": rdir, "results": results,
                        "progress": progress, "log": log, "stopped": False,
-                       "tier": tier}
+                       "tier": tier, "owner_kind": actor["kind"],
+                       "owner_id": actor["id"]}
         run_meta = {
             "id": rid, "skill": skill, "skill_name": _skill_name(Path(skill)),
             "workspace": str(data.get("workspace") or ""), "tier": tier,
             "evalset": str(data.get("evalset") or ""), "skill_sha256": skill_sha,
             "owner_kind": actor["kind"], "owner_id": actor["id"],
             "owner_name": actor["name"], "protected": tier in PROTECTED_TIERS,
+            "isolation": isolation,
             "created_at": time.strftime("%Y-%m-%dT%H:%M:%S")}
         (rdir / "run.json").write_text(json.dumps(run_meta, ensure_ascii=False, indent=2),
                                        encoding="utf-8")
+        ratelimit.record(actor, tier, ip=ip)
         _audit(self, "run_start", 200, run_id=rid, tier=tier, skill_sha256=skill_sha)
         return _send_json(self, 200, {"id": rid, "results": str(results),
                                       "skill_name": _skill_name(Path(skill))})
@@ -1503,6 +1573,7 @@ def main():
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     ns = parser.parse_args()
+    ratelimit.cleanup()             # 只保留 30 天内的计数记录
     srv = ThreadingHTTPServer((ns.host, ns.port), Handler)
     srv.daemon_threads = True
     print(f"skill-evaluator web: http://{ns.host}:{ns.port}  (Ctrl+C 停止)", flush=True)

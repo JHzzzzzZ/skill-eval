@@ -574,3 +574,140 @@ def test_guard_repo_flag_not_taken_as_positional(tmp_path):
     r = run_trace(["--build-only", "--worktree", "W", "--prompt", "P", "--guard-repo", "R"])
     cmd = json.loads(r.stdout)["command"]
     assert cmd[-1] == "P" and "R" not in cmd
+
+
+# --- 执行适配器抽象（阶段 A）：默认 pi 不变，claude-code 走注册表 ---
+
+CLAUDE_JSONL = "\n".join([
+    json.dumps({"type": "system", "subtype": "init", "cwd": "/w", "tools": ["Read"]}),
+    json.dumps({"type": "assistant", "message": {
+        "role": "assistant",
+        "content": [
+            {"type": "text", "text": "先读 skill"},
+            {"type": "tool_use", "id": "toolu_1", "name": "Read",
+             "input": {"file_path": "SKILL.md"}},
+        ],
+        "usage": {"input_tokens": 100, "output_tokens": 20},
+    }}),
+    json.dumps({"type": "user", "message": {
+        "role": "user",
+        "content": [{"type": "tool_result", "tool_use_id": "toolu_1",
+                     "is_error": True, "content": "boom"}],
+    }}),
+    json.dumps({"type": "result", "subtype": "success", "is_error": False,
+                "result": "最终回答", "usage": {"input_tokens": 120, "output_tokens": 30}}),
+])
+
+
+def test_build_command_claude_code_adapter(tmp_path):
+    # 阶段 A 验收：--build-only --adapter claude-code 输出 claude 命令
+    out = json.loads(run_trace(["--build-only", "--adapter", "claude-code",
+                                "--worktree", "/w", "--prompt", "hi"]).stdout)
+    cmd = out["command"]
+    assert cmd[0] == "claude"
+    assert cmd[cmd.index("-p") + 1] == "hi"
+    assert cmd[cmd.index("--output-format") + 1] == "stream-json"
+    assert "--verbose" in cmd
+    assert "--model" not in cmd
+
+
+def test_build_command_claude_code_with_model(tmp_path):
+    out = json.loads(run_trace(["--build-only", "--adapter", "claude-code",
+                                "--worktree", "/w", "--prompt", "hi",
+                                "--model", "zai-coding-cn/glm-5.3-flash"]).stdout)
+    cmd = out["command"]
+    assert cmd[cmd.index("--model") + 1] == "zai-coding-cn/glm-5.3-flash"
+
+
+def test_harness_flag_is_adapter_alias(tmp_path):
+    # 旧名 --harness 与 --adapter 等价（runner/web 仍传 --harness）
+    out = json.loads(run_trace(["--build-only", "--harness", "claude-code",
+                                "--worktree", "/w", "--prompt", "hi"]).stdout)
+    assert out["command"][0] == "claude"
+
+
+def test_unknown_adapter_is_rejected_not_fallback(tmp_path):
+    # 未知 adapter 明确报错，不静默回退 pi
+    r = run_trace(["--build-only", "--adapter", "codex", "--worktree", "/w", "--prompt", "hi"])
+    assert r.returncode == 2
+    assert r.stdout.strip() == ""
+    assert "codex" in r.stderr
+
+
+def test_events_unknown_adapter_is_rejected(tmp_path):
+    f = tmp_path / "events.jsonl"
+    f.write_text(CLAUDE_JSONL, encoding="utf-8")
+    r = run_trace(["--events", str(f), "--adapter", "codex"])
+    assert r.returncode == 2
+    assert "codex" in r.stderr
+
+
+def test_parse_claude_events(tmp_path):
+    # fake Claude JSONL：assistant tool_use/text、tool_result isError、result usage/answer
+    f = tmp_path / "claude.jsonl"
+    f.write_text(CLAUDE_JSONL, encoding="utf-8")
+    r = run_trace(["--events", str(f), "--adapter", "claude-code"])
+    assert r.returncode == 0, r.stderr
+    out = json.loads(r.stdout)
+    assert out["tool_calls"] == 1
+    assert out["steps"][0]["tool"] == "Read"
+    assert out["steps"][0]["args"] == {"file_path": "SKILL.md"}
+    assert out["steps"][0]["args_hash"]
+    assert out["tokens"] == 150          # result 的 usage 覆盖 assistant 累计
+    assert out["answer"] == "最终回答"
+    assert out["triggered"] is True
+    assert len(out["errors"]) == 1 and "boom" in out["errors"][0]
+    assert out["passed"] is False
+    assert out["adapter"] == "claude-code"
+
+
+def test_claude_events_without_usage_keep_tokens_zero(tmp_path):
+    # 不伪造成本：Claude 没给 usage 时 tokens=0，errors 不因此失败
+    f = tmp_path / "claude-no-usage.jsonl"
+    f.write_text("\n".join([
+        json.dumps({"type": "system", "subtype": "init"}),
+        json.dumps({"type": "assistant", "message": {
+            "role": "assistant", "content": [{"type": "text", "text": "想一下"}]}}),
+        json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "答案"}),
+    ]), encoding="utf-8")
+    out = json.loads(run_trace(["--events", str(f), "--adapter", "claude-code"]).stdout)
+    assert out["tokens"] == 0
+    assert out["errors"] == []
+    assert out["passed"] is True
+    assert out["answer"].endswith("答案")
+
+
+def test_claude_early_exit_on_skill_read(tmp_path):
+    from adapter_claude import ClaudeCodeAdapter
+    marker = tmp_path / "skill" / "SKILL.md"
+    agg = EventAggregator(early_exit=True, skill_marker=str(marker), cwd=str(tmp_path),
+                          adapter=ClaudeCodeAdapter())
+    agg.feed(json.dumps({"type": "assistant", "message": {
+        "role": "assistant",
+        "content": [{"type": "tool_use", "id": "toolu_1", "name": "Read",
+                     "input": {"file_path": str(marker)}}]}}))
+    trace = agg.result()
+    assert agg.stop is True
+    assert trace["early_exit"] is True
+    assert [s["tool"] for s in trace["steps"]] == ["Read"]
+
+
+def test_adapter_without_steps_or_tokens_degrades_without_crash():
+    # 只给纯文本的 adapter：steps/tokens 缺省，不崩、不伪造 0 分（#13/#15 由报告标 skipped）
+    class PlainAdapter:
+        name = "plain-text"
+
+        def parse(self, line, state):
+            return []
+
+        def finalize(self, state):
+            return {}
+
+    agg = EventAggregator(adapter=PlainAdapter())
+    for line in CLAUDE_JSONL.splitlines():
+        agg.feed(line)
+    trace = agg.result()
+    assert trace["steps"] == []
+    assert trace["tokens"] == 0
+    assert trace["errors"] == []
+    assert trace["passed"] is True

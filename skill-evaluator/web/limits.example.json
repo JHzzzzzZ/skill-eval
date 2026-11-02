@@ -1,0 +1,11 @@
+{
+  "guest": {
+    "t0": {"hourly": 20, "daily": 60, "concurrent": 1},
+    "t1": {"hourly": 3, "daily": 10, "concurrent": 1}
+  },
+  "token": {
+    "low": {"hourly": 20, "daily": 50, "concurrent": 1},
+    "high": {"hourly": 3, "daily": 8, "concurrent": 2}
+  },
+  "global": {"concurrent": 4}
+}

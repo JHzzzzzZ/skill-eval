@@ -88,13 +88,24 @@ llm:
   # 单次 LLM 输出 token 上限；评测集生成一次要 40+ 条，太小会截断成非 JSON。默认 8192。
   max_tokens: 8192
 
+sandbox:
+  # T2/T3 容器后端（capabilities/sandbox.py）。无 Docker 时 fail closed，不回退宿主。
+  engine: docker
+  # 沙箱镜像；生产请 pin digest。走容器时 T2/T3 必须已构建。
+  image: skill-evaluator-sandbox:local
+  # 容器资源上限；pids=进程数，memory/cpus 传给 docker run。
+  pids_limit: 512
+  memory: 2g
+  cpus: "2"
+  tmpfs_size: 512m
+
 harness:
-  # T2+ 执行载体；当前唯一实现是 pi。单位：适配器名。
+  # T2+ 执行载体；可用 pi / claude-code。单位：适配器名。
   adapter: pi
   # pi 的 provider；模型只写 id 时用它消除多 provider 歧义（opencode-go）。
   provider: opencode-go
   # 前端可选项；只显示已实现项。单位：适配器名列表。
-  available: [pi]
+  available: [pi, claude-code]
 
 ui:
   # 表格单元格截断阈值；超过截断并标注。单位：字符。默认 800。

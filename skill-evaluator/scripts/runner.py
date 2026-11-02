@@ -22,6 +22,7 @@ import _console
 _console.fix()
 
 import _config
+import capabilities
 import llm as llm_layer
 import report as report_mod
 
@@ -373,6 +374,17 @@ def run(args) -> int:
     if args.dry_run:
         return 0
 
+    isolation = str(getattr(args, "isolation", None) or capabilities.default_isolation(tier)).lower()
+    if isolation not in ("host", "docker"):
+        raise RunnerError(f"--isolation 只支持 host/docker，当前：{isolation}")
+    if capabilities.requires_container(tier):
+        # T2/T3 fail closed：缺容器/镜像/载体就直接退出（main → 3），不建 results、不跑半截。
+        capability = capabilities.require(tier, adapter=args.harness, isolation=isolation)
+        progress.emit("capabilities", ok=True, isolation=isolation, tier=tier,
+                      missing=capability["missing"], warnings=capability["warnings"])
+    else:
+        isolation = "host"  # T0/T1 不跑沙箱：容器参数对这两档没有意义
+
     version = args.version or time.strftime("%Y%m%d-%H%M%S")
     results = Path(args.results).resolve() if args.results else \
         ROOT / "evalsets" / skill.name / "results" / f"auto-{version}"
@@ -419,6 +431,7 @@ def run(args) -> int:
         "evalset_version": evalset.name if evalset else None,
         "model": model, "harness": args.harness, "llm_protocol": args.llm_protocol,
         "base_url": args.base_url, "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "isolation": isolation,
         "skill_sha256": skill_sha, "evaluator_sha256": eval_sha,
         "evaluator_version": eval_info.get("version"), "judge": judge_key,
     })
@@ -485,7 +498,7 @@ def run(args) -> int:
     if TIER_RANK[tier] >= TIER_RANK["t2a"]:
         progress.emit("stage", name="T2A", status="start")
         t2a_cache = _stage_cache("t2a", skill_sha, eval_sha, evalset_sha,
-                                 model or "", args.harness or "",
+                                 model or "", args.harness or "", isolation,
                                  args.llm_protocol or "", args.base_url or "")
         reuse_t2a = (not args.no_cache and not args.rerun_t2a
                      and _t2a_ready(t2a_cache))
@@ -520,7 +533,7 @@ def run(args) -> int:
                     try:
                         trace = run_case(item["prompt"], sandbox, skill_dir=sandbox, adapter=args.harness,
                                          early_exit=True, model=model, out=trace_path,
-                                         timeout=outer_timeout)
+                                         isolation=isolation, timeout=outer_timeout)
                         if _env_error(trace):
                             progress.emit("warn", stage="T2A", label=item["file"],
                                           error="载体失败，跳过该 case：" + str(trace.get("errors"))[:200])
@@ -566,7 +579,7 @@ def run(args) -> int:
     if TIER_RANK[tier] >= TIER_RANK["t2b"]:
         progress.emit("stage", name="T2B", status="start")
         t2b_cache = _stage_cache("t2b", skill_sha, eval_sha, evalset_sha, real_input_sha,
-                                 model or "", args.harness or "",
+                                 model or "", args.harness or "", isolation,
                                  args.llm_protocol or "", args.base_url or "")
         reuse_t2b = (not args.no_cache and not args.rerun_t2b and bool(real_input_sha)
                      and _t2b_ready(t2b_cache))
@@ -626,12 +639,12 @@ def run(args) -> int:
                 try:
                     g = run_case(gold, sandbox, skill_dir=sandbox, model=model,
                                  out=gt, adapter=args.harness, guard_repo=GUARD,
-                                 timeout=arm_timeout)
+                                 isolation=isolation, timeout=arm_timeout)
                     progress.emit("case", stage="T2B", index=idx, total=len(cases),
                                   label=display, arm="baseline")
                     b = run_case(case["prompt"], sandbox, no_skill=True, model=model,
                                  out=bt, adapter=args.harness, guard_repo=GUARD,
-                                 timeout=arm_timeout)
+                                 isolation=isolation, timeout=arm_timeout)
                 except subprocess.TimeoutExpired:
                     progress.emit("warn", stage="T2B", label=display,
                                   error=f"运行超时（>{arm_timeout}s），跳过该 case")
@@ -714,8 +727,8 @@ def run(args) -> int:
         cases = _cases(evalset) if evalset else []
         repeat = max(1, _config.get_int("run.repeat", 3))
         t3_cache = _stage_cache("t3", skill_sha, eval_sha, evalset_sha, real_input_sha,
-                                model or "", args.harness or "", args.llm_protocol or "",
-                                args.base_url or "", str(repeat))
+                                model or "", args.harness or "", isolation,
+                                args.llm_protocol or "", args.base_url or "", str(repeat))
         reuse_t3 = (not args.no_cache and not args.rerun_t3
                     and not args.rerun_t2a and not args.rerun_t2b
                     and _t3_ready(t3_cache))
@@ -747,7 +760,7 @@ def run(args) -> int:
                     prompt = case["prompt"] if not human else f"/skill:{name} {case['prompt']}"
                     try:
                         trace = run_case(prompt, sandbox, skill_dir=sandbox, model=model, adapter=args.harness,
-                                         out=out, guard_repo=GUARD)
+                                         out=out, guard_repo=GUARD, isolation=isolation)
                     except Exception as exc:
                         progress.emit("warn", stage="T3", label=case["name"], error=str(exc))
                         continue
@@ -826,6 +839,7 @@ def main():
         skill = None; tier = "t2a"; results = None; evalset = None; real_input = None
         model = None; backend = "auto"; progress = None; version = None
         dry_run = False; sandbox = None; harness = None
+        isolation = None
         llm_protocol = None; base_url = None; api_key = None
         rerun_t0 = False; rerun_t1 = False; rerun_t2a = False; rerun_t2b = False; rerun_t3 = False
         no_cache = False
@@ -834,7 +848,7 @@ def main():
         key = args[i]
         if key in ("--skill", "--tier", "--results", "--evalset", "--real-input", "--model",
                    "--backend", "--progress", "--version", "--sandbox", "--harness",
-                   "--llm-protocol", "--base-url", "--api-key"):
+                   "--llm-protocol", "--base-url", "--api-key", "--isolation"):
             if i + 1 >= len(args):
                 print(f"{key} 缺值", file=sys.stderr); return 2
             setattr(A, key[2:].replace("-", "_"), args[i + 1]); i += 2
@@ -857,10 +871,14 @@ def main():
     if not A.skill:
         print("usage: runner.py --skill <dir> [--tier t0|t1|t2a|t2b|t3] "
               "[--evalset <dir>] [--real-input <file>] [--results <dir>] [--model m] "
-              "[--backend auto|llm|pi] [--harness pi] [--progress <file>] [--rerun-t0] [--rerun-t1] [--rerun-t2a] [--rerun-t2b] [--rerun-t3] [--no-cache] [--dry-run]", file=sys.stderr)
+              "[--backend auto|llm|pi] [--harness pi] [--isolation host|docker] "
+              "[--progress <file>] [--rerun-t0] [--rerun-t1] [--rerun-t2a] [--rerun-t2b] [--rerun-t3] [--no-cache] [--dry-run]", file=sys.stderr)
         return 2
     try:
         return run(A)
+    except capabilities.CapabilityError as exc:
+        Progress(getattr(A, "progress", None)).emit("error", error=str(exc), code=3)
+        return 3
     except Exception as exc:
         Progress(getattr(A, "progress", None)).emit("error", error=str(exc))
         return 2

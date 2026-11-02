@@ -2,7 +2,7 @@
 
 Generated: 2026-09-22T13:43:08.578Z
 Snapshot: 2026-11-01 · Branch: feat/eval-v2
-当前分支 `feat/eval-v2`。计数与结构已重算（398 tests / 41 ADR / 16 个 Python CLI + 5 个共享模块 + 8 份 rubric）。v2 与后续可用性改动（ADR-0032–0041）已落文档；工作区、缓存、触发上限、真实输入多 case 已实现。
+当前分支 `feat/eval-v2`。计数与结构已重算（455 tests / 29 个测试文件 / 41 ADR / 16 个 Python CLI + 11 个共享模块 + 8 份 rubric）。v2 与后续可用性改动（ADR-0032–0041）已落文档；工作区、缓存、触发上限、真实输入多 case 已实现。
 
 ## IMPLEMENTATION WORKFLOW
 
@@ -30,10 +30,11 @@ skill-evaluator/        # 产品本体（自闭环，ADR-0006）
 ├── requirements.txt    # 只声明 pytest>=7；运行时零第三方依赖（stdlib）
 ├── LICENSE             # MIT
 ├── config.yaml         # 可调阈值/常量（ADR-0035），参与评估器指纹
-├── scripts/            # 16 个 Python CLI + 5 个共享模块（_config/_console/_subprocess/llm/harness）+ check-deps.sh
+├── scripts/            # 16 个 Python CLI + 11 个共享模块（_config/_console/_subprocess/llm/harness/adapter_*/sandbox/capabilities）+ check-deps.sh
 ├── judges/             # 8 份 LLM 评审 rubric（md）；side-effects 已移入 attic
+├── sandbox/            # T2/T3 容器镜像模板与边界说明（Docker/无网络）
 ├── web/                # 本地前端（stdlib HTTP + SSE + 原生 JS，ADR-0036）
-└── tests/              # 398 个测试，扁平单层；conftest.py 只设 PYTHONIOENCODING
+└── tests/              # 455 个测试，扁平单层；conftest.py 只设 PYTHONIOENCODING
 docs/adr/               # 41 条架构决策（0001–0041）
 evalsets/               # ⚠ 被 gitignore：评测集 + 运行产物，本地态```
 
@@ -41,7 +42,7 @@ evalsets/               # ⚠ 被 gitignore：评测集 + 运行产物，本地�
 
 - `docs/` 有 `adr/`（架构决策）与 `design/`（待实现设计/实现方案记录）；决策正文仍只在 ADR。
 - `evalsets/` 有两处：根级（被测 skill 的集）与 `skill-evaluator/evalsets/`（评估器自己的集）。**两处都不入库。**
-- 无 `pyproject.toml` / `setup.py` / `Makefile` / `.github/` / `conftest.py` / `pytest.ini` / `__init__.py`。`requirements.txt` 只声明 `pytest>=7`——**运行时零第三方依赖**，但需 **Python ≥ 3.9**（`Path.is_relative_to`）+ git。外部能力依赖 pi CLI。
+- 无 `pyproject.toml` / `setup.py` / `Makefile` / `.github/` / `conftest.py` / `pytest.ini` / `__init__.py`。`requirements.txt` 只声明 `pytest>=7`——**运行时零第三方依赖**，但需 **Python ≥ 3.9**（`Path.is_relative_to`）+ git。外部能力依赖 agent adapter（pi / Claude Code）与 T2/T3 的 Docker。
 - `scripts/` 内部靠 `sys.path.insert(0, Path(__file__).parent)` 做同目录导入，必须以脚本目录为基准调用。
 - `scripts/check-deps.sh` 是 #7 前置自检（退出码 0/1），但**不在评估器指纹范围内**——指纹只收 `scripts/*.py` + `judges/*.md` + `config.yaml` + `SKILL.md` + `reference.md`（`report.py`），改 .sh 不会让历史报告变 `comparable=false`。
 
@@ -104,7 +105,7 @@ evalsets/               # ⚠ 被 gitignore：评测集 + 运行产物，本地�
 - **不 `git add .`**：`.gitignore:3` 的 `evalsets/` 匹配任意层级；`uploads/`、`prompt.txt`、`scratch/`、`wt-*/` 同为临时/敏感产物。误提交即把评测集与上传物发布出去。
 - **不重新生成已冻结的评测集**：冻结集跨版本复用是历史报告可比的前提（ADR-0002）。自动生成的集未经人工确认不得写 `meta.json`，且不得进入第 5 步（`SKILL.md § 流程 第 4 步`）。
 - **不照抄 description 写 `should` prompt**（ADR-0002/0011），否则 precision 虚高。
-- **不用 subagent 或 self-simulation 代替 pi CLI 子进程**跑沙箱（ADR-0007 明写"禁止 self-simulation"）。
+- **不用 subagent 或 self-simulation 代替 agent adapter 子进程**跑沙箱（ADR-0007 明写"禁止 self-simulation"）。
 - **不写死机器路径**，包括解释器路径（统一 `sys.executable`）——命中即触发可移植性闸门整体 fail（ADR-0008/0009）。
 - **不把 LLM 评审存成 `judge-*.json` 或放 results 根目录**：`report.py` 只认 `judges/<metric>.json`（`reference.md § 中间产物契约`）。本仓历史产物里有 5 个 `judge-*.json` 反例，别照抄。
 - **不用 0 填充未测指标**，不合成加权总分（ADR-0004）。
@@ -116,7 +117,7 @@ evalsets/               # ⚠ 被 gitignore：评测集 + 运行产物，本地�
 
 ## COMMANDS
 
-无安装步骤（运行时零第三方依赖）。硬依赖：Python ≥ 3.9、git；能力依赖：pi CLI；测试依赖：pytest。
+无安装步骤（运行时零第三方依赖）。硬依赖：Python ≥ 3.9、git；能力依赖：agent adapter（pi / Claude Code），T2/T3 还要求 Docker；测试依赖：pytest。
 
 ```bash
 cd skill-evaluator                    # 所有相对路径以此目录为基准
@@ -124,7 +125,7 @@ cd skill-evaluator                    # 所有相对路径以此目录为基准
 bash scripts/check-deps.sh            # 前置自检，退出码 0 = 可跑（缺硬依赖不要继续）
 pip install -r requirements.txt       # 仅跑测试时需要（pytest>=7）
 
-python -m pytest tests                # 全量：398 个测试
+python -m pytest tests                # 全量：455 个测试
 python -m pytest tests/test_idem.py   # 单文件
 python -m pytest tests -k "idem or report"
 
