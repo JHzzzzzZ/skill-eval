@@ -733,6 +733,10 @@ def _report_payload(rid: str):
 VERDICT_RANK = {"fail": 0, "warn": 1, "pass": 2}
 CHANGE_KINDS = ("improved", "regressed", "same", "skipped")
 EXPORT_MEMBERS = ("report.json", "report.md", "report.html")
+# 导出证据：报告结论要能复核；只收白名单，避免把 run.log、sandbox、真实输入原文带出去。
+EXPORT_EVIDENCE_FILES = ("score.json", "triggers.json", "runs.json", "idem.json",
+                         "compare.json", "golden.json")
+EXPORT_EVIDENCE_DIRS = ("judges", "triggers", "traces")
 
 
 def _report_and_meta(rid: str):
@@ -842,7 +846,7 @@ def _compare_reports(base: str, target: str):
 
 
 def _export_zip(rid: str) -> tuple[str, bytes]:
-    """打包一份报告：只含 report.json/md/html + meta.json，不含日志与 trace。"""
+    """打包报告 + 可复核证据（judges/triggers/traces + score 等）；不含日志与 sandbox。"""
     if not RUN_ID_RE.fullmatch(str(rid or "")):
         raise ValueError("非法的 run id")
     results = _results_dir(rid)
@@ -855,6 +859,17 @@ def _export_zip(rid: str) -> tuple[str, bytes]:
             member = results / name
             if member.is_file():
                 zf.write(member, arcname=name)
+        for name in EXPORT_EVIDENCE_FILES:
+            member = results / name
+            if member.is_file():
+                zf.write(member, arcname=name)
+        for dirname in EXPORT_EVIDENCE_DIRS:
+            base = results / dirname
+            if not base.is_dir():
+                continue
+            for member in sorted(base.rglob("*")):
+                if member.is_file():
+                    zf.write(member, arcname=member.relative_to(results).as_posix())
         meta = results / "meta.json"
         if not meta.is_file():
             meta = results / "run-meta.json"

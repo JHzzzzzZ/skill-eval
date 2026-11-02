@@ -13,7 +13,7 @@ Generated: 2026-09-22T13:43:08.578Z
 | `test_static_check.py` | `scripts/static_check.py`（六组规则 + PII + 依赖全面性 + 字符/行阈值） | 63 |
 | `test_config.py` | `scripts/_config.py`（YAML 子集解析/优先级/类型） | 7 |
 | `test_evalset_gen.py` | `scripts/evalset_gen.py`（prompt/条目归一化） | 2 |
-| `test_web.py` | `web/app.py`（zip 上传安全边界 / UI 术语 / 停止进程 / 复用拷贝与复用归属 / 工作区 / 评测集版本与导入导出 / 磁盘 history 回退 / 局部报告 / ACTIVE 运行态 / 内容保真 / provenance / 审核人 400 / 预检接线 / 评测集前置 / 历史对比与可比性判定 / 报告导出 / T2-T3 token 门禁与 run 归属 / 游客 T0-T1 / legacy 在无 token 时才放行 / 审计 / 限流 / 容器能力 412 / 确认后宿主回退 / T0-T1 不传评测集） | 66 |
+| `test_web.py` | `web/app.py`（zip 上传安全边界 / UI 术语 / 停止进程 / 复用拷贝与复用归属 / 工作区 / 评测集版本与导入导出 / 磁盘 history 回退 / 局部报告 / ACTIVE 运行态 / 内容保真 / provenance / 审核人 400 / 预检接线 / 评测集前置 / 历史对比与可比性判定 / 报告导出 / T2-T3 token 门禁与 run 归属 / 游客 T0-T1 / legacy 在无 token 时才放行 / 审计 / 限流 / 容器能力 412 / 确认后宿主回退 / T0-T1 不传评测集 / 证据/溯源/403/改判/移动端） | 67 |
 | `test_token_admin.py` | `web/token_admin.py`（issue 只返一次明文、只落 hash / list 不泄 hash / revoke 即时失效 / CLI 全局 `--tokens-file`/`--audit-file` / 路径不走环境变量 / 审计写失败不抛 / 损坏库 fail closed） | 9 |
 | `test_llm.py` | `scripts/llm.py`（协议/无 tools/JSON 提取） | 5 |
 | `test_judge_run.py` | `scripts/judge_run.py`（文件收集/prompt/SKILL.md 优先） | 5 |

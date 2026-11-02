@@ -479,6 +479,11 @@ def write_compare_run(root: Path, rid: str, *, metrics: dict, skill_sha: str = "
     (rdir / "run.log").write_text("log line", encoding="utf-8")
     (results / "traces").mkdir()
     (results / "traces" / "t1.json").write_text("{}", encoding="utf-8")
+    (results / "judges").mkdir()
+    (results / "judges" / "brevity.json").write_text('{"score":1}', encoding="utf-8")
+    (results / "triggers").mkdir()
+    (results / "triggers" / "should-1.json").write_text('{"steps":[]}', encoding="utf-8")
+    (results / "score.json").write_text('{"trigger":"pass"}', encoding="utf-8")
     return rdir
 
 
@@ -575,14 +580,17 @@ def test_ui_wires_history_and_compare_modals():
 
 # --- B3 导出 / 分享 ---
 
-def test_export_zip_contains_report_and_meta_only(tmp_path, monkeypatch):
+def test_export_zip_contains_report_and_evidence(tmp_path, monkeypatch):
     monkeypatch.setattr(web, "RUNS", tmp_path / "runs")
     write_compare_run(tmp_path / "runs", "run1", metrics={"#1": metric("pass")})
     filename, blob = web._export_zip("run1")
     assert filename == "report-run1.zip"
     names = set(zipfile.ZipFile(io.BytesIO(blob)).namelist())
-    assert names == {"report.json", "report.md", "report.html", "meta.json"}
-    assert "run.log" not in names and not any(name.startswith("traces/") for name in names)
+    assert {"report.json", "report.md", "report.html", "meta.json",
+            "score.json", "judges/brevity.json", "triggers/should-1.json",
+            "traces/t1.json"} <= names
+    assert "run.log" not in names
+    assert not any(name.startswith("sandbox/") for name in names)
 
 
 def test_export_rejects_traversal_and_missing_report(tmp_path, monkeypatch):
@@ -1212,6 +1220,26 @@ def test_container_run_passes_isolation_to_runner(tmp_path, monkeypatch):
         assert status == 200, data
         cmd = captured["cmds"][-1]
         assert "--isolation" in cmd and cmd[cmd.index("--isolation") + 1] == "docker"
+
+
+def test_ui_evidence_provenance_permissions_history_and_mobile():
+    html = (WEB_APP.parent / "index.html").read_text(encoding="utf-8")
+    # 1 证据：表格化 + 原始 JSON 折叠
+    assert "function renderEvidenceData" in html and "证据数据" in html
+    assert "原始 JSON" in html and "evidence-table" in html
+    # 2 溯源条包含评测集
+    assert '["评测集", evalsetText]' in html
+    # 3 403 不再伪装成 404
+    assert "无权访问这次运行" in html and "r.status === 403" in html
+    # 4 最近报告只显示有报告的 run
+    assert ".filter(x=>x.has_report)" in html
+    # 5 人工改判历史
+    assert "renderOverrideHistory" in html and "改判历史" in html
+    assert "manual_overrides" in html
+    # 7 手机宽度：顶部换行 + token 移入弹层
+    assert "flex-wrap:wrap" in html
+    assert ".token-set{display:none}" in html.replace(" ", "")
+    assert 'id="accessTokenMobile"' in html and 'id="tokenModal"' in html
 
 
 def test_ui_loads_capabilities_and_blocks_container_tiers():

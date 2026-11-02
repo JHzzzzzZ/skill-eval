@@ -35,8 +35,8 @@
   }
   a{color:var(--brand);text-decoration:none} a:hover{text-decoration:underline}
   .shell{max-width:1440px;margin:0 auto;padding:26px 22px 70px}
-  .topbar{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:26px}
-  .brand{display:flex;align-items:center;gap:12px}
+  .topbar{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:26px;flex-wrap:wrap}
+  .brand{display:flex;align-items:center;gap:12px;min-width:0}
   .mark{
     width:42px;height:42px;border-radius:13px;display:grid;place-items:center;
     background:linear-gradient(135deg,var(--brand),var(--brand-2));color:#fff;
@@ -45,8 +45,9 @@
   .brand h1{font-size:19px;letter-spacing:-.02em;margin:0}
   .brand p{margin:2px 0 0;color:var(--muted);font-size:12.5px}
   .top-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
-  .token-set{display:flex;gap:6px;align-items:center}
-  .token-set input{width:190px;padding:7px 10px;font-size:12.5px;border-radius:10px}
+  .token-set{display:flex;gap:6px;align-items:center;min-width:0}
+  .token-set input{width:min(190px,42vw);padding:7px 10px;font-size:12.5px;border-radius:10px}
+  .mobile-token-btn{display:none}
   .icon-btn{
     width:38px;height:38px;border-radius:11px;border:1px solid var(--line);
     background:var(--card);color:var(--ink-2);display:grid;place-items:center;cursor:pointer;
@@ -217,6 +218,10 @@
   .evidence-body{padding:14px 16px;overflow:auto;flex:1;font-size:12.5px}
   .evidence-body .adv{border:1px solid var(--line);border-radius:10px;padding:8px 10px;margin:6px 0;background:var(--card-soft)}
   .evidence-body pre{margin-top:8px;border-radius:10px;max-height:340px}
+  .evidence-body table{min-width:0;font-size:12px}
+  .evidence-body td{word-break:break-word}
+  .evidence-body .raw-evidence{margin-top:10px}
+  .evidence-body .raw-evidence summary{cursor:pointer;color:var(--muted);font-size:11.5px}
   .timeline{display:grid;gap:2px;margin-bottom:14px}
   .step{display:grid;grid-template-columns:24px 1fr;gap:10px;align-items:start;padding:7px 0;position:relative}
   .step:not(:last-child):before{content:"";position:absolute;left:11px;top:26px;bottom:-7px;width:2px;background:var(--line)}
@@ -295,6 +300,13 @@
     .hero{flex-direction:column;align-items:flex-start}
     .stats{grid-template-columns:1fr 1fr}
   }
+  @media(max-width:700px){
+    .topbar{align-items:flex-start;gap:10px}
+    .brand{flex:1 1 100%}
+    .top-actions{width:100%;justify-content:flex-end}
+    .token-set{display:none}
+    .mobile-token-btn{display:grid}
+  }
   @media(max-width:640px){
     .layout{grid-template-columns:1fr}
   }
@@ -326,6 +338,7 @@
         <span class="pill" id="tokenState">游客</span>
       </div>
       <span class="pill"><span class="dot" id="liveDot"></span><span id="state">待机</span></span>
+      <button class="icon-btn mobile-token-btn" id="tokenOpen" title="访问 token" aria-label="访问 token">T</button>
       <button class="icon-btn" id="themeBtn" title="切换主题" aria-label="切换主题">◐</button>
     </div>
   </header>
@@ -540,6 +553,7 @@
         <div class="override-box">
           <input id="ovReason" placeholder="本次人工调整的原因（必填）">
           <button class="btn btn-danger btn-sm" id="ovBtn" type="button">应用调整</button>
+          <button class="btn btn-ghost btn-sm" id="overrideHistory" type="button">改判历史</button>
         </div>
         <div class="inline-note" style="margin-top:8px">直接改结果下拉框；一次填写理由并批量应用。后台记录指标、原值、新值、原因、审核人和时间。</div>
       </section>
@@ -572,6 +586,29 @@
     <div class="modal-head"><b>运行日志（尾部 200 行）</b>
       <button class="btn btn-ghost btn-sm" id="logClose" type="button">关闭</button></div>
     <pre id="logBody">加载中…</pre>
+  </div>
+</div>
+<div class="modal" id="tokenModal" hidden>
+  <div class="modal-card" style="max-width:480px">
+    <div class="modal-head"><b>访问 token</b>
+      <button class="btn btn-ghost btn-sm" id="tokenClose" type="button">关闭</button></div>
+    <div class="evidence-body">
+      <div class="field"><label for="accessTokenMobile">访问 token（T2/T3 必填）</label>
+        <input id="accessTokenMobile" type="password" autocomplete="off" placeholder="粘贴 token">
+      </div>
+      <div class="row" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px">
+        <button class="btn btn-ghost btn-sm" id="tokenBtnMobile" type="button">验证</button>
+        <span class="pill" id="tokenStateMobile">游客</span>
+      </div>
+      <div class="inline-note" style="margin-top:10px">token 只存本机浏览器；分享链接不会带上 token。</div>
+    </div>
+  </div>
+</div>
+<div class="modal" id="overridesModal" hidden>
+  <div class="modal-card">
+    <div class="modal-head"><b>改判历史</b>
+      <button class="btn btn-ghost btn-sm" id="overridesClose" type="button">关闭</button></div>
+    <div class="evidence-body" id="overridesBody"></div>
   </div>
 </div>
 <div class="modal" id="evidenceModal" hidden>
@@ -692,10 +729,15 @@ function authHeaders(extra){
   if(token) headers["X-Skill-Eval-Token"] = token;
   return headers;
 }
+function tokenInputs(){
+  return ["accessToken", "accessTokenMobile"].map(id=>$(id)).filter(Boolean);
+}
 function applyActorUi(){
   $("evalCard").hidden = !tokenAuthorized;      // 游客隐藏评测集卡
-  $("tokenState").textContent = tokenAuthorized ? "已授权：" + (tokenName || "token") : "游客";
-  $("accessToken").value = tokenAuthorized ? tokenValue() : "";
+  const label = tokenAuthorized ? "已授权：" + (tokenName || "token") : "游客";
+  $("tokenState").textContent = label;
+  $("tokenStateMobile").textContent = label;
+  tokenInputs().forEach(el=>{ el.value = tokenAuthorized ? tokenValue() : ""; });
   refreshRunPrereq();
 }
 function clearToken(){ tokenAuthorized = false; tokenName = ""; localStorage.removeItem("se-token"); }
@@ -712,8 +754,8 @@ async function checkToken(){
   if(tokenAuthorized) loadRuns();
   return tokenAuthorized;
 }
-$("tokenBtn").onclick = async () => {
-  const raw = $("accessToken").value.trim();
+async function submitToken(raw){
+  raw = String(raw || "").trim();
   if(!raw){
     clearToken(); applyActorUi(); loadRuns();
     toast("已切换为游客", "ok");
@@ -722,8 +764,16 @@ $("tokenBtn").onclick = async () => {
   localStorage.setItem("se-token", raw);
   const ok = await checkToken();
   toast(ok ? "已授权：" + tokenName : "token 无效或已停用", ok ? "ok" : "err");
-};
-$("accessToken").addEventListener("keydown", (e)=>{ if(e.key === "Enter") $("tokenBtn").click(); });
+  if(ok) $("tokenModal").hidden = true;
+}
+$("tokenBtn").onclick = () => submitToken($("accessToken").value);
+$("tokenBtnMobile").onclick = () => submitToken($("accessTokenMobile").value);
+$("tokenOpen").onclick = () => { $("tokenModal").hidden = false; };
+$("tokenClose").onclick = () => { $("tokenModal").hidden = true; };
+$("tokenModal").onclick = (e) => { if(e.target.id === "tokenModal") $("tokenModal").hidden = true; };
+["accessToken", "accessTokenMobile"].forEach(id=>{
+  $(id).addEventListener("keydown", (e)=>{ if(e.key === "Enter") $(id === "accessToken" ? "tokenBtn" : "tokenBtnMobile").click(); });
+});
 applyActorUi();
 checkToken();
 function preflightWarnings(){
@@ -1500,6 +1550,51 @@ $("logClose").onclick = () => { $("logModal").hidden = true; };
 $("logModal").onclick = (e) => { if(e.target.id === "logModal") $("logModal").hidden = true; };
 $("evidenceClose").onclick = () => { $("evidenceModal").hidden = true; };
 $("evidenceModal").onclick = (e) => { if(e.target.id === "evidenceModal") $("evidenceModal").hidden = true; };
+const EVIDENCE_LABELS = {
+  name:"检查点", check:"检查点", pass:"结果", result:"结果", quote:"原文引用",
+  score:"得分", evidence:"证据", reason:"理由", note:"备注", metric:"指标",
+  case:"case", tool:"工具", args:"参数", path:"路径", value:"值", status:"状态",
+  reviewer:"审核人", at:"时间", from:"原值", to:"新值", verdict:"裁决",
+};
+function evidenceLabel(key){
+  return EVIDENCE_LABELS[key] || String(key || "").replace(/_/g, " ");
+}
+function evidenceCell(value){
+  if(value == null) return "—";
+  if(typeof value === "boolean") return value ? "通过" : "未通过";
+  if(typeof value === "object"){
+    const text = JSON.stringify(value, null, 2);
+    return `<details><summary>查看</summary><pre>${esc(text)}</pre></details>`;
+  }
+  return esc(String(value));
+}
+function evidenceTable(rows){
+  if(!rows.length) return '<div class="empty">无数据</div>';
+  const objects = rows.filter(row=>row && typeof row === "object" && !Array.isArray(row));
+  if(objects.length !== rows.length){
+    return `<div class="table-wrap"><table class="evidence-table"><tbody>${
+      rows.map((row,i)=>`<tr><td>${i+1}</td><td>${evidenceCell(row)}</td></tr>`).join("")
+    }</tbody></table></div>`;
+  }
+  const keys = [...new Set(objects.flatMap(row=>Object.keys(row)))];
+  const head = keys.map(k=>`<th>${esc(evidenceLabel(k))}</th>`).join("");
+  const body = objects.map(row=>`<tr>${keys.map(k=>`<td>${evidenceCell(row[k])}</td>`).join("")}</tr>`).join("");
+  return `<div class="table-wrap"><table class="evidence-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+}
+function renderEvidenceData(data){
+  if(data == null) return '<div class="empty">无证据数据</div>';
+  if(Array.isArray(data)) return evidenceTable(data);
+  if(typeof data === "object"){
+    if(Array.isArray(data.items)){
+      const rest = Object.fromEntries(Object.entries(data).filter(([k])=>k !== "items"));
+      let html = evidenceTable(data.items);
+      if(Object.keys(rest).length) html += evidenceTable([rest]);
+      return html;
+    }
+    return evidenceTable([data]);
+  }
+  return `<p>${esc(String(data))}</p>`;
+}
 function openEvidence(metric){
   if(!report || !metric) return;
   const value = (report.metrics||{})[metric] || {};
@@ -1510,7 +1605,9 @@ function openEvidence(metric){
   $("evidenceBody").innerHTML =
     `<p>${esc(publicText(value.note || "（无摘要）"))}</p>`
     + (adviceHtml ? `<h4>优化建议</h4>${adviceHtml}` : "")
-    + `<h4>data</h4><pre>${esc(JSON.stringify(value.data == null ? null : value.data, null, 2))}</pre>`;
+    + `<h4>证据数据</h4>${renderEvidenceData(value.data)}`
+    + `<details class="raw-evidence"><summary>原始 JSON</summary><pre>${
+      esc(JSON.stringify(value.data == null ? null : value.data, null, 2))}</pre></details>`;
   $("evidenceModal").hidden = false;
 }
 async function showLog(id){
@@ -1575,7 +1672,8 @@ async function loadRuns(){
   try{
     const r = await fetch("/api/runs?limit=10", {headers: authHeaders()});
     const d = await r.json();
-    const runs = d.runs || [];
+    // “最近报告”只列可打开的报告；没有 report 的 legacy/半截 run 留给“全部历史”诊断。
+    const runs = (d.runs || []).filter(x=>x.has_report);
     if(!runs.length){ $("recent").innerHTML = '<div class="empty">还没有报告</div>'; return; }
     $("recent").innerHTML = runs.map(x=>{
       const status = x.running ? "运行中" : x.partial ? "局部报告" : x.stopped ? "已停止" : conclusionText(x.conclusion);
@@ -1702,7 +1800,17 @@ async function openRun(id){
   localStorage.setItem("se-last-run", id);
   try{
     const r = await fetch("/api/status?id="+id, {headers: authHeaders()});
-    if(!r.ok){ showError("找不到这次运行", id, false); return; }
+    if(!r.ok){
+      if(r.status === 403){
+        showError("无权访问这次运行：链接属于其他浏览器或账号。请用原浏览器打开，或让拥有者导出报告后分享。", id, false);
+      }else if(r.status === 404){
+        showError("找不到这次运行", id, false);
+      }else{
+        const d = await r.json().catch(()=>({}));
+        showError(d.error || ("读取运行失败（HTTP " + r.status + "）"), id, false);
+      }
+      return;
+    }
     const s = await r.json();
     if(s.running){
       setBusy(true); $("state").textContent = "运行中…"; hideError();
@@ -1745,6 +1853,15 @@ async function showReport(id){
       $("partialNote").textContent = "已停止：仅展示已完成阶段" + (stages ? "（" + stages + "）" : "");
     }
     const meta = report.run_meta || {};
+    const evalsetText = (() => {
+      const version = String(meta.evalset_version || "").trim();
+      const path = String(meta.evalset || "").replace(/\\/g, "/").replace(/\/+$/,"");
+      const name = path ? path.split("/").slice(-2, -1)[0] : "";
+      if(version && name) return `${name} / ${version}`;
+      return version || name || "未使用";
+    })();
+    const manualCount = (report.manual_overrides || []).length;
+    $("overrideHistory").textContent = manualCount ? `改判历史 (${manualCount})` : "改判历史";
     const reviewer = (() => {
       const names = [...new Set((report.manual_overrides||[]).map(x=>x.reviewer).filter(Boolean))];
       if(names.length) return names.join("、");
@@ -1756,6 +1873,7 @@ async function showReport(id){
       ["运行", String(data.run_id || id || "").slice(0, 12)],
       ["skill", meta.skill_name || (meta.skill ? String(meta.skill).split(/[\\/]/).pop() : "—")],
       ["档位", tierLabel(report.tier || meta.tier)],
+      ["评测集", evalsetText],
       ["模型", report.model || meta.model || "未配置"],
       ["评估器", (report.evaluator||{}).version || "—"],
       ["生成时间", report.generated_at ? runTime(report.generated_at) : "—"],
@@ -1821,6 +1939,29 @@ document.addEventListener("click", ()=>{
     p.querySelector(".verdict-btn").setAttribute("aria-expanded","false");
   });
 });
+function renderOverrideHistory(){
+  const rows = (report && report.manual_overrides) || [];
+  if(!rows.length){
+    $("overridesBody").innerHTML = '<div class="empty">还没有人工改判记录</div>';
+    return;
+  }
+  const body = rows.map(item=>{
+    const metric = String(item.metric || "");
+    const from = verdictText(item.from || "skipped");
+    const to = verdictText(item.to || "skipped");
+    return `<tr><td><code>${esc(metric)}</code><br><small class="muted">${esc(item.at || "")}</small></td>
+      <td><span class="badge ${esc(item.from || "skipped")}">${esc(from)}</span></td>
+      <td><span class="badge ${esc(item.to || "skipped")}">${esc(to)}</span></td>
+      <td>${esc(publicText(item.reason || "—"))}</td>
+      <td>${esc(item.reviewer || "—")}</td></tr>`;
+  }).join("");
+  $("overridesBody").innerHTML = '<div class="table-wrap"><table><thead><tr>'
+    + '<th>指标 / 时间</th><th>原值</th><th>新值</th><th>理由</th><th>审核人</th>'
+    + `</tr></thead><tbody>${body}</tbody></table></div>`;
+}
+$("overrideHistory").onclick = () => { renderOverrideHistory(); $("overridesModal").hidden = false; };
+$("overridesClose").onclick = () => { $("overridesModal").hidden = true; };
+$("overridesModal").onclick = (e) => { if(e.target.id === "overridesModal") $("overridesModal").hidden = true; };
 function syncOverrideState(){
   const changed = [...document.querySelectorAll(".verdict-picker")].filter(p=>p.dataset.value !== p.dataset.original);
   $("ovBtn").textContent = changed.length ? `应用 ${changed.length} 项调整` : "应用调整";

@@ -156,7 +156,7 @@ T1 评审走 `llm` 接口层（ADR-0034）：模型 `--model` > `llm.model` > `S
 - `GET /api/events?id=`：SSE 进度，无硬截止；每 15 秒发注释心跳，进程结束/停止才收尾；`stopped` 事件带 `report` 地址。
 - `GET /api/report?id=` / `GET /report?id=`：先查活动 run，再回退磁盘 `results/`；只有两边都没有才 404。`/api/report` 在返回的 JSON 上附加 `run_id` 与 `run_meta`（不写回 `report.json`）。
 - `GET /api/compare?base=&target=`：读两份历史 `report.json` + `run-meta.json` 做逐指标对比。`comparable` = 报告 `schema` 相同且 `evaluator.content_sha256` 相同；`skill_same` = `skill_sha256` 相同（`skill_known` 标两侧是否都记了指纹）。每个 `#N` 返回 `base`/`target`/`change`（`improved`/`regressed`/`same`/`skipped`）与两侧 `note`，附 `counts` 与 `notes`（不可比、不同 skill、含局部报告）。缺 id 或 id 非法 400，缺报告 404。
-- `GET /api/export?id=`：合法 run id 才打包 `results/` 里的 `report.json`/`report.md`/`report.html` + `meta.json`（无报告自带 meta 时回退 `run-meta.json`），不含 `run.log` 与 `raw/`、`traces/` 等运行产物；文件名 `report-<id>.zip`。id 非法 400，缺报告 404。
+- `GET /api/export?id=`：合法 run id 才打包 `results/` 里的 `report.json`/`report.md`/`report.html` + `meta.json`（无报告自带 meta 时回退 `run-meta.json`），并附可复核证据：`score.json`/`triggers.json`/`runs.json`/`idem.json`/`compare.json`/`golden.json` + `judges/`、`triggers/`、`traces/` 白名单；不含 `run.log`、`raw/`、sandbox 与真实输入原文。文件名 `report-<id>.zip`。id 非法 400，缺报告 404。
 - `GET /api/evalset/status|items`、`POST /api/evalset/generate|review`：评测集检查、生成草稿、逐条审核（写 `reviews/review.json` + `audit.jsonl`；`reviewer` 必填）。
 - `GET /api/evalset/export?evalset=`、`POST /api/evalset/import?filename=`：评测集 zip 导出/导入（见 § 评测集冻结）。
 - `POST /api/override`：支持一次提交多条裁决调整（`changes: [{metric,to}]`），统一写 `overrides.json` + `manual-overrides.jsonl`，重出报告；`reviewer` 必填，空值 400（不再写死 `web`）。
