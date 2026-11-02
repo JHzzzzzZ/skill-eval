@@ -415,9 +415,13 @@ def run(args) -> int:
     progress.emit("stage", name="T0", status="done", passed=static.get("passed"),
                   cached=reuse_static)
 
-    evalset = Path(args.evalset).resolve() if args.evalset else _find_evalset(name)
-    if evalset and not evalset.is_dir():
-        raise RunnerError(f"评测集不存在: {evalset}")
+    # T0/T1 不消费评测集：即使页面/旧工作区带了失效路径，也不能因此拒绝基础检查/文档评审。
+    # 只有 T2+ 才解析并校验 evalset。
+    evalset = None
+    if TIER_RANK[tier] >= TIER_RANK["t2a"]:
+        evalset = Path(args.evalset).resolve() if args.evalset else _find_evalset(name)
+        if evalset and not evalset.is_dir():
+            raise RunnerError(f"评测集不存在: {evalset}")
     evalset_sha = _dir_digest(evalset) if evalset else ""
     model = args.model or os.environ.get("SKILL_EVAL_MODEL") or None
     judge_backend = ("llm" if (args.base_url or args.api_key or args.llm_protocol) else args.backend)

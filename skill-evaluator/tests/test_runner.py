@@ -43,6 +43,18 @@ def test_t0_end_to_end_writes_schema2(tmp_path):
     assert len(report["metrics"]) == 16
 
 
+def test_t0_t1_ignore_missing_evalset(tmp_path):
+    """T0/T1 不消费评测集：旧工作区/页面带失效路径时仍应跑完。"""
+    skill = make_skill(tmp_path)
+    results = tmp_path / "results"
+    r = subprocess.run([sys.executable, str(SCRIPT), "--skill", str(skill),
+                        "--tier", "t0", "--results", str(results),
+                        "--evalset", str(tmp_path / "missing-evalset")],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
+    assert r.returncode == 0, r.stderr
+    assert (results / "report.json").is_file()
+
+
 def test_progress_has_clock_and_elapsed(tmp_path):
     skill = make_skill(tmp_path)
     results = tmp_path / "results"

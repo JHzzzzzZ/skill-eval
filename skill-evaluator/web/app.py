@@ -1440,7 +1440,8 @@ class Handler(BaseHTTPRequestHandler):
             cmd += ["--base-url", str(llm_cfg["base_url"])]
         if llm_cfg.get("api_key"):
             cmd += ["--api-key", str(llm_cfg["api_key"])]
-        if data.get("evalset"):
+        # T0/T1 不消费评测集：不把失效/旧工作区路径传给 runner。
+        if data.get("evalset") and tier in ("t2a", "t2b", "t3"):
             cmd += ["--evalset", str(data["evalset"])]
         if data.get("harness"):
             cmd += ["--harness", str(data["harness"])]

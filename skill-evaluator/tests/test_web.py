@@ -1175,6 +1175,25 @@ def test_t0_t1_still_run_when_container_missing(tmp_path, monkeypatch):
         assert status == 412
 
 
+def test_t0_t1_do_not_pass_evalset_to_runner(tmp_path, monkeypatch):
+    skill = make_skill(tmp_path)
+    captured = {}
+
+    class _CaptureProc(_FakeProc):
+        def __init__(self, cmd=None, **kwargs):
+            super().__init__(cmd, **kwargs)
+            captured.setdefault("cmds", []).append(list(cmd or []))
+
+    with web_server(tmp_path, monkeypatch) as server:
+        monkeypatch.setattr(web.subprocess, "Popen", _CaptureProc)
+        status, data, _ = call(server, "POST", "/api/run",
+                               {"skill": str(skill), "tier": "t0",
+                                "evalset": str(tmp_path / "missing-evalset")})
+        assert status == 200, data
+        cmd = captured["cmds"][-1]
+        assert "--evalset" not in cmd
+
+
 def test_container_run_passes_isolation_to_runner(tmp_path, monkeypatch):
     skill = make_skill(tmp_path)
     captured = {}

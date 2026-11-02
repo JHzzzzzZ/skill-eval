@@ -1312,7 +1312,9 @@ $("run").onclick = async () => {
   try{
     const r = await fetch("/api/run", {method:"POST", headers:authHeaders({"Content-Type":"application/json"}),
       body: JSON.stringify({skill, tier:tierValue(), harness:$("harness").value,
-        model:llm.model, evalset:evalsetPath(), backend:$("backend").value,
+        model:llm.model,
+        evalset: (["t2a","t2b","t3"].includes(tierValue()) ? evalsetPath() : ""),
+        backend:$("backend").value,
         real_cases: realCases, llm, workspace: currentWorkspace,
         allow_unsafe_host: allowUnsafeHost,
         rerun_t0: $("rerunT0").checked, rerun_t1: $("rerunT1").checked,
