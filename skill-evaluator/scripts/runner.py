@@ -368,9 +368,9 @@ def run(args) -> int:
     if not (skill / "SKILL.md").is_file():
         raise RunnerError(f"不是合法 skill 包（缺 SKILL.md）: {skill}")
     progress = Progress(args.progress)
+    stages = [t for t in TIERS[:TIER_RANK[tier] + 1]]
+    progress.emit("plan", tier=tier, stages=stages, skill=str(skill))
     if args.dry_run:
-        stages = [t for t in TIERS[:TIER_RANK[tier] + 1]]
-        progress.emit("plan", tier=tier, stages=stages, skill=str(skill))
         return 0
 
     version = args.version or time.strftime("%Y%m%d-%H%M%S")
@@ -809,8 +809,10 @@ def run(args) -> int:
         _write_json(results / "score.json", s2)
 
     progress.emit("stage", name="report", status="start")
-    _run("report.py", [results, "--skill", skill, "--tier", tier, "--html"] +
-         (["--evalset", evalset] if evalset else []))
+    _run("report.py", [results, "--skill", skill, "--tier", tier, "--html"]
+         + (["--model", model] if model else [])
+         + (["--harness", args.harness] if args.harness else [])
+         + (["--evalset", evalset] if evalset else []))
     report = _read_json(results / "report.json", {}) or {}
     progress.emit("stage", name="report", status="done")
     progress.emit("done", results=str(results), report=str(results / "report.html"),

@@ -189,6 +189,29 @@
   .progress-top span{font-family:var(--mono);font-size:12px;color:var(--muted)}
   .bar{height:9px;border-radius:999px;background:var(--line);overflow:hidden;margin:8px 0 16px}
   .bar i{display:block;height:100%;width:0;border-radius:999px;background:linear-gradient(90deg,var(--brand),var(--brand-2));transition:width .35s ease}
+  .timing{font-family:var(--mono);font-size:11.5px;color:var(--muted);margin:-8px 0 14px}
+  .prereq{font-size:11.5px;color:var(--ink-2);border:1px solid var(--line);border-radius:999px;
+    padding:4px 10px;background:var(--card);white-space:nowrap}
+  .prereq.warn{color:var(--warn);background:var(--warn-soft);
+    border-color:color-mix(in srgb,var(--warn) 35%,transparent)}
+  .result-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .compare-banner{border:1px solid var(--line);border-radius:10px;padding:8px 11px;margin-bottom:8px;
+    font-size:12.5px;background:var(--card-soft)}
+  .compare-banner.warn{color:var(--warn);background:var(--warn-soft);
+    border-color:color-mix(in srgb,var(--warn) 35%,transparent)}
+  .compare-banner.ok{color:var(--pass);background:var(--pass-soft);
+    border-color:color-mix(in srgb,var(--pass) 30%,transparent)}
+  .change-improved{color:var(--pass);font-weight:650}
+  .change-regressed{color:var(--fail);font-weight:650}
+  .change-same{color:var(--muted)}
+  .change-skipped{color:var(--skip)}
+  .history-actions{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+  .provenance{display:flex;flex-wrap:wrap;gap:5px 14px;margin:8px 0 12px;padding:9px 11px;
+    border:1px solid var(--line);border-radius:11px;background:var(--card-soft);font-size:11.5px;color:var(--muted)}
+  .provenance b{color:var(--ink-2);font-weight:650}
+  .evidence-body{padding:14px 16px;overflow:auto;flex:1;font-size:12.5px}
+  .evidence-body .adv{border:1px solid var(--line);border-radius:10px;padding:8px 10px;margin:6px 0;background:var(--card-soft)}
+  .evidence-body pre{margin-top:8px;border-radius:10px;max-height:340px}
   .timeline{display:grid;gap:2px;margin-bottom:14px}
   .step{display:grid;grid-template-columns:24px 1fr;gap:10px;align-items:start;padding:7px 0;position:relative}
   .step:not(:last-child):before{content:"";position:absolute;left:11px;top:26px;bottom:-7px;width:2px;background:var(--line)}
@@ -334,10 +357,44 @@
         </div>
       </section>
 
+      <section class="card card-pad" id="evalCard">
+        <div class="card-head">
+          <div>
+            <div class="eyebrow">02 · 评测集（按需）</div>
+            <h3>生成草稿、检查质量、逐条审核</h3>
+            <p>触发评测和完整任务运行会用到；冻结前不会作为正式结论依据。</p>
+          </div>
+        </div>
+        <div class="grid-2">
+          <div class="field">
+            <label for="evalVersion">评测集版本</label>
+            <select id="evalVersion"><option value="">选择工作区后自动识别</option></select>
+          </div>
+          <div class="field">
+            <label for="evalCount">每组生成条数</label>
+            <input id="evalCount" type="number" value="10" min="1" max="30">
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px">
+          <button class="btn btn-ghost btn-sm" id="genEval" type="button">生成草稿</button>
+          <button class="btn btn-ghost btn-sm" id="loadEval" type="button">加载并审核</button>
+          <button class="btn btn-ghost btn-sm" id="submitReview" type="button">提交审核</button>
+          <button class="btn btn-ghost btn-sm" id="importEval" type="button">导入 .zip</button>
+          <button class="btn btn-ghost btn-sm" id="exportEval" type="button">导出 .zip</button>
+          <input id="evalZip" type="file" accept=".zip,application/zip" hidden>
+          <span class="inline-note" id="evalMsg"></span>
+        </div>
+        <div class="field" style="margin-top:12px;max-width:320px">
+          <label for="reviewerName">审核人 <span class="hint">（人工调整 / 评测集审核必填）</span></label>
+          <input id="reviewerName" placeholder="填写你的姓名">
+        </div>
+        <div id="evalReview"></div>
+      </section>
+
       <section class="card card-pad">
         <div class="card-head">
           <div>
-            <div class="eyebrow">02 · 评估深度</div>
+            <div class="eyebrow">03 · 评估深度</div>
             <h3>想看到哪一层结论？</h3>
             <p>越深越接近真实任务，也越慢。可以先跑浅层，再补跑深层。</p>
           </div>
@@ -348,6 +405,8 @@
             开始评估
           </button>
           <button class="btn btn-danger" id="stop" type="button" disabled>停止评估</button>
+          <label class="check"><input type="checkbox" id="notifyDone"> 完成后通知</label>
+          <span class="prereq" id="runPrereq">未创建，将跳过 #10</span>
           <span class="inline-note" id="runHint">会先做基础检查，再按所选深度继续；停止时保留已完成阶段。</span>
         </div>
         <div class="tier-grid" id="tierGrid">
@@ -433,35 +492,6 @@
         </details>
       </section>
 
-      <section class="card card-pad" id="evalCard">
-        <div class="card-head">
-          <div>
-            <div class="eyebrow">03 · 评测集</div>
-            <h3>生成草稿、检查质量、逐条审核</h3>
-            <p>触发评测和完整任务运行会用到；冻结前不会作为正式结论依据。</p>
-          </div>
-        </div>
-        <div class="grid-2">
-          <div class="field">
-            <label for="evalVersion">评测集版本</label>
-            <select id="evalVersion"><option value="">选择工作区后自动识别</option></select>
-          </div>
-          <div class="field">
-            <label for="evalCount">每组生成条数</label>
-            <input id="evalCount" type="number" value="10" min="1" max="30">
-          </div>
-        </div>
-        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px">
-          <button class="btn btn-ghost btn-sm" id="genEval" type="button">生成草稿</button>
-          <button class="btn btn-ghost btn-sm" id="loadEval" type="button">加载并审核</button>
-          <button class="btn btn-ghost btn-sm" id="submitReview" type="button">提交审核</button>
-          <button class="btn btn-ghost btn-sm" id="importEval" type="button">导入 .zip</button>
-          <button class="btn btn-ghost btn-sm" id="exportEval" type="button">导出 .zip</button>
-          <input id="evalZip" type="file" accept=".zip,application/zip" hidden>
-          <span class="inline-note" id="evalMsg"></span>
-        </div>
-        <div id="evalReview"></div>
-      </section>
     </div>
 
     <div class="stack">
@@ -472,6 +502,7 @@
           <span id="pct">0%</span>
         </div>
         <div class="bar"><i id="bar"></i></div>
+        <div class="timing" id="timing">未开始</div>
         <div class="timeline" id="stages"></div>
         <pre class="log" id="log">等待开始…</pre>
       </section>
@@ -483,9 +514,14 @@
             <div class="eyebrow">结果</div>
             <h3>评估结果</h3>
           </div>
-          <a class="btn btn-ghost btn-sm" id="reportLink" target="_blank" rel="noopener">打开完整报告 →</a>
+          <div class="result-actions">
+            <a class="btn btn-ghost btn-sm" id="reportLink" target="_blank" rel="noopener">打开完整报告 →</a>
+            <a class="btn btn-ghost btn-sm" id="exportLink" href="#" download>导出报告 .zip</a>
+            <button class="btn btn-ghost btn-sm" id="copyLink" type="button">复制链接</button>
+          </div>
         </div>
         <div class="inline-note warn" id="partialNote" hidden></div>
+        <div class="provenance" id="provenance"></div>
         <div class="stats" id="summary"></div>
         <div class="table-wrap">
           <table id="metrics"></table>
@@ -504,6 +540,7 @@
             <h3>最近报告</h3>
             <p>从本地运行记录里打开历史结果，刷新或重开页面也不丢。</p>
           </div>
+          <button class="btn btn-ghost btn-sm" id="historyOpen" type="button">查看全部历史</button>
         </div>
         <div class="recent-list" id="recent"><div class="empty">还没有报告</div></div>
       </section>
@@ -526,6 +563,37 @@
     <pre id="logBody">加载中…</pre>
   </div>
 </div>
+<div class="modal" id="evidenceModal" hidden>
+  <div class="modal-card">
+    <div class="modal-head"><b id="evidenceTitle">证据</b>
+      <button class="btn btn-ghost btn-sm" id="evidenceClose" type="button">关闭</button></div>
+    <div class="evidence-body" id="evidenceBody"></div>
+  </div>
+</div>
+<div class="modal" id="historyModal" hidden>
+  <div class="modal-card">
+    <div class="modal-head"><b>全部历史（最多 100 条）</b>
+      <button class="btn btn-ghost btn-sm" id="historyClose" type="button">关闭</button></div>
+    <div class="evidence-body">
+      <div class="grid-2" style="margin-bottom:12px">
+        <div class="field"><label for="compareBase">基准报告</label><select id="compareBase"></select></div>
+        <div class="field"><label for="compareTarget">目标报告</label><select id="compareTarget"></select></div>
+      </div>
+      <div class="real-actions" style="margin-bottom:12px">
+        <button class="btn btn-primary btn-sm" id="compareGo" type="button">对比选中</button>
+        <span class="inline-note" id="compareMsg"></span>
+      </div>
+      <div class="recent-list" id="historyList"><div class="empty">加载中…</div></div>
+    </div>
+  </div>
+</div>
+<div class="modal" id="compareModal" hidden>
+  <div class="modal-card">
+    <div class="modal-head"><b id="compareTitle">对比</b>
+      <button class="btn btn-ghost btn-sm" id="compareClose" type="button">关闭</button></div>
+    <div class="evidence-body" id="compareBody"></div>
+  </div>
+</div>
 
 <script>
 const $ = (id) => document.getElementById(id);
@@ -535,17 +603,50 @@ const STAGE_LABELS = {T0:"基础检查", T1:"文档语义评审", [K2A]:"触发�
 const TIER_LABELS = {T0:"基础检查", T1:"文档语义评审", [K2A]:"触发评测", [K2B]:"真实输入对比", T3:"完整任务运行"};
 const CONCLUSION_LABELS = {"all-pass":"全部通过", "with-warnings":"有警告", "has-failures":"有失败"};
 const VERDICT_LABELS = {pass:"通过", warn:"警告", fail:"失败", skipped:"未测"};
-const WEIGHT = {T0:5,T1:25,sandbox:30,[K2A]:40,[K2B]:50,T3:80,report:100};
+const STAGE_WEIGHTS = {T0:5, T1:18, sandbox:4, [K2A]:26, [K2B]:17, T3:25, report:5};
+const TIER_PLANS = {
+  t0: ["T0", "report"],
+  t1: ["T0", "T1", "report"],
+  t2a: ["T0", "T1", "sandbox", K2A, "report"],
+  t2b: ["T0", "T1", "sandbox", K2A, K2B, "report"],
+  t3: ["T0", "T1", "sandbox", K2A, K2B, "T3", "report"],
+};
+const TIER_ESTIMATE_MIN = {t0:[0.1,0.4], t1:[1,2], t2a:[2,45], t2b:[5,40], t3:[30,180]};
 const STAGE_ORDER = ["T0","T1","sandbox",K2A,K2B,"T3","report"];
 let es = null, runId = null, report = null, stageStarted = {};
 let currentSkill = "", currentWorkspace = "", currentEvalsetPath = "";
 let workspaceMap = new Map(), reconnectAttempt = 0, errorRunId = "";
+let progressValue = 0, currentPlan = TIER_PLANS.t2a, planTotal = 1;
+let runStartedAt = 0, timingTimer = null, isRunning = false, currentTier = "t2a";
+let serverLlmConfigured = false;
 
 function label(name){ return STAGE_LABELS[name] || name; }
 function conclusionText(code){ return CONCLUSION_LABELS[code] || code || "—"; }
 function verdictText(code){ return VERDICT_LABELS[code] || code || ""; }
 function tierLabel(t){ return TIER_LABELS[String(t || "").toUpperCase()] || t || ""; }
 function tierValue(){ const el = document.querySelector('input[name="tier"]:checked'); return el ? el.value : "t2a"; }
+function stageKey(name){
+  const raw = String(name || "");
+  const key = raw.toUpperCase();
+  if(key === K2A) return K2A;
+  if(key === K2B) return K2B;
+  if(key === "T0" || key === "T1" || key === "T3") return key;
+  return raw.toLowerCase();
+}
+function setPlan(tier, stages){
+  currentTier = String(tier || tierValue()).toLowerCase();
+  currentPlan = Array.isArray(stages) && stages.length
+    ? stages.map(stageKey) : (TIER_PLANS[currentTier] || TIER_PLANS.t2a);
+  planTotal = currentPlan.reduce((sum, name)=>sum + (STAGE_WEIGHTS[name] || 0), 0) || 1;
+}
+function stageBounds(name){
+  let before = 0;
+  for(const item of currentPlan){
+    if(item === name) break;
+    before += STAGE_WEIGHTS[item] || 0;
+  }
+  return [before / planTotal * 100, (STAGE_WEIGHTS[name] || 0) / planTotal * 100];
+}
 function syncRerun(){
   const rank = {t0:0,t1:1,t2a:2,t2b:3,t3:4};
   const current = rank[tierValue()] ?? 2;
@@ -555,28 +656,135 @@ function syncRerun(){
     if(el.disabled) el.checked = false;
   });
 }
-document.querySelectorAll('input[name="tier"]').forEach(el=>el.addEventListener("change", syncRerun));
+document.querySelectorAll('input[name="tier"]').forEach(el=>el.addEventListener("change", ()=>{ syncRerun(); refreshRunPrereq(); }));
 syncRerun();
+refreshRunPrereq();
 $("rerunAll").onclick = () => {
   document.querySelectorAll('#rerunT0,#rerunT1,#rerunTrigger,#rerunReal,#rerunFull')
     .forEach(el=>{ if(!el.disabled) el.checked = true; });
 };
+function reviewerName(){ return $("reviewerName").value.trim(); }
+function setReviewer(value){ $("reviewerName").value = value || ""; }
+setReviewer(localStorage.getItem("se-reviewer") || "");
+$("reviewerName").addEventListener("input", () => localStorage.setItem("se-reviewer", reviewerName()));
+function preflightWarnings(){
+  const warnings = [];
+  const tier = tierValue();
+  if(!currentSkill) warnings.push("还没有选择被测 skill");
+  const ws = workspaceMap.get($("workspace").value);
+  const hasEvalset = !!(ws && (ws.evalset_versions || []).length && $("evalVersion").value);
+  if((tier === "t2a" || tier === "t3") && !hasEvalset){
+    warnings.push("本次没有可用评测集，触发评测与相关指标会跳过");
+  }
+  if(tier === "t2b"){
+    let count = 0;
+    try{ count = realPayload().length; }catch(e){ count = 0; }
+    if(!count) warnings.push("没有真实输入，真实输入对比会跳过");
+  }
+  const modelReady = $("backend").value === "pi" || $("model").value.trim() || serverLlmConfigured;
+  if(tier !== "t0" && !modelReady) warnings.push("还没有配置模型，语义评审可能无法进行");
+  return warnings;
+}
+function refreshRunHint(warnings){
+  $("runHint").textContent = warnings.length
+    ? "运行前检查：" + warnings.join("；") + "。"
+    : "会先做基础检查，再按所选深度继续；停止时保留已完成阶段。";
+}
+function selectedEvalsetVersion(){
+  const ws = workspaceMap.get($("workspace").value);
+  const path = evalsetPath();
+  return ((ws && ws.evalset_versions) || []).find(v=>v.path === path) || null;
+}
+function evalPrereq(){
+  const tier = tierValue();
+  if(tier === "t0" || tier === "t1") return {text:"评测集不参与本次评估", warn:false};
+  if(tier === "t2b"){
+    let count = 0;
+    try{ count = realPayload().length; }catch(e){ count = 0; }
+    return count ? {text:`本次使用 ${count} 条真实输入`, warn:false}
+                 : {text:"没有真实输入，将跳过", warn:true};
+  }
+  const version = selectedEvalsetVersion();
+  return version ? {text:`本次使用 ${version.version}`, warn:false}
+                 : {text:"未创建，将跳过 #10", warn:true};
+}
+function refreshRunPrereq(){
+  const info = evalPrereq();
+  $("runPrereq").textContent = info.text;
+  $("runPrereq").classList.toggle("warn", info.warn);
+}
+
 function toast(msg, kind="info"){
   const el = document.createElement("div"); el.className = "toast " + (kind==="ok"?"ok":kind==="err"?"err":"");
   el.textContent = publicText(msg); $("toasts").appendChild(el);
   setTimeout(()=>{ el.style.opacity="0"; el.style.transform="translateY(6px)"; setTimeout(()=>el.remove(),200); }, 4200);
 }
 function setBusy(on){
+  isRunning = on;
   $("run").disabled = on;
   $("stop").disabled = !on;
   $("liveDot").className = "dot" + (on ? " live" : "");
   $("state").textContent = on ? "运行中" : "待机";
 }
-function setProgress(p){ p=Math.max(0,Math.min(100,p)); $("bar").style.width=p+"%"; $("pct").textContent=Math.round(p)+"%"; }
+function setProgress(p, reset){
+  if(reset) progressValue = 0;
+  const next = Math.max(0, Math.min(100, Number(p) || 0));
+  progressValue = Math.max(progressValue, next);
+  $("bar").style.width = progressValue + "%";
+  $("pct").textContent = Math.round(progressValue) + "%";
+}
 function publicText(value){
+  return String(value == null ? "" : value).replace(/\s{2,}/g, " ").trim();
+}
+function esc(value){
   return String(value == null ? "" : value)
-    .replace(/[（(]?\s*A[D]R(?:[-\s]?\d{2,4})?(?:\/\d{2,4})*\s*[）)]?/gi, " ")
-    .replace(/\s{2,}/g, " ").trim();
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+function pad2(n){ return String(n).padStart(2, "0"); }
+function fmtElapsed(ms){
+  const total = Math.max(0, Math.floor((ms || 0) / 1000));
+  const h = Math.floor(total / 3600), m = Math.floor((total % 3600) / 60), s = total % 60;
+  return h ? `${h}:${pad2(m)}:${pad2(s)}` : `${m}:${pad2(s)}`;
+}
+function fmtEtaRange(low, high){
+  if(high < 1) return `${Math.max(1, Math.round(low * 60))}–${Math.max(1, Math.round(high * 60))} 秒`;
+  return `${Math.max(1, Math.ceil(low))}–${Math.max(1, Math.ceil(high))} 分钟`;
+}
+function updateTiming(){
+  if(!runStartedAt) return;
+  const elapsed = Date.now() - runStartedAt;
+  const estimate = TIER_ESTIMATE_MIN[currentTier] || TIER_ESTIMATE_MIN.t2a;
+  let tail;
+  if(!isRunning){
+    tail = "已结束";
+  } else if(elapsed / 60000 >= estimate[1]){
+    tail = "已超过预估，仍在运行";
+  } else {
+    const leftLow = Math.max(0, estimate[0] - elapsed / 60000);
+    const leftHigh = Math.max(0, estimate[1] - elapsed / 60000);
+    tail = "预计剩余 " + fmtEtaRange(leftLow, leftHigh);
+  }
+  $("timing").textContent = `已用 ${fmtElapsed(elapsed)} · ${tail}`;
+  if(isRunning) document.title = `${tierLabel(currentTier)} · ${fmtElapsed(elapsed)} · Skill Evaluator`;
+}
+function startTiming(tier, startedAt){
+  currentTier = String(tier || tierValue()).toLowerCase();
+  runStartedAt = startedAt || Date.now();
+  if(timingTimer) clearInterval(timingTimer);
+  timingTimer = setInterval(updateTiming, 1000);
+  updateTiming();
+}
+function stopTiming(note){
+  if(timingTimer){ clearInterval(timingTimer); timingTimer = null; }
+  if(!runStartedAt) return;
+  const used = `已用 ${fmtElapsed(Date.now() - runStartedAt)}`;
+  $("timing").textContent = note ? `${used} · ${note}` : used;
+}
+function setTitle(text){ document.title = text || "Skill Evaluator · 评估工作台"; }
+function notifyResult(title, body){
+  if(!$("notifyDone").checked || !("Notification" in window) || Notification.permission !== "granted") return;
+  try{ new Notification(title, {body}); }catch(e){ /* 浏览器拒绝时静默 */ }
 }
 function fmtDur(sec){
   if(sec == null || !isFinite(sec)) return "";
@@ -620,6 +828,7 @@ $("themeBtn").onclick = () => {
 
 // server LLM defaults
 fetch("/api/llm/config").then(r=>r.json()).then(c=>{
+  serverLlmConfigured = !!c.configured;
   if(c.protocol) $("provider").value = c.protocol;
   if(c.base_url) $("base_url").value = c.base_url;
   if(c.model) $("model").value = c.model;
@@ -649,6 +858,7 @@ function applyWorkspace(w, preferred){
     : (paths.length ? paths[paths.length-1] : (w.evalset || ""));
   currentEvalsetPath = sel.value || "";
   $("uploadState").textContent = "工作区：" + (w.name || currentWorkspace);
+  refreshRunPrereq();
 }
 async function loadWorkspaces(selected, preferredVersion){
   try{
@@ -670,12 +880,14 @@ async function loadWorkspaces(selected, preferredVersion){
 $("workspace").onchange = () => {
   const w = workspaceMap.get($("workspace").value);
   if(!w){ currentSkill = ""; currentWorkspace = ""; currentEvalsetPath = "";
-    $("evalVersion").innerHTML = '<option value="">选择工作区后自动识别</option>'; return; }
+    $("evalVersion").innerHTML = '<option value="">选择工作区后自动识别</option>';
+    refreshRunPrereq(); return; }
   applyWorkspace(w);
 };
 $("evalVersion").onchange = () => {
   currentEvalsetPath = $("evalVersion").value || "";
   $("evalMsg").textContent = "";
+  refreshRunPrereq();
 };
 loadWorkspaces();
 loadRuns();
@@ -772,12 +984,13 @@ $("loadEval").onclick = async () => {
 $("submitReview").onclick = async () => {
   const evalset = evalsetPath();
   if(!evalset || !evalItems.length){ toast("先加载评测集", "err"); return; }
+  if(!reviewerName()){ toast("先填写审核人姓名", "err"); $("reviewerName").focus(); return; }
   const decisions = evalItems.map((it,i)=>({file:it.file, group:it.group, prompt:it.prompt,
     expect:it.expect||"", verdict:document.querySelector(`.rv[data-i="${i}"]`).value,
     note:document.querySelector(`.rr[data-i="${i}"]`).value.trim()}));
   try{
     const r = await fetch("/api/evalset/review", {method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({evalset, decisions, reviewer:"web"})});
+      body: JSON.stringify({evalset, decisions, reviewer:reviewerName()})});
     const d = await r.json();
     if(!r.ok) throw new Error(d.error||"提交失败");
     $("evalMsg").textContent = "✓ 审核已记录：" + d.path;
@@ -845,6 +1058,7 @@ function refreshRealRows(){
   $("realSummary").textContent = filled.length
     ? `共 ${filled.length} 条 · 有验收标准 ${withExpect} · 无验收标准 ${filled.length - withExpect}`
     : "0 条";
+  refreshRunPrereq();
 }
 function realPayload(){
   const out = [];
@@ -903,8 +1117,17 @@ $("run").onclick = async () => {
   if(!skill){ toast("先上传压缩包或选择工作区", "err"); return; }
   let realCases = [];
   try{ realCases = realPayload(); }catch(e){ toast(e.message, "err"); return; }
+  const warnings = preflightWarnings();
+  refreshRunHint(warnings);
+  if(warnings.length && !confirm("运行前检查有警告：\n\n· " + warnings.join("\n· ")
+      + "\n\n仍要继续吗？")) return;
+  if($("notifyDone").checked && "Notification" in window
+      && Notification.permission === "default"){
+    Notification.requestPermission();
+  }
   setBusy(true); $("state").textContent = "运行中…"; $("log").textContent = "";
-  runId = null; $("stages").innerHTML = ""; stageStarted = {}; setProgress(0);
+  runId = null; $("stages").innerHTML = ""; stageStarted = {};
+  setPlan(tierValue()); setProgress(0, true); startTiming(tierValue());
   $("result").style.display = "none"; hideError();
   const llm = {protocol:$("provider").value, base_url:$("base_url").value.trim(),
                model:$("model").value.trim(), api_key:$("api_key").value};
@@ -923,7 +1146,7 @@ $("run").onclick = async () => {
     localStorage.setItem("se-last-run", data.id);
     listen(data.id);
     loadRuns();
-  }catch(e){ log("✗ "+e.message); setBusy(false); showError(e.message, "", false); }
+  }catch(e){ log("✗ "+e.message); setBusy(false); stopTiming("启动失败"); setTitle("✗ 评估未启动"); showError(e.message, "", false); }
 };
 
 $("stop").onclick = async () => {
@@ -937,6 +1160,7 @@ $("stop").onclick = async () => {
     if(!r.ok) throw new Error(d.error||"终止失败");
     log("⏹ 已停止，已完成阶段已保留");
     setBusy(false); $("state").textContent = "已停止"; finish();
+    stopTiming("已停止"); setTitle("⏹ 已停止"); notifyResult("评估已停止", "已生成局部报告");
     if(d.report){ hideError(); await showReport(runId); toast("已停止，查看局部报告", "ok"); }
     else { showError(d.error || "停止后未能生成报告", runId, false); }
     loadRuns();
@@ -950,11 +1174,15 @@ function listen(id){
   es.onmessage = (msg) => {
     let ev; try{ ev = JSON.parse(msg.data); }catch{ return; }
     const at = ev.clock || clockOf(ev.ts);
-    if(ev.type==="stage"){
+    if(ev.type==="plan"){
+      setPlan(ev.tier, ev.stages);
+      log(`[计划] ${currentPlan.map(label).join(" → ")}`, at);
+    } else if(ev.type==="stage"){
       if(ev.status==="start"){
         stageStarted[ev.name] = performance.now();
         markStep(ev.name, "on", "进行中");
-        setProgress(Math.max(0,(WEIGHT[ev.name]||0)-8));
+        const [start] = stageBounds(stageKey(ev.name));
+        setProgress(start);
         log(`[${label(ev.name)}] 开始`, at);
       }
       if(ev.status==="done"){
@@ -965,20 +1193,23 @@ function listen(id){
         const cacheNote = !ev.cached && ev.cache_reason ? ` · ${ev.cache_reason}` : "";
         const partialNote = ev.incomplete ? " · 本次未跑完" : "";
         markStep(ev.name, "ok", verb + (!ev.cached && dur? " · "+dur : "") + detail + cacheNote + partialNote);
-        setProgress(WEIGHT[ev.name]||0);
+        const [start, width] = stageBounds(stageKey(ev.name));
+        setProgress(start + width);
         log(`[${label(ev.name)}] ${verb}` + (!ev.cached && dur? " · "+dur : "") + detail + cacheNote + partialNote, at);
       }
       if(ev.status==="skipped"){
         markStep(ev.name, "skip", "未运行" + (ev.reason? " · "+ev.reason : ""));
+        const [start, width] = stageBounds(stageKey(ev.name));
+        setProgress(start + width);
         log(`[${label(ev.name)}] 跳过` + (ev.reason? " · "+ev.reason : ""), at);
       }
     } else if(ev.type==="case"){
       const armLabel = ev.arm === "with" ? "有 skill" : ev.arm === "baseline" ? "无 skill" : "";
       log(`[${label(ev.stage)}] ${ev.index}/${ev.total} ${ev.label||""}${armLabel ? " · " + armLabel : ""}`, at);
-      const base = ev.stage===K2A ? 25 : 50, span = ev.stage===K2A ? 15 : 30;
+      const [start, width] = stageBounds(stageKey(ev.stage));
       const arm = ev.arm === "baseline" ? 0.5 : 0;
       const done = Math.max(0, (ev.index - 1) + arm);
-      setProgress(base + span * (done / Math.max(1,ev.total)));
+      setProgress(start + width * (done / Math.max(1, ev.total || 1)));
     } else if(ev.type==="judge"){
       const st = ev.status === "done" ? "完成" : "跳过";
       const dur = fmtDur(ev.elapsed_s);
@@ -990,16 +1221,20 @@ function listen(id){
       log(`⚠ ${label(ev.stage||"")} ${ev.label||""} ${ev.error||""}`, at);
     } else if(ev.type==="error"){
       log("✗ "+ev.error, at); setBusy(false); finish();
+      stopTiming("中断"); setTitle("✗ 评估中断"); notifyResult("评估失败", ev.error || "运行中断");
       showError(ev.error || "运行中断", id, false); loadRuns();
     } else if(ev.type==="stopped"){
       log("⏹ 已停止", at); setBusy(false); $("state").textContent="已停止"; finish();
+      stopTiming("已停止"); setTitle("⏹ 已停止"); notifyResult("评估已停止", "已生成局部报告");
       if(ev.report){ hideError(); showReport(id); }
       else { showError(ev.error || "停止后未能生成报告", id, false); }
       loadRuns();
     } else if(ev.type==="done"){
       const total = fmtDur(ev.elapsed_s);
       log("✓ 完成" + (total? " · "+total : ""), at);
-      setBusy(false); setProgress(100); finish(); hideError(); showReport(id); loadRuns();
+      setBusy(false); setProgress(100); finish(); hideError();
+      stopTiming("完成"); setTitle("✓ 报告已生成"); notifyResult("评估完成", "报告已生成");
+      showReport(id); loadRuns();
     }
   };
   es.onerror = () => { handleDisconnect(id); };
@@ -1021,6 +1256,8 @@ async function handleDisconnect(id){
     }
     setBusy(false);
     $("state").textContent = s.stopped ? "已停止" : s.partial ? "已完成（局部）" : "已完成";
+    stopTiming(s.stopped ? "已停止" : "已结束");
+    setTitle(s.stopped ? "⏹ 已停止" : "✓ 报告已生成");
     if(s.report){ hideError(); await showReport(id); }
     else { showError("评估已结束，但没有生成报告", id, false); }
     loadRuns();
@@ -1040,6 +1277,21 @@ $("errorRetry").onclick = () => { const id = errorRunId || runId; if(id){ hideEr
 $("errorLog").onclick = () => showLog(errorRunId || runId);
 $("logClose").onclick = () => { $("logModal").hidden = true; };
 $("logModal").onclick = (e) => { if(e.target.id === "logModal") $("logModal").hidden = true; };
+$("evidenceClose").onclick = () => { $("evidenceModal").hidden = true; };
+$("evidenceModal").onclick = (e) => { if(e.target.id === "evidenceModal") $("evidenceModal").hidden = true; };
+function openEvidence(metric){
+  if(!report || !metric) return;
+  const value = (report.metrics||{})[metric] || {};
+  const advice = (report.advice||[]).filter(a=>a.metric === metric);
+  $("evidenceTitle").textContent = `${metric} · ${value.method || "证据"}`;
+  const adviceHtml = advice.map(a=>`<div class="adv"><b>${esc(a.problem||"")}</b><br>${esc(a.action||"")}
+    <div class="inline-note">证据：${esc(a.evidence||"—")}</div></div>`).join("");
+  $("evidenceBody").innerHTML =
+    `<p>${esc(publicText(value.note || "（无摘要）"))}</p>`
+    + (adviceHtml ? `<h4>优化建议</h4>${adviceHtml}` : "")
+    + `<h4>data</h4><pre>${esc(JSON.stringify(value.data == null ? null : value.data, null, 2))}</pre>`;
+  $("evidenceModal").hidden = false;
+}
 async function showLog(id){
   if(!id){ toast("还没有可查看的运行", "err"); return; }
   $("logModal").hidden = false; $("logBody").textContent = "加载中…";
@@ -1055,6 +1307,21 @@ function runTime(value){
   const d = new Date(value);
   return isNaN(d.getTime()) ? String(value) : d.toLocaleString("zh-CN", {hour12:false});
 }
+function setResultLinks(id){
+  const rid = id || runId || "";
+  $("reportLink").href = "/report?id=" + encodeURIComponent(rid);
+  $("exportLink").href = "/api/export?id=" + encodeURIComponent(rid);
+  $("exportLink").setAttribute("download", "report-" + rid + ".zip");
+}
+$("copyLink").onclick = async () => {
+  const rid = runId || (report && report.run_id) || "";
+  if(!rid){ toast("还没有可分享的运行", "err"); return; }
+  const url = location.origin + location.pathname + "?run=" + encodeURIComponent(rid);
+  try{
+    await navigator.clipboard.writeText(url);
+    toast("链接已复制", "ok");
+  }catch(e){ toast("复制失败，链接：" + url, "err"); }
+};
 async function loadRuns(){
   try{
     const r = await fetch("/api/runs?limit=10");
@@ -1073,6 +1340,111 @@ async function loadRuns(){
     });
   }catch(e){ $("recent").innerHTML = '<div class="empty">读取历史失败</div>'; }
 }
+
+// 全部历史与跨报告对比
+const CHANGE_LABELS = {improved:"改善", regressed:"退化", same:"持平", skipped:"未测"};
+let historyRuns = [];
+function changeText(code){ return CHANGE_LABELS[code] || code || ""; }
+function historyOption(run){
+  const name = publicText(run.skill_name || run.id);
+  return `<option value="${esc(run.id)}">${esc(`${name} · ${runTime(run.created_at)} · ${String(run.id).slice(0,8)}`)}</option>`;
+}
+function historyRow(run){
+  const status = run.partial ? "局部报告" : run.stopped ? "已停止" : conclusionText(run.conclusion);
+  return `<div class="recent-item" data-id="${esc(run.id)}">
+    <span><b>${esc(publicText(run.skill_name || run.id))}</b><br>
+      <small>${esc(runTime(run.created_at))} · ${esc(String(run.id).slice(0,8))} · ${esc(tierLabel(run.tier))} · ${esc(status)}</small></span>
+    <span class="history-actions">
+      <button class="btn btn-ghost btn-sm" data-role="base" type="button">设为基准</button>
+      <button class="btn btn-ghost btn-sm" data-role="target" type="button">设为目标</button>
+      <button class="btn btn-ghost btn-sm" data-role="open" type="button">打开</button>
+    </span></div>`;
+}
+function renderHistory(){
+  if(!historyRuns.length){
+    $("historyList").innerHTML = '<div class="empty">还没有带报告的历史运行</div>';
+    $("compareBase").innerHTML = ""; $("compareTarget").innerHTML = "";
+    return;
+  }
+  const options = historyRuns.map(historyOption).join("");
+  $("compareBase").innerHTML = options;
+  $("compareTarget").innerHTML = options;
+  $("compareBase").value = (historyRuns[1] || historyRuns[0]).id;
+  $("compareTarget").value = historyRuns[0].id;
+  $("historyList").innerHTML = historyRuns.map(historyRow).join("");
+  $("historyList").querySelectorAll(".recent-item").forEach(row=>{
+    row.querySelectorAll("button[data-role]").forEach(btn=>{
+      btn.onclick = (e)=>{
+        e.stopPropagation();
+        const role = btn.dataset.role;
+        if(role === "open"){ $("historyModal").hidden = true; openRun(row.dataset.id); return; }
+        $(role === "base" ? "compareBase" : "compareTarget").value = row.dataset.id;
+      };
+    });
+  });
+}
+async function openHistory(){
+  $("historyModal").hidden = false;
+  $("historyList").innerHTML = '<div class="empty">加载中…</div>';
+  try{
+    const r = await fetch("/api/runs?limit=100");
+    const d = await r.json();
+    if(!r.ok) throw new Error(d.error || "读取历史失败");
+    historyRuns = (d.runs || []).filter(x=>x.has_report);
+    renderHistory();
+  }catch(e){ $("historyList").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+}
+$("historyOpen").onclick = openHistory;
+$("historyClose").onclick = () => { $("historyModal").hidden = true; };
+$("historyModal").onclick = (e) => { if(e.target.id === "historyModal") $("historyModal").hidden = true; };
+$("compareClose").onclick = () => { $("compareModal").hidden = true; };
+$("compareModal").onclick = (e) => { if(e.target.id === "compareModal") $("compareModal").hidden = true; };
+$("compareGo").onclick = async () => {
+  const base = $("compareBase").value, target = $("compareTarget").value;
+  if(!base || !target){ toast("先选两份报告", "err"); return; }
+  if(base === target){ toast("请选择两份不同的报告", "err"); return; }
+  $("compareMsg").textContent = "对比中…";
+  try{
+    const r = await fetch(`/api/compare?base=${encodeURIComponent(base)}&target=${encodeURIComponent(target)}`);
+    const d = await r.json();
+    if(!r.ok) throw new Error(d.error || "对比失败");
+    renderCompare(d);
+    $("compareMsg").textContent = "";
+    $("compareModal").hidden = false;
+  }catch(e){ $("compareMsg").textContent = "✗ " + e.message; }
+};
+function renderCompare(data){
+  const base = data.base || {}, target = data.target || {};
+  $("compareTitle").textContent = `对比 · ${String(base.id || "").slice(0,8)} → ${String(target.id || "").slice(0,8)}`;
+  const comparable = !!data.comparable;
+  const fallback = !data.comparable
+    ? ["不可比：报告 schema 或评估器指纹不同/缺失，差异不构成回归证据。"]
+    : data.skill_known === false
+      ? ["无法确认是否同一 skill：历史报告缺少 skill 指纹。"]
+      : !data.skill_same
+        ? ["不同 skill / 不同版本，仅供参考：两份报告的 skill 内容指纹不同。"]
+        : ["两份报告可比，指标差异可作为回归证据。"];
+  const warnings = data.notes || [];
+  const notes = warnings.length ? warnings : fallback;
+  const tone = warnings.length || !comparable ? "warn" : "ok";
+  const banners = notes.map(n=>`<div class="compare-banner ${tone}">${esc(n)}</div>`).join("");
+  const counts = data.counts || {};
+  const stats = [["improved","改善"],["regressed","退化"],["same","持平"],["skipped","未测"]]
+    .map(([key,label])=>`<div class="stat"><small>${label}</small><b>${counts[key] || 0}</b></div>`).join("");
+  const rows = Object.entries(data.metrics || {}).map(([metric, item])=>{
+    const change = item.change || "skipped";
+    const note = change === "same" ? (item.base_note || item.target_note || "") : (item.target_note || "");
+    return `<tr><td><code>${esc(metric)}</code></td>
+      <td><span class="badge ${esc(item.base || "skipped")}">${esc(verdictText(item.base))}</span></td>
+      <td><span class="badge ${esc(item.target || "skipped")}">${esc(verdictText(item.target))}</span></td>
+      <td class="change-${esc(change)}">${esc(changeText(change))}</td>
+      <td class="metric-note">${esc(publicText(note))}</td></tr>`;
+  }).join("");
+  $("compareBody").innerHTML = banners
+    + `<div class="stats">${stats}</div>`
+    + `<div class="table-wrap"><table><thead><tr><th>指标</th><th>基准</th><th>目标</th><th>变化</th><th>备注</th></tr></thead>`
+    + `<tbody>${rows}</tbody></table></div>`;
+}
 async function openRun(id){
   if(!id) return;
   runId = id; errorRunId = id;
@@ -1082,9 +1454,16 @@ async function openRun(id){
     const r = await fetch("/api/status?id="+id);
     if(!r.ok){ showError("找不到这次运行", id, false); return; }
     const s = await r.json();
-    if(s.running){ setBusy(true); $("state").textContent = "运行中…"; hideError(); listen(id); return; }
+    if(s.running){
+      setBusy(true); $("state").textContent = "运行中…"; hideError();
+      setPlan(s.tier || tierValue());
+      const startedAt = s.created_at ? new Date(s.created_at).getTime() : 0;
+      startTiming(s.tier || tierValue(), Number.isFinite(startedAt) ? startedAt : 0);
+      listen(id); return;
+    }
     setBusy(false);
     $("state").textContent = s.stopped ? "已停止" : s.partial ? "已完成（局部）" : "已完成";
+    setPlan(s.tier || tierValue()); setProgress(100, true);
     if(s.report){ hideError(); await showReport(id); }
     else { showError("这次运行没有生成报告", id, false); }
   }catch(e){ showError("读取运行失败：" + e.message, id, false); }
@@ -1115,16 +1494,35 @@ async function showReport(id){
       const stages = (report.completed_stages||[]).map(tierLabel).join("、");
       $("partialNote").textContent = "已停止：仅展示已完成阶段" + (stages ? "（" + stages + "）" : "");
     }
-    $("reportLink").href = "/report?id="+id;
+    const meta = report.run_meta || {};
+    const reviewer = (() => {
+      const names = [...new Set((report.manual_overrides||[]).map(x=>x.reviewer).filter(Boolean))];
+      if(names.length) return names.join("、");
+      if(report.reviewed_by === "human") return "人工复核";
+      if(report.reviewed_by === "ai") return "AI 自动审核（未经人工复核）";
+      return "未审核";
+    })();
+    const provenance = [
+      ["运行", String(data.run_id || id || "").slice(0, 12)],
+      ["skill", meta.skill_name || (meta.skill ? String(meta.skill).split(/[\\/]/).pop() : "—")],
+      ["档位", tierLabel(report.tier || meta.tier)],
+      ["模型", report.model || meta.model || "未配置"],
+      ["评估器", (report.evaluator||{}).version || "—"],
+      ["生成时间", report.generated_at ? runTime(report.generated_at) : "—"],
+      ["审核人", reviewer],
+      ["范围", report.partial ? "局部报告" : "完整报告"],
+    ];
+    $("provenance").innerHTML = provenance.map(([key, value])=>`<span>${key} <b>${esc(value)}</b></span>`).join("");
+    setResultLinks(id);
     const groups = {};
     Object.entries(report.metrics||{}).forEach(([k,v])=>{
       const t = (report.metric_tiers||{})[k] || "其他";
       (groups[t] = groups[t] || []).push([k,v]);
     });
-    let rows = `<thead><tr><th>指标</th><th>结果</th><th>摘要</th></tr></thead><tbody>`;
+    let rows = `<thead><tr><th>指标</th><th>结果</th><th>摘要</th><th>证据</th></tr></thead><tbody>`;
     for(const t of ["T0","T1",K2A,K2B,"T3"]){
       if(!groups[t]) continue;
-      rows += `<tr class="group"><td colspan="3">${tierLabel(t)}</td></tr>`;
+      rows += `<tr class="group"><td colspan="4">${tierLabel(t)}</td></tr>`;
       for(const [k,v] of groups[t]){
         const opts = ["pass","warn","fail","skipped"].map(o =>
           `<button type="button" class="verdict-option ${o}" data-value="${o}">${verdictText(o)}</button>`).join("");
@@ -1133,10 +1531,14 @@ async function showReport(id){
             <button type="button" class="verdict-btn ${v.verdict}" aria-haspopup="listbox" aria-expanded="false">${verdictText(v.verdict)} <span class="caret">▾</span></button>
             <div class="verdict-menu" role="listbox">${opts}</div>
           </div></td>
-          <td class="metric-note">${publicText(v.note||"").replace(/</g,"&lt;")}</td></tr>`;
+          <td class="metric-note">${esc(publicText(v.note||""))}</td>
+          <td><button type="button" class="btn btn-ghost btn-sm evidence-btn" data-metric="${k}">证据</button></td></tr>`;
       }
     }
     $("metrics").innerHTML = rows + "</tbody>";
+    document.querySelectorAll(".evidence-btn").forEach(btn=>{
+      btn.addEventListener("click", (e)=>{ e.stopPropagation(); openEvidence(btn.dataset.metric); });
+    });
     document.querySelectorAll(".verdict-picker").forEach(picker=>{
       const btn = picker.querySelector(".verdict-btn");
       btn.addEventListener("click", (e)=>{
@@ -1181,8 +1583,10 @@ $("ovBtn").onclick = async () => {
   if(!changes.length){ toast("没有修改任何结果", "err"); return; }
   const reason = $("ovReason").value.trim();
   if(!reason){ toast("必须写调整理由", "err"); return; }
+  const reviewer = reviewerName();
+  if(!reviewer){ toast("先填写审核人姓名", "err"); $("reviewerName").focus(); return; }
   const r = await fetch("/api/override", {method:"POST", headers:{"Content-Type":"application/json"},
-    body: JSON.stringify({id:runId, changes, reason, reviewer:"web"})});
+    body: JSON.stringify({id:runId, changes, reason, reviewer})});
   const d = await r.json();
   if(!r.ok){ toast(d.error||"调整失败", "err"); return; }
   report = d; $("ovReason").value=""; showReport(runId); toast("已调整并记录审计", "ok");

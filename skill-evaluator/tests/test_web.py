@@ -1,4 +1,5 @@
-"""web/app.py 的上传安全边界（不启动 HTTP 服务）。"""
+"""web/app.py 与前端接线的回归（后台服务只在审核人 400 用例里临时启动）。"""
+import http.client
 import importlib.util
 import inspect
 import io
@@ -6,7 +7,9 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import zipfile
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
@@ -375,3 +378,222 @@ def test_run_id_path_traversal_is_rejected():
     assert web._results_dir("../secret") is None
     with pytest.raises(ValueError):
         web._tail_log("../secret")
+
+
+# --- 内容保真 / provenance / 审核人 / 预检 ---
+
+def test_ui_public_text_keeps_user_content():
+    html = (WEB_APP.parent / "index.html").read_text(encoding="utf-8")
+    start = html.index("function publicText")
+    body = html[start:start + 220]
+    assert "A[D]R" not in body and "ADR" not in body
+    assert "replace(/\\s{2,}/g" in body
+
+
+def test_report_payload_adds_run_meta_and_run_id(tmp_path, monkeypatch):
+    monkeypatch.setattr(web, "RUNS", tmp_path / "runs")
+    results = write_run(tmp_path / "runs") / "results"
+    code, payload = web._report_payload("abc123def")
+    assert code == 200
+    assert payload["run_id"] == "abc123def"
+    assert payload["run_meta"]["tier"] == "t2a"
+    assert "run_id" not in json.loads((results / "report.json").read_text(encoding="utf-8"))
+    assert web._report_payload("missing")[0] == 404
+
+
+def test_override_rejects_empty_reviewer():
+    server = ThreadingHTTPServer(("127.0.0.1", 0), web.Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=5)
+        conn.request("POST", "/api/override",
+                     body=json.dumps({"id": "x", "reviewer": "  ", "reason": "r"}),
+                     headers={"Content-Type": "application/json"})
+        resp = conn.getresponse()
+        data = json.loads(resp.read().decode("utf-8"))
+        conn.close()
+        assert resp.status == 400
+        assert "审核人" in data["error"]
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_ui_wires_evidence_provenance_reviewer_preflight():
+    html = (WEB_APP.parent / "index.html").read_text(encoding="utf-8")
+    for element in ('id="evidenceModal"', 'id="provenance"', 'id="reviewerName"',
+                    'id="timing"', 'id="notifyDone"'):
+        assert element in html, element
+    assert "preflightWarnings" in html and "refreshRunHint" in html
+    assert "const WEIGHT" not in html and "STAGE_WEIGHTS" in html
+    assert "progressValue = Math.max" in html
+    assert 'localStorage.getItem("se-reviewer")' in html
+    assert "document.title" in html and "Notification" in html
+    assert "/api/report?id=" in html
+
+
+# --- B1 评测集前置 ---
+
+def test_ui_evalset_card_precedes_tier_card_and_shows_prereq():
+    html = (WEB_APP.parent / "index.html").read_text(encoding="utf-8")
+    assert html.index("02 · 评测集（按需）") < html.index("03 · 评估深度")
+    assert html.index('id="evalCard"') < html.index('id="tierGrid"')
+    assert 'id="runPrereq"' in html
+    assert "未创建，将跳过 #10" in html
+    assert "评测集不参与本次评估" in html and "没有真实输入，将跳过" in html
+    assert "function refreshRunPrereq" in html
+    assert "selectedEvalsetVersion" in html
+
+
+# --- B2 历史与对比 ---
+
+def metric(verdict, note=""):
+    return {"verdict": verdict, "method": "static", "note": note, "data": {}}
+
+
+def write_compare_run(root: Path, rid: str, *, metrics: dict, skill_sha: str = "skill-a",
+                      evaluator_sha: "str | None" = "eval-a", schema: int = 2,
+                      created_at: str = "2026-11-01T10:00:00") -> Path:
+    rdir = root / rid
+    results = rdir / "results"
+    results.mkdir(parents=True)
+    (rdir / "run.json").write_text(json.dumps({
+        "id": rid, "tier": "t2a", "skill_name": "demo", "created_at": created_at}),
+        encoding="utf-8")
+    (results / "run-meta.json").write_text(json.dumps({
+        "skill": str(root / "skill"), "skill_name": "demo", "tier": "t2a",
+        "skill_sha256": skill_sha, "created_at": created_at}), encoding="utf-8")
+    report = {"schema": schema, "conclusion": "with-warnings", "metrics": metrics}
+    if evaluator_sha is not None:
+        report["evaluator"] = {"version": "auto-" + evaluator_sha[:8],
+                               "content_sha256": evaluator_sha}
+    (results / "report.json").write_text(json.dumps(report), encoding="utf-8")
+    (results / "report.md").write_text("# demo\n", encoding="utf-8")
+    (results / "report.html").write_text("<html></html>", encoding="utf-8")
+    (results / "meta.json").write_text(json.dumps({"schema": "skill-eval/results-meta/1"}),
+                                       encoding="utf-8")
+    (rdir / "run.log").write_text("log line", encoding="utf-8")
+    (results / "traces").mkdir()
+    (results / "traces" / "t1.json").write_text("{}", encoding="utf-8")
+    return rdir
+
+
+def test_compare_reports_marks_improved_regressed_and_skipped(tmp_path, monkeypatch):
+    monkeypatch.setattr(web, "RUNS", tmp_path / "runs")
+    write_compare_run(tmp_path / "runs", "base1", metrics={
+        "#1": metric("fail"), "#2": metric("warn", "old"),
+        "#3": metric("pass"), "#4": metric("skipped")})
+    write_compare_run(tmp_path / "runs", "target1", metrics={
+        "#1": metric("pass"), "#2": metric("fail", "new"),
+        "#3": metric("pass"), "#4": metric("skipped")})
+    code, data = web._compare_reports("base1", "target1")
+    assert code == 200
+    assert data["comparable"] is True and data["skill_same"] is True
+    assert data["base"]["id"] == "base1" and data["target"]["id"] == "target1"
+    assert data["metrics"]["#1"]["change"] == "improved"
+    assert data["metrics"]["#2"]["change"] == "regressed"
+    assert data["metrics"]["#2"]["base_note"] == "old"
+    assert data["metrics"]["#2"]["target_note"] == "new"
+    assert data["metrics"]["#3"]["change"] == "same"
+    assert data["metrics"]["#4"]["change"] == "skipped"
+    assert data["counts"] == {"improved": 1, "regressed": 1, "same": 1, "skipped": 1}
+    assert list(data["metrics"]) == ["#1", "#2", "#3", "#4"]
+    assert data["notes"] == []
+
+
+def test_compare_flags_incomparable_and_different_skill(tmp_path, monkeypatch):
+    monkeypatch.setattr(web, "RUNS", tmp_path / "runs")
+    write_compare_run(tmp_path / "runs", "base1", metrics={"#1": metric("pass")})
+    write_compare_run(tmp_path / "runs", "target1", metrics={"#1": metric("pass")},
+                      skill_sha="skill-b", evaluator_sha="eval-b", schema=3)
+    code, data = web._compare_reports("base1", "target1")
+    assert code == 200
+    assert data["comparable"] is False
+    assert data["skill_known"] is True and data["skill_same"] is False
+    assert any("不可比" in note for note in data["notes"])
+    assert any("skill" in note for note in data["notes"])
+
+
+def test_compare_requires_evaluator_fingerprint_on_both_sides(tmp_path, monkeypatch):
+    """旧报告缺评估器指纹时 None == None 不能算可比（不可作为回归证据）。"""
+    monkeypatch.setattr(web, "RUNS", tmp_path / "runs")
+    write_compare_run(tmp_path / "runs", "base1", metrics={"#1": metric("pass")},
+                      evaluator_sha=None)
+    write_compare_run(tmp_path / "runs", "target1", metrics={"#1": metric("fail")},
+                      evaluator_sha=None)
+    code, data = web._compare_reports("base1", "target1")
+    assert code == 200
+    assert data["comparable"] is False
+    assert any("不可比" in note for note in data["notes"])
+    # 缺指纹不影响指标表本身，只是不能当回归证据
+    assert data["metrics"]["#1"]["change"] == "regressed"
+
+
+def test_compare_different_skill_same_evaluator_still_comparable(tmp_path, monkeypatch):
+    """不同版本/不同 skill 仍按 evaluator 指纹判断可比，只是 skill_same=False。"""
+    monkeypatch.setattr(web, "RUNS", tmp_path / "runs")
+    write_compare_run(tmp_path / "runs", "base1", metrics={"#1": metric("fail")},
+                      skill_sha="skill-a", evaluator_sha="eval-a")
+    write_compare_run(tmp_path / "runs", "target1", metrics={"#1": metric("pass")},
+                      skill_sha="skill-b", evaluator_sha="eval-a")
+    code, data = web._compare_reports("base1", "target1")
+    assert code == 200
+    assert data["comparable"] is True
+    assert data["skill_known"] is True and data["skill_same"] is False
+    assert data["metrics"]["#1"] == {"base": "fail", "target": "pass",
+                                     "change": "improved", "base_note": "",
+                                     "target_note": ""}
+    assert any("不同 skill" in note for note in data["notes"])
+
+
+def test_compare_requires_ids_and_existing_reports(tmp_path, monkeypatch):
+    monkeypatch.setattr(web, "RUNS", tmp_path / "runs")
+    write_compare_run(tmp_path / "runs", "base1", metrics={})
+    assert web._compare_reports("", "base1")[0] == 400
+    assert web._compare_reports("base1", "../secret")[0] == 400
+    assert web._compare_reports("base1", "missing")[0] == 404
+
+
+def test_ui_wires_history_and_compare_modals():
+    html = (WEB_APP.parent / "index.html").read_text(encoding="utf-8")
+    for element in ('id="historyOpen"', 'id="historyModal"', 'id="historyList"',
+                    'id="compareBase"', 'id="compareTarget"', 'id="compareGo"',
+                    'id="compareModal"', 'id="compareBody"'):
+        assert element in html, element
+    assert "查看全部历史" in html and "对比选中" in html
+    assert "/api/runs?limit=100" in html and "/api/compare?base=" in html
+    assert "不可比" in html and "不同 skill" in html
+    # comparable 只由后端裁决决定；skill_same 只影响横幅提示，不能吞掉指标表
+    assert "const comparable = !!data.comparable;" in html
+    assert "!!data.comparable && !!data.skill_same" not in html
+    assert "不同 skill / 不同版本，仅供参考" in html
+
+
+# --- B3 导出 / 分享 ---
+
+def test_export_zip_contains_report_and_meta_only(tmp_path, monkeypatch):
+    monkeypatch.setattr(web, "RUNS", tmp_path / "runs")
+    write_compare_run(tmp_path / "runs", "run1", metrics={"#1": metric("pass")})
+    filename, blob = web._export_zip("run1")
+    assert filename == "report-run1.zip"
+    names = set(zipfile.ZipFile(io.BytesIO(blob)).namelist())
+    assert names == {"report.json", "report.md", "report.html", "meta.json"}
+    assert "run.log" not in names and not any(name.startswith("traces/") for name in names)
+
+
+def test_export_rejects_traversal_and_missing_report(tmp_path, monkeypatch):
+    monkeypatch.setattr(web, "RUNS", tmp_path / "runs")
+    write_compare_run(tmp_path / "runs", "run1", metrics={})
+    with pytest.raises(ValueError):
+        web._export_zip("../secret")
+    with pytest.raises(FileNotFoundError):
+        web._export_zip("missing")
+
+
+def test_ui_wires_export_and_copy_link():
+    html = (WEB_APP.parent / "index.html").read_text(encoding="utf-8")
+    assert 'id="exportLink"' in html and 'id="copyLink"' in html
+    assert "导出报告 .zip" in html and "复制链接" in html
+    assert "/api/export?id=" in html
+    assert 'location.origin + location.pathname + "?run="' in html

@@ -558,6 +558,162 @@ def _completed_stages(results: Path) -> list:
     return [name for name in runner_mod.TIERS if runner_mod.stage_ready(name, Path(results))]
 
 
+def _report_payload(rid: str):
+    """报告 + 运行 provenance。只读 report.json，不改变其 16 key/schema 契约。"""
+    results = _results_dir(rid)
+    report_path = results / "report.json" if results else None
+    if report_path is None or not report_path.is_file():
+        return 404, {"error": "report not ready"}
+    payload = _load_json(report_path, None)
+    if not isinstance(payload, dict):
+        return 500, {"error": "report.json 不是合法 JSON"}
+    run_meta = _load_json(results / "run-meta.json", None)
+    payload["run_id"] = rid
+    payload["run_meta"] = run_meta if isinstance(run_meta, dict) else {}
+    return 200, payload
+
+
+VERDICT_RANK = {"fail": 0, "warn": 1, "pass": 2}
+CHANGE_KINDS = ("improved", "regressed", "same", "skipped")
+EXPORT_MEMBERS = ("report.json", "report.md", "report.html")
+
+
+def _report_and_meta(rid: str):
+    """读一份历史报告的 report.json + run-meta.json；缺报告返回 None。"""
+    results = _results_dir(rid)
+    path = results / "report.json" if results else None
+    if path is None or not path.is_file():
+        return None
+    report = _load_json(path, None)
+    if not isinstance(report, dict):
+        return None
+    meta = _load_json(results / "run-meta.json", None)
+    return report, meta if isinstance(meta, dict) else {}
+
+
+def _evaluator_sha(report: dict):
+    evaluator = report.get("evaluator")
+    return evaluator.get("content_sha256") if isinstance(evaluator, dict) else None
+
+
+def _verdict_change(base, target) -> str:
+    """裁决变化：skipped 覆盖任一侧未测，其余按 fail < warn < pass 比。"""
+    if base not in VERDICT_RANK or target not in VERDICT_RANK:
+        return "skipped"
+    if base == target:
+        return "same"
+    return "improved" if VERDICT_RANK[target] > VERDICT_RANK[base] else "regressed"
+
+
+def _metric_order(key: str):
+    """#N 按数字排序，非 #N 键排在后面。"""
+    digits = str(key).lstrip("#")
+    return (0, int(digits)) if digits.isdigit() else (1, 0)
+
+
+def _run_summary(rid: str, report: dict, meta: dict) -> dict:
+    evaluator = report.get("evaluator")
+    skill = str(meta.get("skill") or "")
+    return {"id": rid,
+            "skill_name": meta.get("skill_name") or (Path(skill).name if skill else ""),
+            "tier": meta.get("tier") or report.get("tier"),
+            "created_at": meta.get("created_at"),
+            "schema": report.get("schema"),
+            "evaluator": evaluator.get("version") if isinstance(evaluator, dict) else None,
+            "conclusion": report.get("conclusion"),
+            "partial": bool(report.get("partial"))}
+
+
+def _compare_reports(base: str, target: str):
+    """两份历史报告的逐指标对比。comparable 只看报告契约 + 评估器内容指纹。"""
+    base, target = str(base or ""), str(target or "")
+    if not base or not target:
+        return 400, {"error": "需要 base 与 target 两个 run id"}
+    for rid in (base, target):
+        if not RUN_ID_RE.fullmatch(rid):
+            return 400, {"error": f"非法的 run id：{rid}"}
+    sides = {}
+    for rid in (base, target):
+        side = _report_and_meta(rid)
+        if side is None:
+            return 404, {"error": f"报告不存在：{rid}"}
+        sides[rid] = side
+    (base_report, base_meta), (target_report, target_meta) = sides[base], sides[target]
+
+    base_eval_sha, target_eval_sha = _evaluator_sha(base_report), _evaluator_sha(target_report)
+    evaluator_known_same = (isinstance(base_eval_sha, str) and isinstance(target_eval_sha, str)
+                            and bool(base_eval_sha) and bool(target_eval_sha)
+                            and base_eval_sha == target_eval_sha)
+    comparable = (base_report.get("schema") == target_report.get("schema")
+                  and evaluator_known_same)
+    base_sha = str(base_meta.get("skill_sha256") or "")
+    target_sha = str(target_meta.get("skill_sha256") or "")
+    skill_known = bool(base_sha and target_sha)
+    skill_same = skill_known and base_sha == target_sha
+
+    base_metrics = base_report.get("metrics") if isinstance(base_report.get("metrics"), dict) else {}
+    target_metrics = (target_report.get("metrics")
+                      if isinstance(target_report.get("metrics"), dict) else {})
+    metrics, counts = {}, {name: 0 for name in CHANGE_KINDS}
+    for key in sorted(set(base_metrics) | set(target_metrics), key=_metric_order):
+        before = base_metrics.get(key) if isinstance(base_metrics.get(key), dict) else {}
+        after = target_metrics.get(key) if isinstance(target_metrics.get(key), dict) else {}
+        change = _verdict_change(before.get("verdict"), after.get("verdict"))
+        counts[change] += 1
+        metrics[key] = {"base": before.get("verdict") or "skipped",
+                        "target": after.get("verdict") or "skipped",
+                        "change": change,
+                        "base_note": before.get("note") or "",
+                        "target_note": after.get("note") or ""}
+
+    notes = []
+    if not comparable:
+        notes.append("两份报告不可比：报告 schema 或评估器指纹不同/缺失，"
+                     "差异不构成被测 skill 的回归证据")
+    if not skill_known:
+        notes.append("历史报告缺少 skill 指纹，无法确认是否同一 skill")
+    elif not skill_same:
+        notes.append("不同 skill / 不同版本：两份报告的 skill 内容指纹不同")
+    if base_report.get("partial") or target_report.get("partial"):
+        notes.append("含局部报告：未完成阶段不参与对比")
+
+    return 200, {"base": _run_summary(base, base_report, base_meta),
+                 "target": _run_summary(target, target_report, target_meta),
+                 "comparable": comparable, "skill_same": skill_same,
+                 "skill_known": skill_known, "metrics": metrics,
+                 "counts": counts, "notes": notes}
+
+
+def _export_zip(rid: str) -> tuple[str, bytes]:
+    """打包一份报告：只含 report.json/md/html + meta.json，不含日志与 trace。"""
+    if not RUN_ID_RE.fullmatch(str(rid or "")):
+        raise ValueError("非法的 run id")
+    results = _results_dir(rid)
+    report = results / "report.json" if results else None
+    if report is None or not report.is_file():
+        raise FileNotFoundError("报告不存在")
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for name in EXPORT_MEMBERS:
+            member = results / name
+            if member.is_file():
+                zf.write(member, arcname=name)
+        meta = results / "meta.json"
+        if not meta.is_file():
+            meta = results / "run-meta.json"
+        if meta.is_file():
+            zf.write(meta, arcname="meta.json")
+    return f"report-{rid}.zip", buffer.getvalue()
+
+
+def _reviewer_name(data: dict) -> str:
+    """人工审核人必填：不再写死 "web"；拒绝空值。"""
+    name = str(data.get("reviewer") or "").strip()
+    if not name:
+        raise ValueError("请填写审核人姓名")
+    return name
+
+
 def _rerun_report(run, *, partial: bool = False,
                   completed_stages: list | None = None) -> dict:
     meta = {}
@@ -576,6 +732,10 @@ def _rerun_report(run, *, partial: bool = False,
             tier = completed_stages[-1] if completed_stages else meta.get("tier", "")
     cmd = [sys.executable, str(ROOT / "scripts" / "report.py"), str(run["results"]),
            "--skill", meta.get("skill", ""), "--tier", tier, "--html"]
+    if meta.get("model"):
+        cmd += ["--model", str(meta["model"])]
+    if meta.get("harness"):
+        cmd += ["--harness", str(meta["harness"])]
     if meta.get("evalset"):
         cmd += ["--evalset", meta["evalset"]]
     if partial:
@@ -716,11 +876,23 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/report":
             q = parse_qs(urlparse(self.path).query)
             rid = (q.get("id") or [""])[0]
-            results = _results_dir(rid)
-            report = results / "report.json" if results else None
-            if report is None or not report.is_file():
-                return _send_json(self, 404, {"error": "report not ready"})
-            return _send_json(self, 200, json.loads(report.read_text(encoding="utf-8")))
+            code, payload = _report_payload(rid)
+            return _send_json(self, code, payload)
+        if path == "/api/compare":
+            q = parse_qs(urlparse(self.path).query)
+            code, payload = _compare_reports((q.get("base") or [""])[0],
+                                             (q.get("target") or [""])[0])
+            return _send_json(self, code, payload)
+        if path == "/api/export":
+            q = parse_qs(urlparse(self.path).query)
+            rid = (q.get("id") or [""])[0]
+            try:
+                filename, blob = _export_zip(rid)
+            except FileNotFoundError as exc:
+                return _send_json(self, 404, {"error": str(exc)})
+            except ValueError as exc:
+                return _send_json(self, 400, {"error": str(exc)})
+            return _send_bytes(self, 200, blob, "application/zip", filename)
         if path == "/report":
             q = parse_qs(urlparse(self.path).query)
             rid = (q.get("id") or [""])[0]
@@ -875,6 +1047,10 @@ class Handler(BaseHTTPRequestHandler):
             decisions = data.get("decisions") or []
             if not evalset.is_dir() or not isinstance(decisions, list):
                 return _send_json(self, 400, {"error": "需要评测集与 decisions"})
+            try:
+                reviewer = _reviewer_name(data)
+            except ValueError as exc:
+                return _send_json(self, 400, {"error": str(exc)})
             reviews = evalset / "reviews"
             reviews.mkdir(parents=True, exist_ok=True)
             items = []
@@ -886,7 +1062,7 @@ class Handler(BaseHTTPRequestHandler):
                               "prompt": d.get("prompt"), "expect": d.get("expect") or ""})
             payload = {"type": "evalset-review", "evalset": evalset.parent.name,
                        "version": evalset.name,
-                       "reviewer": str(data.get("reviewer") or "human"),
+                       "reviewer": reviewer,
                        "reviewed_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
                        "items": items}
             (reviews / "review.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2),
@@ -919,6 +1095,10 @@ class Handler(BaseHTTPRequestHandler):
             data = _json_body(self)
             rid = str(data.get("id") or "")
             reason = str(data.get("reason") or "").strip()
+            try:
+                reviewer = _reviewer_name(data)
+            except ValueError as exc:
+                return _send_json(self, 400, {"error": str(exc)})
             run = ACTIVE.get(rid)
             if not run:
                 return _send_json(self, 404, {"error": "run not found"})
@@ -954,7 +1134,6 @@ class Handler(BaseHTTPRequestHandler):
                 overrides = json.loads(ov_path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 overrides = {}
-            reviewer = str(data.get("reviewer") or "human")
             at = time.strftime("%Y-%m-%dT%H:%M:%S")
             for metric, change in changes.items():
                 overrides[metric] = {**change, "reason": reason, "reviewer": reviewer, "at": at}

@@ -137,7 +137,7 @@ T1 评审走 `llm` 接口层（ADR-0034）：模型 `--model` > `llm.model` > `S
 
 ## 前端与 runner（ADR-0036）
 
-`scripts/runner.py` 是确定性编排：按 `--tier` 调 T0→T1→T2A→T2B→T3，最后 `report.py`；进度以 NDJSON 输出，`--results` 指定产物目录，`--real-input` 给真实输入对比。
+`scripts/runner.py` 是确定性编排：按 `--tier` 调 T0→T1→T2A→T2B→T3，最后 `report.py`（把本次 `--model`/`--harness` 写进报告头）；进度以 NDJSON 输出（先发 `plan` 阶段计划），`--results` 指定产物目录，`--real-input` 给真实输入对比。
 
 `web/app.py` 是 stdlib HTTP 入口（只绑 `127.0.0.1`）：
 - `POST /api/upload`：浏览器直接以 `application/zip` 流式上传，安全解压到临时目录后复制进工作区；返回 `workspace_id`/`workspace`/`skill`/`evalset`/`evalset_version`/`evalset_versions`/`skill_sha256`；拒绝 `..`/绝对路径/符号链接，限制 1GB 压缩包、2GB 解压体积、20000 个文件。旧 base64 分支仅兼容，UI 不使用。
@@ -149,12 +149,18 @@ T1 评审走 `llm` 接口层（ADR-0034）：模型 `--model` > `llm.model` > `S
 - `GET /api/runs?limit=20`：扫描 `web/runs/*/results/run-meta.json`，返回 `id`/`skill_name`/`tier`/`created_at`/`conclusion`/`partial`/`stopped`/`running`/`has_report`，按时间倒序；含活动 run。
 - `GET /api/log?id=`：返回 `run.log` 尾部 200 行；活动 run 与磁盘旧 run 都可读。
 - `GET /api/events?id=`：SSE 进度，无硬截止；每 15 秒发注释心跳，进程结束/停止才收尾；`stopped` 事件带 `report` 地址。
-- `GET /api/report?id=` / `GET /report?id=`：先查活动 run，再回退磁盘 `results/`；只有两边都没有才 404。
-- `GET /api/evalset/status|items`、`POST /api/evalset/generate|review`：评测集检查、生成草稿、逐条审核（写 `reviews/review.json` + `audit.jsonl`）。
+- `GET /api/report?id=` / `GET /report?id=`：先查活动 run，再回退磁盘 `results/`；只有两边都没有才 404。`/api/report` 在返回的 JSON 上附加 `run_id` 与 `run_meta`（不写回 `report.json`）。
+- `GET /api/compare?base=&target=`：读两份历史 `report.json` + `run-meta.json` 做逐指标对比。`comparable` = 报告 `schema` 相同且 `evaluator.content_sha256` 相同；`skill_same` = `skill_sha256` 相同（`skill_known` 标两侧是否都记了指纹）。每个 `#N` 返回 `base`/`target`/`change`（`improved`/`regressed`/`same`/`skipped`）与两侧 `note`，附 `counts` 与 `notes`（不可比、不同 skill、含局部报告）。缺 id 或 id 非法 400，缺报告 404。
+- `GET /api/export?id=`：合法 run id 才打包 `results/` 里的 `report.json`/`report.md`/`report.html` + `meta.json`（无报告自带 meta 时回退 `run-meta.json`），不含 `run.log` 与 `raw/`、`traces/` 等运行产物；文件名 `report-<id>.zip`。id 非法 400，缺报告 404。
+- `GET /api/evalset/status|items`、`POST /api/evalset/generate|review`：评测集检查、生成草稿、逐条审核（写 `reviews/review.json` + `audit.jsonl`；`reviewer` 必填）。
 - `GET /api/evalset/export?evalset=`、`POST /api/evalset/import?filename=`：评测集 zip 导出/导入（见 § 评测集冻结）。
-- `POST /api/override`：支持一次提交多条裁决调整（`changes: [{metric,to}]`），统一写 `overrides.json` + `manual-overrides.jsonl`，重出报告。
+- `POST /api/override`：支持一次提交多条裁决调整（`changes: [{metric,to}]`），统一写 `overrides.json` + `manual-overrides.jsonl`，重出报告；`reviewer` 必填，空值 400（不再写死 `web`）。
 
 前端不重算指标。页面启动解析 `?run=<id>`（刷新/深链恢复），运行开始时用 `history.replaceState` 写 URL 并存 `localStorage`；右栏「最近报告」来自 `/api/runs`。SSE 断线不直接收尾：先查 `/api/status`，仍在跑就指数退避重连并显示常驻错误条，已结束则加载报告。错误条与日志弹层常驻，不自动消失。
+
+卡片顺序固定为 `01 · 被测对象` → `02 · 评测集（按需）` → `03 · 评估深度`：评测集是运行前置，先选版本再选深度。深度卡 CTA 旁 `#runPrereq` 随工作区/评测集版本/档位/真实输入刷新：T2A/T3 显示 `本次使用 vN` 或 `未创建，将跳过 #10`；T2B 显示真实输入条数或 `没有真实输入，将跳过`；T0/T1 说明评测集不参与。
+
+「最近报告」可打开 `#historyModal` 列出最多 100 条带报告的历史运行（`/api/runs?limit=100`），用基准/目标两个下拉（或行内「设为基准/设为目标」）选两份后「对比选中」→ `#compareModal` 展示逐指标对比与不可比/不同 skill 横幅。结果头提供「导出报告 .zip」（`/api/export?id=`）与「复制链接」（复制 `location.origin + location.pathname + ?run=<id>`）。
 
 用户可见文本只出现中文档位/结论（`全部通过`/`有警告`/`有失败`），不显示内部缩写；`report.json` 仍保留 `all-pass` 等 code。
 
@@ -188,11 +194,12 @@ T1 评审走 `llm` 接口层（ADR-0034）：模型 `--model` > `llm.model` > `S
 - `actual/` + `expected/`：T3 每 case 的实际回答与期望（compare.py 输入）
 - `overrides.json`：人工复核 `{metric: {from, to, reason, reviewer, at}}`；from/to 必须是 pass|warn|fail|skipped，报告按 from 匹配当前裁决后应用
 - `run.json`（在 `web/runs/<id>/`，不属 results）：前端运行元数据 `{id,skill,skill_name,workspace,tier,evalset,created_at,stopped?,stopped_at?}`，重启后历史列表/深链靠它恢复
+- `run-meta.json`（在 `results/`）：runner 写的运行元数据 `{skill,skill_name,tier,evalset,model,harness,created_at,skill_sha256,evaluator_sha256,evaluator_version,judge}`；`/api/runs`、`/api/report` 的 `run_meta`、`/api/compare` 的 `skill_same` 都读它
 - `manual-overrides.jsonl`：人工调整的追加审计日志（前端 `/api/override` 写入）
 - `evalset.json`：evalset_check.py stdout（触发集质量，#10 降级依据）
 - `model_robust.json`：model_robust.py stdout（#15 跨模型一致率）
 - `models/<模型名>/trace-<序号>.json`：跨模型运行的逐 case trace（序号 = 评测集顺序，各模型必须一致）
-- `meta.json`：`{"schema": "skill-eval/results-meta/1", "generated_at", "conclusion", "evaluator", "skill_fingerprint", "evalset_source", "metrics"}`（report.py 写入，ADR-0010）；已存在时**合并保留**人工填写的键（model/sandbox/skipped_reason 等），不静默覆盖。局部报告另带 `partial: true` / `completed_stages` / `stopped_at`。`evalset_source` 记录所选版本（name/version/frozen/reviewed_by）与 `skill_sha256`（旧集没有则不猜）。
+- `meta.json`：`{"schema": "skill-eval/results-meta/1", "generated_at", "conclusion", "evaluator", "skill_fingerprint", "evalset_source", "metrics", "provenance"?}`（report.py 写入，ADR-0010）；`provenance` 存本次 `--model`/`--harness`（可选，不覆盖人工字段）；已存在时**合并保留**人工填写的键（model/sandbox/skipped_reason 等），不静默覆盖。局部报告另带 `partial: true` / `completed_stages` / `stopped_at`。`evalset_source` 记录所选版本（name/version/frozen/reviewed_by）与 `skill_sha256`（旧集没有则不猜）。
 - `judges/<metric>.json`：judge_runner.py 校验通过的 LLM 评审输出，metric ∈ {brevity, redundancy, fallback, precheck, contract, deps, pii}（**不要**存成 judge-*.json 或放 results 根目录，report.py 只认 judges/<metric>.json）
 - `raw/llm-judge/<metric>.json`：T1 直连 LLM 的 request/response（含 prompt，不含密钥）；`--backend pi` 时原始事件流仍存 `raw/judge-events/<metric>.events.jsonl`
 
@@ -237,7 +244,8 @@ case 一致 = triggered 全同 且 回答相似（字符 3-gram Jaccard ≥ 0.5�
 evalsets/<name>/results/<version>/
 ├── report.json   # schema=2 + legacy_id_map + tier + 16 个 key=指标名，值={verdict: pass|warn|fail|skipped, method, data, note}
 │                 # 顶层另带 advice（优化建议数组）、evaluator（评估器指纹）、reviewed_by 与 generated_at，不占指标 key
-├── report.md     # 每条指标一节：表格化的数据 + 证据；末尾「## 优化建议」段（顶部显示档位/审核口径/评估器指纹）
+│                 # 可选顶层 model/harness（report.py --model/--harness 写入，provenance 用）
+├── report.md     # 每条指标一节：表格化的数据 + 证据；末尾「## 优化建议」段（顶部显示档位/审核口径/评估器指纹/生成时间/模型）
 ├── report.html   # --html：report.md 的渲染媒介 + 优化建议 tab + 评测集审核界面；报告 tab 不得比 report.md 少信息
 └── meta.json     # {"schema": "skill-eval/results-meta/1", "generated_at", "conclusion",
                   #  "evaluator", "skill_fingerprint", "evalset_source", "metrics", tier}（report.py 写入；
@@ -251,6 +259,7 @@ evalsets/<name>/results/<version>/
 - 各中间产物记录生成时的 skill content_sha256；高档复用低档产物时校验一致，不一致则该产物作废重跑
 - 16 条指标全部出现，`metrics` 按 #1–#16 排序；未测的标 `skipped` 并注明原因，不打 0 分
 - `manual_overrides` 列出本次人工调整的指标、原值/新值、原因、审核人与时间；报告 note 同步标注
+- **内容保真**：报告只做空白整理，不删用户文本（包括用户内容里的 `ADR-xxxx`）；`report.json` 的 `data` 原样保留，渲染层不得反向改形状
 - **data 渲染**（report.md / report.html 共用一套，ADR-0030）：**所有指标一律表格化**——已知形状走定制表（#16 `per_pair`、#15 `cost_by_case`+`cv_by_case`、#13 `cost`、#14 `per_case`、#10 三率、#11 三分量、#12 报错与评审项、#4 六组与闸门），其余走**通用兜底**（dict/list 递归压平成 key-value 表）；judge 面（`items`）另加 score/reason 摘要行。原始 JSON 一律保留：**有表就折叠**（`<details>`，不管多短），无表且 ≤400 字符才内联；单元格 >800 字符截断并标注。**不得静默截断**（旧实现 `[:2000]` 会把 2165 字符的 #16 data 切成非法 JSON）。渲染层不得反向改 `report.json` 的形状
 - **结果符号**：卡片徽章、表格结果列与顶部 16 行总览表（`id="overview"`）统一 pass=✓ / fail=✗ / warn=⚠ / skipped=–
 - **优化建议**（ADR-0030）：`report.json.advice` = `[{metric, severity, problem, evidence, action}]`，由 `build()` 从裁决确定性派生（`severity` = fail/warn/info，排序 fail→warn→info）；每个指标卡下方内联该指标建议，`report.html` 另有「优化建议」tab（`#N` 锚点跳回指标卡），report.md 有 `## 优化建议` 段。问题与建议同源，不存在“建议里说了、指标里没有”
@@ -258,7 +267,7 @@ evalsets/<name>/results/<version>/
 - 评测集 `reviewed_by: "ai"` 时，报告与 #10/#11/#14 的结论处注明「评测集 AI 审核，未经人工复核」
 - 不合成加权总分；结论分三档：必测全过 / 有警告 / 有失败
 - `report.json` 顶层带 `schema: 2` 与 `legacy_id_map`；旧报告不重写、不迁移（ADR-0032）
-- `report.py <results目录> --skill <被测skill目录> [--evalset <evalsets/<name>/vN>]`：`--skill` 让 meta.json 记下被测 skill 的内容指纹——vN 目录命名下唯一能看出"评的是哪份内容"的来源
+- `report.py <results目录> --skill <被测skill目录> [--evalset <evalsets/<name>/vN>] [--model <模型>] [--harness <载体>]`：`--skill` 让 meta.json 记下被测 skill 的内容指纹——vN 目录命名下唯一能看出"评的是哪份内容"的来源
 - 评估器指纹或 report schema 不一致的版本之间，指标差异不构成回归证据
 
 ## Fallback

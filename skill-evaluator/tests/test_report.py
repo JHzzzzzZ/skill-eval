@@ -360,17 +360,42 @@ def test_manual_override_can_change_any_verdict(tmp_path):
     assert "人工复核：pass → warn" in out["metrics"]["#1"]["note"]
 
 
-def test_ui_hides_adr_and_orders_metrics_by_id(tmp_path):
-    write_inputs(tmp_path, {"static.json": _static()})
+def test_report_keeps_user_content_adr_and_orders_metrics_by_id(tmp_path):
+    """内容保真：用户文本里的 ADR 是原文，报告不得删除（JSON/Markdown/HTML 都保留）。"""
+    write_inputs(tmp_path, {
+        "static.json": _static(secrets=[{"file": "SKILL.md", "line": 3,
+                                          "text": "token=abc  # ADR-0002"}]),
+        "judges/redundancy.json": {"items": [{"name": "重复段落", "pass": False,
+                                                "quote": "见 ADR-0002"}],
+                                    "score": 0.0, "evidence": ["ADR-0002"],
+                                    "reason": "引用 ADR-0002"},
+    })
     r = subprocess.run([sys.executable, str(SCRIPT), str(tmp_path), "--html"],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
+    assert r.returncode == 0, r.stderr
+    raw = (tmp_path / "report.json").read_text(encoding="utf-8")
+    out = json.loads(raw)
+    md = (tmp_path / "report.md").read_text(encoding="utf-8")
+    html = (tmp_path / "report.html").read_text(encoding="utf-8")
+    assert "ADR-0002" in raw and "ADR-0002" in md and "ADR-0002" in html
+    assert list(out["metrics"]) == ALL_KEYS
+    assert out["metric_tiers"]["#1"] == "T0" and out["metric_tiers"]["#10"] == "T2A"
+
+
+def test_report_records_model_and_harness_in_header(tmp_path):
+    write_inputs(tmp_path, {"static.json": _static()})
+    r = subprocess.run([sys.executable, str(SCRIPT), str(tmp_path), "--html",
+                        "--model", "model-under-test", "--harness", "pi"],
                        capture_output=True, text=True, encoding="utf-8", errors="replace")
     assert r.returncode == 0, r.stderr
     out = json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))
     md = (tmp_path / "report.md").read_text(encoding="utf-8")
     html = (tmp_path / "report.html").read_text(encoding="utf-8")
-    assert "ADR" not in md and "ADR" not in html
-    assert list(out["metrics"]) == ALL_KEYS
-    assert out["metric_tiers"]["#1"] == "T0" and out["metric_tiers"]["#10"] == "T2A"
+    meta = json.loads((tmp_path / "meta.json").read_text(encoding="utf-8"))
+    assert out["model"] == "model-under-test" and out["harness"] == "pi"
+    assert meta["provenance"] == {"model": "model-under-test", "harness": "pi"}
+    assert "model-under-test" in md and "model-under-test" in html
+    assert "生成时间" in md and "审核人" in md
 
 
 def test_report_md_ordered_with_chinese_labels(tmp_path):

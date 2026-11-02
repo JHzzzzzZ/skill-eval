@@ -1,5 +1,6 @@
 """报告生成（17/18 的自我应用：固定输出契约）。
 Seam: python report.py <results目录> [--html] [--evalset <evalsets/<name>/vN>] [--skill <被测skill目录>]
+      [--model <模型>] [--harness <pi>]
       [--partial --completed-stage <t> | --completed-stages <t0,t1,...>]
 
 --partial 只用于停止后的局部报告：顶层写 partial/completed_stages/stopped_at，
@@ -48,6 +49,7 @@ DIM_PERM_SOFT = ("obfuscation", "pii", "egress")
 VERDICT_RANK = {"skipped": 0, "pass": 1, "warn": 2, "fail": 3}
 TIER_LABELS = {"t0": "基础检查", "t1": "语义评审", "t2a": "触发评测",
                "t2b": "真实输入对比", "t3": "完整运行"}
+HARNESS_LABELS = {"pi": "本机命令行"}
 TIER_OF = {**{f"#{i}": "T0" for i in range(1, 5)},
            **{f"#{i}": "T1" for i in range(5, 10)},
            "#10": "T2A", "#11": "T2B", "#12": "T2B",
@@ -59,23 +61,31 @@ def tier_label(value) -> str:
     return TIER_LABELS.get(str(value or "").lower(), str(value or ""))
 
 
+def harness_label(value) -> str:
+    return HARNESS_LABELS.get(str(value or "").lower(), str(value or ""))
+
+
+def _reviewer_text(report: dict) -> str:
+    """报告头“谁判的”：优先人工调整的实际审核人，其次评测集审核口径。"""
+    names = []
+    for item in report.get("manual_overrides") or []:
+        name = str(item.get("reviewer") or "").strip()
+        if name and name not in names:
+            names.append(name)
+    if names:
+        return "、".join(names)
+    if report.get("reviewed_by") == "human":
+        return "人工复核"
+    if report.get("reviewed_by") == "ai":
+        return "AI 自动审核（未经人工复核）"
+    return "未审核"
+
+
 def _public_text(text):
-    """用户界面不展示内部 ADR 编号；只清洗展示文本，不改 data。"""
+    """整理展示文本的空白；不删用户内容里的任何原文（内容保真）。"""
     if not isinstance(text, str):
         return text
-    text = re.sub(r"[（(]?\s*A[D]R(?:[-\s]?\d{2,4})?(?:/\d{2,4})*\s*[）)]?", " ", text, flags=re.IGNORECASE)
     return re.sub(r"\s{2,}", " ", text).strip()
-
-
-def _public_obj(value):
-    """递归清洗用户可见报告里的内部编号（含 data/evidence）。"""
-    if isinstance(value, str):
-        return _public_text(value)
-    if isinstance(value, list):
-        return [_public_obj(v) for v in value]
-    if isinstance(value, dict):
-        return {k: _public_obj(v) for k, v in value.items()}
-    return value
 
 
 def _public_tables(tables):
@@ -687,7 +697,7 @@ def build(d: Path, evalset_dir: Path | None = None,
               "reviewed_by": reviewed_by,
               "evaluator": evaluator_fingerprint(),
               "generated_at": datetime.now().isoformat(timespec="seconds")}
-    return _public_obj(report)
+    return report
 
 
 def _mask_incomplete(m: dict, completed_stages: list | None) -> None:
@@ -1401,6 +1411,13 @@ def render_html(report: dict, evalset_dir=None, skill_arg=None) -> str:
         meta_bits.append(f"<span class='badge skipped' style='margin-left:8px'>{_esc(tier_label(report['tier']))}</span>")
     if report.get("partial"):
         meta_bits.append("<span class='badge warn' style='margin-left:8px'>局部报告 · 已停止：仅展示已完成阶段</span>")
+    if report.get("model"):
+        meta_bits.append(f"<small style='margin-left:8px;color:#64748b'>模型：{_esc(report['model'])}</small>")
+    if report.get("harness"):
+        meta_bits.append(f"<small style='margin-left:8px;color:#64748b'>运行方式：{_esc(harness_label(report['harness']))}</small>")
+    if report.get("generated_at"):
+        meta_bits.append(f"<small style='margin-left:8px;color:#64748b'>生成时间：{_esc(report['generated_at'])}</small>")
+    meta_bits.append(f"<small style='margin-left:8px;color:#64748b'>审核人：{_esc(_reviewer_text(report))}</small>")
     if report.get("reviewed_by") == "ai":
         meta_bits.append("<small style='margin-left:8px;color:#fbbf24'>评测集 AI 审核，未经人工复核</small>")
     return (_HTML_TMPL.replace("__CLS__", CONCLUSION_CLS.get(cls, "skipped"))
@@ -1424,6 +1441,12 @@ def render_md(report: dict) -> str:
         head.append("**评测集 AI 审核，未经人工复核**")
     ev = report.get("evaluator") or {}
     head.append(f"**评估器指纹：{ev.get('version', 'unknown')}**（{ev.get('files', 0)} 个文件的内容 sha256）")
+    head.append(f"**生成时间：{report.get('generated_at', 'unknown')}**")
+    if report.get("model"):
+        head.append(f"**模型：{report['model']}**")
+    if report.get("harness"):
+        head.append(f"**运行方式：{harness_label(report['harness'])}**")
+    head.append(f"**审核人：{_reviewer_text(report)}**")
     lines = head + [""]
     for k in ALL_KEYS:  # 严格按指标 ID 顺序（ADR-0032）
         v = report["metrics"][k]
@@ -1458,7 +1481,7 @@ def render_md(report: dict) -> str:
 
 def main():
     args = sys.argv[1:]
-    html = evalset_dir = skill_arg = tier = None
+    html = evalset_dir = skill_arg = tier = model = harness = None
     partial = False
     completed_stages = []
     rest = []
@@ -1479,10 +1502,15 @@ def main():
             skill_arg = Path(args[i + 1]); i += 2
         elif args[i] == "--tier":
             tier = args[i + 1]; i += 2
+        elif args[i] == "--model":
+            model = args[i + 1]; i += 2
+        elif args[i] == "--harness":
+            harness = args[i + 1]; i += 2
         else:
             rest.append(args[i]); i += 1
     if len(rest) != 1:
         print("usage: report.py <results目录> [--tier <t0|t1|t2a|t2b|t3>] "
+              "[--model <模型>] [--harness <pi>] "
               "[--html] [--partial --completed-stage <t0|t1|t2a|t2b|t3>] "
               "[--evalset <evalsets/<name>/vN>] [--skill <被测skill目录>]", file=sys.stderr)
         sys.exit(2)
@@ -1496,11 +1524,18 @@ def main():
     if tier:
         report["tier"] = tier
         report["tier_label"] = tier_label(tier)
+    if model:
+        report["model"] = model
+    if harness:
+        report["harness"] = harness
     if partial:
         report["partial"] = True
         report["completed_stages"] = completed_stages
         report["stopped_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
     meta = build_meta(report, skill_arg, evalset_dir)
+    provenance = {key: value for key, value in (("model", model), ("harness", harness)) if value}
+    if provenance:
+        meta["provenance"] = provenance
     _console.write_text(d / "report.json", json.dumps(report, ensure_ascii=False, indent=2))
     _console.write_text(d / "report.md", render_md(report))
     write_meta(d, meta)

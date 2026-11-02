@@ -15,8 +15,8 @@ Generated: 2026-09-22T13:43:08.578Z
 | `harness.py` | 75 | 无 CLI；`run_case/available` | 执行载体适配（当前 pi） |
 | `judge_run.py` | 172 | `--metric --skill --out [--backend]` | T1 评审执行器 |
 | `evalset_gen.py` | 115 | `--skill --out [--count]` | 生成 T2A 评测集草稿 |
-| `runner.py` | 868 | `--skill --tier [--evalset] [--real-input]` | 确定性编排 + NDJSON 进度 + 阶段级检查点 |
-| `report.py` | 1515 | `<results目录> [--html] [--evalset <vN>] [--skill <dir>] [--tier <t>] [--partial --completed-stages t0,t1]` | 汇总 16 条 + 优化建议 + 报告页 + 局部报告 |
+| `runner.py` | 870 | `--skill --tier [--evalset] [--real-input] [--model] [--harness]` | 确定性编排 + NDJSON 进度（先发 plan） + 阶段级检查点 |
+| `report.py` | 1550 | `<results目录> [--html] [--evalset <vN>] [--skill <dir>] [--tier <t>] [--model <m>] [--harness <h>] [--partial --completed-stages t0,t1]` | 汇总 16 条 + 优化建议 + 报告页 + provenance + 局部报告 |
 | `static_check.py` | 714 | `<skill目录> [--exclude <p>]... [--no-default-excludes]` | #1/#3/#4 六组 + 可移植性闸门 + #12 依赖全面性 |
 | `trace_run.py` | 474 | `<沙箱目录> <prompt> [--skill\|--no-skill] [--early-exit] [--model] [--events] [--out] [--build-only]` | #10/#13/#11/#12/#15/#16 数据源 |
 | `evalset_check.py` | 180 | `<evalset目录> --skill <skill目录> [--out]` | #10 可信度（触发集质量） |
