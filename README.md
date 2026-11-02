@@ -30,7 +30,7 @@ skill-evaluator/
 ├── scripts/            # CLI + runner + llm/harness adapters + sandbox/capabilities; check-deps.sh = preflight (#7)
 ├── sandbox/            # container image template + boundary notes (T2/T3, Docker `--network none`)
 ├── web/                # local UI (stdlib HTTP + SSE + vanilla JS)
-└── tests/              # 467 tests, subprocess-seam based
+└── tests/              # 469 tests, subprocess-seam based
 docs/adr/               # 41 architecture decisions
 ```
 
@@ -47,6 +47,7 @@ The evaluator is **self-contained**: all scripts and tests live inside the skill
    ```bash
    python scripts/runner.py --skill <path> --tier t2a
    python web/app.py    # http://127.0.0.1:8765
+   python web/app.py --single-user  # local-only: T2/T3 need no token; guest/local history shared
    ```
 5. Get `report.json` + `report.md` + `report.html` + `meta.json` under the results directory.
 6. In the UI: choose a workspace, check/generate/review an eval set, add 1–20 real-input cases (only `prompt` required), test the LLM connection, and manually adjust a verdict with an audit reason.
@@ -73,7 +74,7 @@ Tier entry: `--tier <t0|t1|t2a|t2b|t3>` (default T2A); higher tiers reuse lower-
 
 ```bash
 cd skill-evaluator
-python -m pytest tests        # 467 tests, all green
+python -m pytest tests        # 469 tests, all green
 ```
 
 Design decisions and their reasoning live in `docs/adr/`. See `README_CN.md` for the Chinese version.

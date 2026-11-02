@@ -1,6 +1,6 @@
 """前端入口：stdlib HTTP 服务 + 原生 JS，只绑 127.0.0.1。
 
-用法：python web/app.py [--port 8765]
+用法：python web/app.py [--port 8765] [--single-user]
 页面选档位/执行载体/模型/评测集/真实输入 → 后台跑 scripts/runner.py → SSE 推进度。
 """
 from __future__ import annotations
@@ -50,6 +50,7 @@ GUEST_COOKIE = "se_guest"
 GUEST_MAX_AGE = 30 * 24 * 3600
 TOKEN_HEADER = "X-Skill-Eval-Token"
 PROTECTED_TIERS = ("t2a", "t2b", "t3")
+SINGLE_USER = False                 # --single-user：仅本机 loopback；见 _owner_matches
 
 
 def _json_body(handler) -> dict:
@@ -134,6 +135,9 @@ def _token_record(handler):
 
 
 def _actor(handler) -> dict:
+    if SINGLE_USER:
+        # 本机单用户：不靠 cookie/token 识别；旧 guest/local/legacy 历史统一可见。
+        return {"kind": "local", "id": "local", "name": "本机用户"}
     record = _token_record(handler)
     if record:
         return {"kind": "token", "id": record["id"], "name": record.get("name") or ""}
@@ -173,11 +177,14 @@ def _run_owner(rid: str):
 
 
 def _owner_matches(actor: dict, owner: dict) -> bool:
-    """legacy run 只在完全没有 token 的单用户迁移期放行。
+    """单用户模式放行本地历史；多用户模式按身份隔离。
 
-    一旦 token 库里有任意记录，多用户模式即成立：没有 owner 的旧 run 不属于
-    任何身份，给谁看都是跨用户泄漏。
+    - 单用户：只拒 token run（那是之前多人模式的身份），guest/local/legacy 全部可见；
+      旧浏览器 cookie 失效也不会丢历史。
+    - 多用户：legacy 只在 token 库为空时放行；其余 kind+id 必须匹配。
     """
+    if SINGLE_USER:
+        return owner["kind"] != "token"
     if owner["kind"] == "legacy":
         return not token_admin.has_tokens()
     return owner["kind"] == actor["kind"] and owner["id"] == actor["id"]
@@ -210,8 +217,8 @@ def _audit(handler, action: str, status: int, *, run_id: str = "", tier: str = "
 
 
 def _require_token(handler, action: str) -> bool:
-    """评测集接口的 token 门禁；拒绝时统一 401，不区分格式错与不存在。"""
-    if _token_record(handler):
+    """评测集接口的 token 门禁；单用户模式不需要 token。"""
+    if SINGLE_USER or _token_record(handler):
         return True
     _audit(handler, action, 401, detail="需要 token")
     _send_json(handler, 401, {"ok": False, "error": "该接口需要访问 token"})
@@ -981,6 +988,8 @@ class Handler(BaseHTTPRequestHandler):
                 return _send_json(self, 401, {"ok": False, "error": "token 无效或已停用"})
             return _send_json(self, 200, {"ok": True, "id": record["id"],
                                           "name": record.get("name") or ""})
+        if path == "/api/mode":
+            return _send_json(self, 200, {"single_user": bool(SINGLE_USER)})
         if path == "/api/llm/config":
             return _send_json(self, 200, llm_layer.status())
         if path == "/api/capabilities":
@@ -1378,7 +1387,7 @@ class Handler(BaseHTTPRequestHandler):
         if tier not in ("t0", "t1", "t2a", "t2b", "t3"):
             return _send_json(self, 400, {"error": "tier 只支持 t0/t1/t2a/t2b/t3"})
         actor = _actor(self)
-        if tier in PROTECTED_TIERS and actor["kind"] != "token":
+        if tier in PROTECTED_TIERS and not SINGLE_USER and actor["kind"] != "token":
             _audit(self, "run_denied", 401, tier=tier, detail="T2/T3 需要 token")
             return _send_json(self, 401, {"ok": False,
                                           "error": "T2/T3 需要访问 token：请向部署方申请"})
@@ -1601,7 +1610,13 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--single-user", action="store_true",
+                        help="仅本机 loopback：T2/T3 免 token，guest/local/legacy 历史共享")
     ns = parser.parse_args()
+    if ns.single_user and ns.host not in ("127.0.0.1", "localhost", "::1"):
+        parser.error("--single-user 只允许绑定 loopback（127.0.0.1 / localhost / ::1）")
+    global SINGLE_USER
+    SINGLE_USER = bool(ns.single_user)
     ratelimit.cleanup()             # 只保留 30 天内的计数记录
     srv = ThreadingHTTPServer((ns.host, ns.port), Handler)
     srv.daemon_threads = True

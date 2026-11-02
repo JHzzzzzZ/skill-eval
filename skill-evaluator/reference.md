@@ -165,6 +165,8 @@ T1 评审走 `llm` 接口层（ADR-0034）：模型 `--model` > `llm.model` > `S
 
 访问矩阵：T0/T1 游客可跑；T2A/T2B/T3 必须带有效 token；评测集接口只对 token 开放；管理员不登录网页，只用 CLI 发/停 token。token 是**访问控制**，不是执行沙箱。T2/T3 默认由 `scripts/sandbox.py` 放进一次性 Docker 容器；没有容器的页面回退需要用户确认（`allow_unsafe_host: true`）后才在宿主临时目录执行，CLI 则必须显式 `--isolation host`。模型代理落地前容器不能访问模型；缺 adapter 时仍 fail closed。
 
+本机单用户模式：`python web/app.py --single-user`，仅允许绑定 loopback。该模式下 `_actor` 固定为 `local`，`_owner_matches` 放行 guest/local/legacy，只拒绝 token run；T2/T3 与评测集接口不再要求 token。默认仍是多用户 token/guest 模式，不做自动切换。
+
 - 持久 token：`web/token_admin.py` 读写 `web/tokens.json`（gitignore），结构 `{"tokens":[{id,name,note,hash,created_at,active}]}`；只存 `sha256(token)`，明文只在 `issue` 时打印一次。格式 `se_<urlsafe 32 bytes>`。路径只来自模块常量与 CLI 全局参数 `--tokens-file` / `--audit-file`（默认 `web/tokens.json` / `web/audit.jsonl`），不新增环境变量。
 - CLI（无网页注册，全局参数写在子命令前）：`python web/token_admin.py [--tokens-file PATH] [--audit-file PATH] issue --name "张三" [--note "申请表 #12"]` / `list` / `revoke --id tok_ab12cd34`。停用后下一次校验立即失败；`list` 不显示 hash 与明文。
 - 游客身份：首次请求发 `se_guest` cookie（UUID、HttpOnly、SameSite=Strict、Path=/、30 天），只用于历史归属，不是安全身份。

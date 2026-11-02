@@ -144,19 +144,33 @@ python web/app.py --single-user
 
 - 仅在绑定 `127.0.0.1` 时允许；绑定非 loopback 直接拒绝启动，避免把无鉴权服务暴露出去。
 - 单用户模式：
-  - T2/T3 不再要求 token；
-  - 隐藏 token 输入/评测集 token 门禁的“游客”概念；
-  - run 归属写 `owner_kind="local"`，历史列表不按 cookie 过滤；
+  - T2/T3 不再要求 token；评测集接口不再要求 token；
+  - 隐藏 token 输入/评测集 token 门禁；
+  - run 归属写 `owner_kind="local"`；
+  - **历史归属：`_owner_matches` 放行 guest/local/legacy，只拒绝 token run**——旧浏览器 cookie 失效后，旧 guest 报告仍在列表里且能打开；token run 来自多人模式，单用户模式不冒充其归属；
   - 仍保留 IP/UA/action 审计；
   - 导出/对比仍校验 run id 合法性。
 - 多人模式保持现有 token/guest 行为；模式写进 `run.json`/meta，切换后旧 run 按 `legacy` 规则可见，不迁移、不改归属。
 - 不做“自动检测单人”，避免默认削弱鉴权；用户显式选择。
 
+## P2 开工门槛：单指标重跑必须先做 spike
+
+当前缓存是**阶段级**：T1 的 `runner` 重跑会清空 `judges/` 再整档跑，不能直接拿来承诺“只发一个 rubric 的调用”。Phase 3 开工前先做一次性 spike：
+
+1. 准备一个已有 7 个 rubric 的 run，记录 7 个 `judges/*.json` 的字节 hash 与 `report.json` 的 16 条裁决。
+2. 只对 `#2` 调用 `judge_run.py --metric brevity`，写入临时 overlay，不碰其他 6 个文件。
+3. 用 7 份合并后的 judge 重新跑 `report.py`，断言：
+   - 只发出 1 次模型调用（fake LLM 计数）；
+   - 其他 6 个 rubric 文件字节不变；
+   - 16 条指标仍在，其他 15 条裁决不变；
+   - T1 阶段缓存写入后仍是完整 7 份，不会把半截当完成。
+4. 通过才实现 `--rerun-metrics`；不通过就取消该 UI 入口，保留阶段级重跑，避免给用户假的“单指标”收益。
+
 ## 实施顺序与验收
 
 1. **Phase 1（1–2 天）**：`estimate.py` + `/api/estimate` + UI 成本条；动态进度权重；配置记忆；超时文案。
 2. **Phase 2（1–2 天）**：指标锚点/筛选/弹窗 Esc+焦点锁/移动卡片；建议汇总卡。
-3. **Phase 3（2–3 天）**：审核质量面板 + 未审/搜索/过滤/批量；T1 单 rubric 重跑。
+3. **Phase 3（2–3 天）**：审核质量面板 + 未审/搜索/过滤/批量；先过上面的单 rubric spike，再决定是否开放 T1 单指标重跑。
 4. **Phase 4（0.5 天）**：`--single-user` 与 loopback 限制。
 
 验收：

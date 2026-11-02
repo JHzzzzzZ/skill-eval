@@ -667,6 +667,7 @@ def web_server(tmp_path, monkeypatch):
     monkeypatch.setattr(web, "RUNS", tmp_path / "runs")
     (tmp_path / "runs").mkdir(exist_ok=True)
     monkeypatch.setattr(web, "ACTIVE", {})
+    monkeypatch.setattr(web, "SINGLE_USER", False)
     monkeypatch.setattr(web.token_admin, "TOKENS_FILE", tmp_path / "tokens.json")
     monkeypatch.setattr(web.token_admin, "AUDIT_FILE", tmp_path / "audit.jsonl")
     monkeypatch.setattr(web.ratelimit, "DB", tmp_path / "usage.sqlite3")
@@ -767,6 +768,34 @@ def test_t2a_with_token_is_owner_scoped(tmp_path, monkeypatch):
         assert call(server, "POST", "/api/stop", {"id": rid}, headers=other_h)[0] == 403
         assert call(server, "POST", "/api/override", {"id": rid}, headers=other_h)[0] == 403
         assert call(server, "GET", f"/api/status?id={rid}", headers=owner_h)[0] == 200
+
+
+def test_single_user_sees_guest_and_legacy_but_not_token_runs(tmp_path, monkeypatch):
+    with web_server(tmp_path, monkeypatch) as server:
+        monkeypatch.setattr(web, "SINGLE_USER", True)
+        runs = tmp_path / "runs"
+        write_owned_run(runs, "guestrun", owner_kind="guest", owner_id="a" * 32, tier="t0")
+        write_owned_run(runs, "legacyrun", owner_kind=None, tier="t0")
+        write_owned_run(runs, "tokenrun", owner_kind="token", owner_id="tok_x", protected=True)
+        status, data, _ = call(server, "GET", "/api/runs?limit=50")
+        assert status == 200
+        ids = {r["id"] for r in data["runs"]}
+        assert {"guestrun", "legacyrun"} <= ids and "tokenrun" not in ids
+        assert call(server, "GET", "/api/status?id=guestrun")[0] == 200
+        assert call(server, "GET", "/api/status?id=legacyrun")[0] == 200
+        assert call(server, "GET", "/api/status?id=tokenrun")[0] == 403
+
+
+def test_single_user_t2_does_not_require_token(tmp_path, monkeypatch):
+    skill = make_skill(tmp_path)
+    with web_server(tmp_path, monkeypatch) as server:
+        monkeypatch.setattr(web, "SINGLE_USER", True)
+        status, data, _ = call(server, "POST", "/api/run",
+                               {"skill": str(skill), "tier": "t2a"})
+        assert status == 200, data
+        meta = json.loads((tmp_path / "runs" / data["id"] / "run.json")
+                          .read_text(encoding="utf-8"))
+        assert meta["owner_kind"] == "local" and meta["owner_id"] == "local"
 
 
 def test_run_lists_and_legacy_runs_follow_ownership(tmp_path, monkeypatch):
@@ -926,7 +955,8 @@ def test_ui_token_gate_hides_evalset_and_sends_header():
         assert element in html, element
     assert "X-Skill-Eval-Token" in html
     assert 'localStorage.getItem("se-token")' in html
-    assert '$("evalCard").hidden = !tokenAuthorized' in html     # 游客隐藏评测集卡
+    assert 'const authorized = singleUser || tokenAuthorized;' in html
+    assert '$("evalCard").hidden = !authorized' in html     # 游客隐藏评测集卡；本机模式可见
     assert "T2/T3 需要申请 token" in html
     assert "new EventSource" not in html                         # SSE 改 fetch 才能带请求头
     assert "headers: authHeaders()" in html
@@ -1240,6 +1270,9 @@ def test_ui_evidence_provenance_permissions_history_and_mobile():
     assert "flex-wrap:wrap" in html
     assert ".token-set{display:none}" in html.replace(" ", "")
     assert 'id="accessTokenMobile"' in html and 'id="tokenModal"' in html
+    # 6 本机单用户模式
+    assert 'fetch("/api/mode")' in html and "singleUser" in html
+    assert 'id="modeBadge"' in html and "mode-single" in html
 
 
 def test_ui_loads_capabilities_and_blocks_container_tiers():

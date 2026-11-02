@@ -48,6 +48,7 @@
   .token-set{display:flex;gap:6px;align-items:center;min-width:0}
   .token-set input{width:min(190px,42vw);padding:7px 10px;font-size:12.5px;border-radius:10px}
   .mobile-token-btn{display:none}
+  .mode-single .token-set,.mode-single .mobile-token-btn{display:none!important}
   .icon-btn{
     width:38px;height:38px;border-radius:11px;border:1px solid var(--line);
     background:var(--card);color:var(--ink-2);display:grid;place-items:center;cursor:pointer;
@@ -337,6 +338,7 @@
         <button class="btn btn-ghost btn-sm" id="tokenBtn" type="button">验证</button>
         <span class="pill" id="tokenState">游客</span>
       </div>
+      <span class="pill" id="modeBadge" hidden>本机模式</span>
       <span class="pill"><span class="dot" id="liveDot"></span><span id="state">待机</span></span>
       <button class="icon-btn mobile-token-btn" id="tokenOpen" title="访问 token" aria-label="访问 token">T</button>
       <button class="icon-btn" id="themeBtn" title="切换主题" aria-label="切换主题">◐</button>
@@ -721,7 +723,7 @@ $("reviewerName").addEventListener("input", () => localStorage.setItem("se-revie
 
 // 访问 token：T0/T1 游客可跑；T2/T3 需要有效 token（服务端同样强制 401）。
 // token 明文只存本地 localStorage，请求带 X-Skill-Eval-Token；不写进分享链接。
-let tokenAuthorized = false, tokenName = "";
+let tokenAuthorized = false, tokenName = "", singleUser = false;
 function tokenValue(){ return localStorage.getItem("se-token") || ""; }
 function authHeaders(extra){
   const headers = Object.assign({}, extra || {});
@@ -733,15 +735,19 @@ function tokenInputs(){
   return ["accessToken", "accessTokenMobile"].map(id=>$(id)).filter(Boolean);
 }
 function applyActorUi(){
-  $("evalCard").hidden = !tokenAuthorized;      // 游客隐藏评测集卡
-  const label = tokenAuthorized ? "已授权：" + (tokenName || "token") : "游客";
+  const authorized = singleUser || tokenAuthorized;
+  $("evalCard").hidden = !authorized;          // 游客隐藏评测集卡；本机模式直接可见
+  const label = singleUser ? "本机模式" : (tokenAuthorized ? "已授权：" + (tokenName || "token") : "游客");
   $("tokenState").textContent = label;
   $("tokenStateMobile").textContent = label;
-  tokenInputs().forEach(el=>{ el.value = tokenAuthorized ? tokenValue() : ""; });
+  $("modeBadge").hidden = !singleUser;
+  document.body.classList.toggle("mode-single", singleUser);
+  tokenInputs().forEach(el=>{ el.value = !singleUser && tokenAuthorized ? tokenValue() : ""; });
   refreshRunPrereq();
 }
 function clearToken(){ tokenAuthorized = false; tokenName = ""; localStorage.removeItem("se-token"); }
 async function checkToken(){
+  if(singleUser){ applyActorUi(); return true; }
   const token = tokenValue();
   if(!token){ clearToken(); applyActorUi(); return false; }
   try{
@@ -774,7 +780,16 @@ $("tokenModal").onclick = (e) => { if(e.target.id === "tokenModal") $("tokenModa
 ["accessToken", "accessTokenMobile"].forEach(id=>{
   $(id).addEventListener("keydown", (e)=>{ if(e.key === "Enter") $(id === "accessToken" ? "tokenBtn" : "tokenBtnMobile").click(); });
 });
+async function loadMode(){
+  try{
+    const r = await fetch("/api/mode");
+    if(r.ok){ const d = await r.json(); singleUser = !!d.single_user; }
+  }catch(e){}
+  applyActorUi();
+  if(singleUser) loadRuns();
+}
 applyActorUi();
+loadMode();
 checkToken();
 function preflightWarnings(){
   const warnings = [];
@@ -1319,7 +1334,7 @@ $("run").onclick = async () => {
   const skill = currentSkill;
   if(!skill){ toast("先上传压缩包或选择工作区", "err"); return; }
   const tier = tierValue();
-  if(!tokenAuthorized && (tier === "t2a" || tier === "t2b" || tier === "t3")){
+  if(!singleUser && !tokenAuthorized && (tier === "t2a" || tier === "t2b" || tier === "t3")){
     toast("T2/T3 需要申请 token：先在右上角填入访问 token", "err");
     $("runHint").textContent = "T2/T3 需要访问 token；基础检查与文档评审免 token 可用。";
     return;

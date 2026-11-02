@@ -30,7 +30,7 @@ skill-evaluator/
 ├── scripts/            # CLI + runner + llm/harness 适配层 + sandbox/capabilities；check-deps.sh = 前置自检（#7）
 ├── sandbox/            # 容器镜像模板与边界说明（T2/T3，Docker `--network none`）
 ├── web/                # 本地前端（stdlib HTTP + SSE + 原生 JS）
-└── tests/              # 467 个测试，全部走 subprocess seam
+└── tests/              # 469 个测试，全部走 subprocess seam
 docs/adr/               # 41 条架构决策记录
 ```
 
@@ -47,6 +47,7 @@ docs/adr/               # 41 条架构决策记录
    ```bash
    python scripts/runner.py --skill <路径> --tier t2a
    python web/app.py    # http://127.0.0.1:8765
+   python web/app.py --single-user  # 仅本机：T2/T3 免 token；guest/local 历史共享
    ```
 5. 拿到结果目录下的 `report.json` + `report.md` + `report.html` + `meta.json`
 6. 页面里可选工作区、检查/生成/审核评测集、填 1–20 条真实输入（只有 `prompt` 必填）、测试 LLM 连接，并人工调整裁决（写审计原因）
@@ -73,7 +74,7 @@ docs/adr/               # 41 条架构决策记录
 
 ```bash
 cd skill-evaluator
-python -m pytest tests        # 467 个测试全绿
+python -m pytest tests        # 469 个测试全绿
 ```
 
 设计决策及理由见 `docs/adr/`。英文版见 `README.md`。
