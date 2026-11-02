@@ -76,7 +76,31 @@ Windows 上用 Docker Desktop（WSL2 backend）或 Podman；T2/T3 每个 case �
 3. 模型代理二级限流（按实际调用/token）。
 4. 容器 adapter（T2/T3 fail closed 到容器可用）。
 
-## 3. 风险与取舍
+## 3. 依赖检查与不满足时的行为
+
+不要把所有依赖塞进全局硬依赖，否则 T0/T1 游客会被 Docker 卡死。按档位分层：
+
+| 依赖 | T0 | T1 | T2A/T2B/T3 |
+|---|---|---|---|
+| Python ≥3.9 / git | 必须 | 必须 | 必须 |
+| 模型配置（直连 LLM） | 不需要 | 必须 | 必须 |
+| pi CLI | 不需要 | 不需要（直连） | 容器内需要 |
+| Docker/Podman + daemon | 不需要 | 不需要 | 必须 |
+| 沙箱镜像（固定 digest） | 不需要 | 不需要 | 必须 |
+| 宿主模型代理 | 不需要 | 不需要 | 必须 |
+
+实现：
+
+- `scripts/check-deps.sh --tier <t0|t1|t2a|t2b|t3>`：无参数只查基础依赖（保持 T0/T1 可用）；`--tier t2a` 起加查容器 CLI/daemon、镜像、代理。`--json` 给 Web 用；退出码 0=该档可跑，1=缺依赖。
+- `GET /api/capabilities`：返回 `{python, git, pi, llm, container:{engine,version,image,proxy}, tiers:{t0:true,t1:true,t2a:false}}`；UI 在档位卡显示“T2/T3 需要容器运行时”。
+- `POST /api/run` 在创建 run 目录前做同档检查：
+  - T0/T1 缺容器不影响；缺模型/T1 依赖则拒绝该档。
+  - T2/T3 缺容器/镜像/代理 → **412 Precondition Failed**，返回缺什么和修复命令；**不回退宿主 pi**；不消耗配额、不创建 run 目录；审计 `dep_missing`。
+- 运行中容器引擎掉线/镜像被杀：当前 case 标 `skipped`/`error`，该阶段不写完整缓存；T0/T1 已完成结果保留。自动停止时按已完成阶段出局部报告，不把半截 T2/T3 当完整结论。
+- 当前机器实测：Docker/Podman CLI 都没有，WSL2 Ubuntu 可用。按这个门禁，T2/T3 会明确阻塞，T0/T1 继续；需要先装 Docker Desktop 或 WSL 内 Docker Engine，构建镜像后再开放 T2/T3。
+- 安装/修复命令由 preflight 输出，不在请求里自动 `docker build`/`docker pull`（可能很慢、需要网络/权限）。管理员先构建并 pin digest。
+
+## 4. 风险与取舍
 
 - 容器每 case 启动有 1–3 秒开销；T3 会放大，但比宿主泄露便宜。
 - 默认断网会让需要联网的 skill 在 T2/T3 失败；这是安全默认，联网需求走代理 allowlist，不直接放开。
