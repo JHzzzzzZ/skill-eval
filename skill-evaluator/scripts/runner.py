@@ -33,7 +33,8 @@ CACHE_ROOT = ROOT.parent / ".skill-eval-cache"
 CACHE = CACHE_ROOT / "t0t1"
 TIERS = ("t0", "t1", "t2a", "t2b", "t3")
 TIER_RANK = {name: i for i, name in enumerate(TIERS)}
-EXCLUDE = {"_internal", "tests", "evalsets", "uploads", "attic", ".git", "node_modules",
+EXCLUDE = {"_internal", "tests", "test", "__tests__", "spec", "specs",
+                "evalsets", "uploads", "attic", ".git", "node_modules",
            "__pycache__", ".sandbox", ".skillrepos", ".pytest_cache", "runs", "cache", "calibration", "workspaces"}
 RUBRICS = ("brevity", "redundancy", "fallback", "precheck", "contract", "deps", "pii")
 GUARD = [ROOT.parent] if (ROOT.parent / ".git").exists() else []

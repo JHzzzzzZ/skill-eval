@@ -65,7 +65,9 @@ INVOKE_VALUES = {"human", "both"}  # pi 真实三态归约：缺省/false=both�
 # .skillrepos/ 是沙箱副本 repo（每个被测 skill 一份完整拷贝，含 scripts/static_check.py）：
 # 不排除它，自检就会在自己副本的正则表定义行上自命中（实测 4 处 exfil → 237 个测试里
 # test_evaluator_self_check_passes 挂）。副本是运行面痕迹，不是被测内容。
-DEFAULT_EXCLUDE_DIRS = ("_internal", "tests", "evalsets", "uploads", ".sandbox", ".skillrepos", "runs", "cache", "calibration", "workspaces")
+DEFAULT_EXCLUDE_DIRS = ("_internal", "tests", "test", "__tests__", "spec", "specs",
+                        "evalsets", "uploads", ".sandbox", ".skillrepos", "runs", "cache",
+                        "calibration", "workspaces")
 
 # 行内抑制标记：合法文档里引用危险模式（如本仓 reference.md 的硬编码说明行）时用
 IGNORE_MARKER = "static-check:ignore"
@@ -73,6 +75,7 @@ IGNORE_MARKER = "static-check:ignore"
 # 非运行目录：存在就报告，但不扫描内容（用户点名的 .vscode/.idea/__pycache__ 等）
 JUNK_DIRS = frozenset({".vscode", ".idea", "__pycache__", ".pytest_cache", ".mypy_cache",
                        ".ruff_cache", "node_modules"})
+TEST_DIRS = frozenset({"tests", "test", "__tests__", "spec", "specs"})
 # 包元数据/说明文件：SKILL.md 不引用也不算冗余（不是运行内容）
 METADATA_FILES = frozenset({"SKILL.md", "LICENSE", "LICENSE.md", "README.md", "README_CN.md",
                             "requirements.txt", "pyproject.toml", "setup.py", "setup.cfg",
@@ -586,7 +589,7 @@ def find_unreferenced_files(skill_dir: Path, body: str, exclude_paths) -> list:
     for d, files in walk_tree(skill_dir, list(exclude_paths)):
         for name in files:
             p = d / name
-            if not p.is_file() or any(part in JUNK_DIRS or part == "_internal"
+            if not p.is_file() or any(part in JUNK_DIRS or part in TEST_DIRS or part == "_internal"
                                       for part in p.parts):
                 continue
             rel = _inside(skill_dir, p)
@@ -617,7 +620,7 @@ def find_junk_dirs(skill_dir: Path, exclude_paths) -> list:
                 if rel:
                     out.append(rel)
                 dirnames.remove(name)
-            elif name in {"_internal", ".git"}:
+            elif name in {"_internal", ".git"} | TEST_DIRS:
                 dirnames.remove(name)
         dirnames[:] = sorted(dirnames)
     return sorted(set(out))

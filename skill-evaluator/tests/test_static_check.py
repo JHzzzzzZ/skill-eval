@@ -714,12 +714,18 @@ def test_low_redundancy_files_ignore_internal_and_report_junk(tmp_path):
     (d / ".vscode" / "settings.json").write_text("{}", encoding="utf-8")
     (d / "__pycache__").mkdir()
     (d / "__pycache__" / "x.pyc").write_text("x", encoding="utf-8")
+    (d / "tests").mkdir()
+    (d / "tests" / "test_orphan.py").write_text("print('test only')\n", encoding="utf-8")
+    (d / "tests" / ".vscode").mkdir()
+    (d / "tests" / ".vscode" / "settings.json").write_text("{}", encoding="utf-8")
     out = run_check(d)
     assert "scripts/c.py" in out["unreferenced_files"]
     assert "scripts/b.py" not in out["unreferenced_files"]       # a.py import 间接引用
     assert "reference.md" not in out["unreferenced_files"]       # SKILL.md 直接引用
     assert not any("_internal" in p for p in out["unreferenced_files"])
+    assert not any(p.startswith("tests/") for p in out["unreferenced_files"])
     assert ".vscode" in out["junk_dirs"] and "__pycache__" in out["junk_dirs"]
+    assert not any(p.startswith("tests/") for p in out["junk_dirs"])
     assert "_internal" not in out["junk_dirs"]
     assert "scripts/c.py" in out["warnings"][0] or any("scripts/c.py" in w for w in out["warnings"])
 
