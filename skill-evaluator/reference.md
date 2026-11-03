@@ -32,7 +32,7 @@ Windows 上杀 pi 子进程树用 `taskkill /T`（`_subprocess.py` 的硬依赖�
 
 权限边界（#4）：副本沙箱下只能做到静态扫描 + trace 审计（看 trace 里是否出现了不该有的命令），做不到强制拦截。扫描规则见 `scripts/static_check.py` 内的六组正则（ADR-0013/0029）：危险命令 / 硬编码凭据 / 注入指令 / 数据外发 / 混淆 / 个人信息。前四组命中即 fail，后两组仅 warn。
 
-依赖全面性（#12 静态面，ADR-0031）：`static_check.py` 报「用了什么 vs 声明了什么」——`deps_used`（shebang 解释器 / python import / `subprocess` 字面量 argv[0]）、`deps_declared`（SKILL.md 正文 + reference.md + `requirements.txt` + `check-deps.sh` 里出现过的名字，**任意出现即算声明，含随口提到——偏宽，漏报方向**）、`deps_missing`（差集）。缺声明只把 #12 降到 warn。运行期依赖探测由 capabilities 模块（`scripts/capabilities.py`）与 sandbox 模块（`scripts/sandbox.py`）承担（T2/T3 的 Docker/镜像/代理/adapter）；本段的静态声明面只判文档与包内声明。已知漏检：argv 由变量拼时取不到 argv[0]；声明面是同义词不敏感的子串匹配（“Python3” 与 “python” 会漏判）。宿主基座（python/bash/sh/cmd/powershell…）不算未声明。
+依赖全面性（#12 静态面，ADR-0031）：`static_check.py` 报「用了什么 vs 声明了什么」——`deps_used`（shebang 解释器 / python import / `subprocess` 字面量 argv[0]）、`deps_declared`（SKILL.md 正文 + reference.md + `requirements.txt` + `check-deps.sh` 里出现过的名字，**任意出现即算声明，含随口提到——偏宽，漏报方向**）、`deps_missing`（差集）、`deps_locations`（每个依赖首次出现的 file/line；包内 `b.py` / `b/__init__.py` / 相对导入不算外部依赖）。缺声明只把 #12 降到 warn，报告表格显示 `file:line`。运行期依赖探测由 capabilities 模块（`scripts/capabilities.py`）与 sandbox 模块（`scripts/sandbox.py`）承担（T2/T3 的 Docker/镜像/代理/adapter）；本段的静态声明面只判文档与包内声明。已知漏检：argv 由变量拼时取不到 argv[0]；声明面是同义词不敏感的子串匹配（“Python3” 与 “python” 会漏判）。宿主基座（python/bash/sh/cmd/powershell…）不算未声明。
 
 已知漏检（如实告知，不要当成"扫过就是安全"）：自造格式的高熵 token、改写的语义注入、跨段拼接的注入、无读取动词的 `.env` 引用。混淆与个人信息类命中仅警告，需人工复核。PII 静态面的边界：只能认格式化的个人标识（邮箱/手机号/身份证/银行卡/公网 IP，带 Luhn 与证件校验位），自造示例（如真实号段格式的假号码）会误报、工号与客户名会漏报——后者靠 `judges/pii.md` 四项检查点补。
 
@@ -225,7 +225,7 @@ T1 评审走 `llm` 接口层（ADR-0034）：模型 `--model` > `llm.model` > `S
 - `t2b/pairwise.json`：无标签双向盲评聚合（`valid`/`with_skill_wins`/`baseline_wins`/`ties`/`win_rate`/`cases`）
 - `real-input.meta.json`：`{"sha256", "note", "count", "cases": [{"id","note","has_expect"}]}`；正文存评估器 `uploads/real-input/<sha>.json`（gitignore，报告不回显）
 - `trace-<序号>.json`：`{"steps": [{"tool", "args", "args_hash"}, ...], "answer", "tokens", "seconds", "triggered", "errors", "host": {"model", "pi", "platform"}, "limit_hit"?}`；触发评测触限时 `limit_hit` 为“步数/token 上限”，同时写入 `errors`（trace_run.py 落盘，--out；host 为宿主 pin，事后归因/复现用；离线 --events 重算时仅记 model 意图）
-- `static.json`：static_check.py --out（脚本自写 UTF-8；stdout 同步回显。禁 shell 重定向——GBK 控制台会产 GBK 文件）。全部脚本入口接 `scripts/_console.py::fix()`：GBK 控制台下回显不可编码字符降级为替换符，不崩、退出码 0；`--out` 文件不受影响。含 #4 的六组（`dangerous`/`secrets`/`injection`/`exfil`/`obfuscation`/`pii`）+ 出站网络 `egress`（GET/内网/socket/ssh 都算，仅警告）、`hardcoded`、`excluded`/`ignored`（ADR-0012）、`scan_excluded_dirs`（ADR-0012：运行面之外）、`stale_refs`（依赖新鲜度，ADR-0009 延伸：SKILL.md 声明但包内不存在的路径引用，warning 级）、`deps_used`/`deps_declared`/`deps_missing`（依赖全面性，ADR-0031，warning 级）、`skill_md_body_lines`/`skill_md_body_warn_lines`/`skill_md_body_fail_lines`（#2 行数主源与两档阈值，ADR-0017：口径 = frontmatter 之后全文行数，含空行与代码块；旧 `skill_md_body_max_lines` 只作历史产物兼容读取，新产物不再输出）<!-- static-check:ignore -->
+- `static.json`：static_check.py --out（脚本自写 UTF-8；stdout 同步回显。禁 shell 重定向——GBK 控制台会产 GBK 文件）。全部脚本入口接 `scripts/_console.py::fix()`：GBK 控制台下回显不可编码字符降级为替换符，不崩、退出码 0；`--out` 文件不受影响。含 #4 的六组（`dangerous`/`secrets`/`injection`/`exfil`/`obfuscation`/`pii`）+ 出站网络 `egress`（GET/内网/socket/ssh 都算，仅警告）、`hardcoded`、`excluded`/`ignored`（ADR-0012）、`scan_excluded_dirs`（ADR-0012：运行面之外）、`stale_refs`（依赖新鲜度，ADR-0009 延伸：SKILL.md 声明但包内不存在的路径引用，warning 级）、`deps_used`/`deps_declared`/`deps_missing`/`deps_locations`（依赖全面性，ADR-0031，warning 级；报告显示 file:line）、`skill_md_body_lines`/`skill_md_body_warn_lines`/`skill_md_body_fail_lines`（#2 行数主源与两档阈值，ADR-0017：口径 = frontmatter 之后全文行数，含空行与代码块；旧 `skill_md_body_max_lines` 只作历史产物兼容读取，新产物不再输出）<!-- static-check:ignore -->
 - `score.json`：score.py --out（同上）；含 `cost`（多次运行汇总）+ `cost_by_case`（逐 case，仅全条目带 case 时出现）+ `necessity`（T2B 合并进来；每分量带 `n`）；T2B 另有 `match`（有 expect）与 `preference`（无标签 A/B），作为 #11 辅助证据，不合成总分
 - `idem.json`：多次 idem.py --out 结果的聚合 `{"ratio", "idempotent", "pairs", "idempotent_pairs", "per_pair"}`
 - `golden.json`：主运行的 golden trace（#12 的数据源之一）；同时存在 `traces/golden-*.json` 时，
@@ -254,7 +254,7 @@ T1 评审走 `llm` 接口层（ADR-0034）：模型 `--model` > `llm.model` > `S
 
 **调用口径（ADR-0020/0022/0034）**：每条 rubric 一次**独立单发**调用——prompt = rubric 全文 + 被测文件（`judge_run.py` 收集，默认上限 60k 字符），不携带编排 agent 的历史/探索上下文。T1 默认走 `llm` 接口层：请求不含 tools/tool_choice，结构上保证无工具；`--backend pi` 回退旧路径时要求 `--no-tools`。固定可重放：同一 prompt、单发、无工具；原始 request/response 存 `raw/llm-judge/`。默认单次；要更高可信度可手工跑 3 次后 `judge_runner.py --merge`（成本 ×3，需在报告注明口径）。
 
-输出：结构化 JSON（`{items: [{name, pass, quote}], score, evidence, reason}`，evidence 必须引用原文；**score = pass 项数/总项数**，0~1 两位小数，judge_runner.py 强制校验）。rubric 文件在 `judges/`。
+输出：结构化 JSON（`{items: [{name, pass, quote, file?, line?}], score, evidence, reason}`；judge_run 会按 quote 在评审输入里尽力补 `file/line`，找不到不伪造；evidence 必须引用原文；**score = pass 项数/总项数**，0~1 两位小数，judge_runner.py 强制校验）。rubric 文件在 `judges/`。
 
 流程门禁：`scripts/judge_run.py --metric <name> --skill <dir> --out judges/<metric>.json` 默认走 `llm`（无 tools），校验失败把 errors 回给模型重产一次，再失败则该指标标 `skipped`。原始 request/response 存 `raw/llm-judge/<metric>.json`；`--backend pi` 时事件流里出现 `tool_execution_start` 则该次评审作废重跑（ADR-0022）。
 

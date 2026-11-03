@@ -682,6 +682,32 @@ def test_deps_used_excludes_stdlib_and_local(tmp_path):
     assert "subprocess" not in out["deps_used"]
 
 
+def test_deps_excludes_local_modules_across_subdirs_and_packages(tmp_path):
+    """本地 b.py / lib 包 / 相对导入都不是第三方依赖。"""
+    d = make_skill(tmp_path, '---\nname: s\ndescription: "x" * 120\n---\n\n无依赖声明。\n')
+    scripts = d / "scripts"
+    (scripts / "sub").mkdir(parents=True)
+    (scripts / "lib").mkdir()
+    (scripts / "b.py").write_text("def f(): return 1\n", encoding="utf-8")
+    (scripts / "lib" / "__init__.py").write_text("", encoding="utf-8")
+    (scripts / "sub" / "local.py").write_text("def h(): return 1\n", encoding="utf-8")
+    (scripts / "sub" / "a.py").write_text(
+        "from b import f\nfrom lib import f as g\nfrom .local import h\n"
+        "import json\n", encoding="utf-8")
+    out = run_check(d)
+    for local in ("b", "lib", "local"):
+        assert local not in out["deps_used"], out["deps_used"]
+        assert local not in out["deps_missing"], out["deps_missing"]
+
+
+def test_deps_locations_point_to_file_and_line(tmp_path):
+    out = run_check(deps_skill(tmp_path))
+    loc = out["deps_locations"]["requests"][0]
+    assert loc["file"] == "scripts/run.py"
+    assert loc["line"] == 3          # import requests 在第 3 行（第 1 行 shebang）
+    assert "scripts/run.py:3" in out["warnings"][0]
+
+
 def test_deps_missing_is_used_minus_declared(tmp_path):
     out = run_check(deps_skill(tmp_path))
     assert out["deps_declared"] == ["git"]

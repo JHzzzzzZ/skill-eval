@@ -294,14 +294,57 @@ def _stdlib_names():
     return frozenset(names) if names else _STDLIB_FALLBACK
 
 
-def collect_deps(skill_dir: Path, exclude_paths):
-    """返回 (used, declared, missing)：used − declared − 宿主基座 = missing（ADR-0031）。
+def _local_module_names(skill_dir: Path, exclude_paths) -> set:
+    """包内 Python 模块名（文件名/包名/相对模块路径），用于排除“自己的 b.py 被当第三方”。
 
-    已知局限：subprocess 的 argv 由变量拼时取不到 argv[0]（如 [sys.executable, ...]），
-    声明面靠子串匹配（“Python3” 与 “python” 这类同义词会漏判）——宁可漏报，不造假 fail。
+    不能只看 import 所在目录：`scripts/sub/a.py` 里的 `from b import f` 可能指向
+    `scripts/b.py` 或 `b/__init__.py`。这里收集扫描面内所有 Python 文件名与包名；
+    同名外部依赖被本地模块遮蔽时，按本地模块处理（不把本地实现报成第三方）。
+    """
+    names = set()
+    for d, files in walk_tree(skill_dir, list(exclude_paths)):
+        for name in files:
+            p = d / name
+            if p.suffix != ".py":
+                continue
+            try:
+                rel = p.relative_to(skill_dir)
+            except ValueError:
+                continue
+            if p.stem == "__init__":
+                parts = rel.parent.parts
+                if parts:
+                    names.add(parts[-1])
+                    names.add(".".join(parts))
+            else:
+                names.add(p.stem)
+                names.add(".".join(rel.with_suffix("").parts))
+    return names
+
+
+def collect_deps_detail(skill_dir: Path, exclude_paths):
+    """返回 (used, declared, missing, locations)。
+
+    locations 形如 `{依赖名: [{"file": "scripts/a.py", "line": 3, "text": "..."}]}`，
+    只用于报告展示；ADR-0031 的裁决仍只用前三项。
     """
     std = _stdlib_names()
+    local_modules = _local_module_names(skill_dir, exclude_paths)
     used = set()
+    locations = {}
+
+    def add_use(name: str, f: Path, line: int, text: str):
+        norm = _norm_tool(name)
+        used.add(norm)
+        try:
+            rel = f.relative_to(skill_dir).as_posix()
+        except ValueError:
+            rel = f.name
+        bucket = locations.setdefault(norm, [])
+        entry = {"file": rel, "line": line, "text": text.strip()}
+        if entry not in bucket:
+            bucket.append(entry)
+
     for d, files in walk_tree(skill_dir, list(exclude_paths)):
         for name in sorted(files):
             f = d / name
@@ -313,17 +356,20 @@ def collect_deps(skill_dir: Path, exclude_paths):
                 continue
             tool = _shebang_tool(text)
             if tool:
-                used.add(_norm_tool(tool))
-            for mod in IMPORT_RE.findall(text):
+                add_use(tool, f, 1, text.splitlines()[0] if text.splitlines() else "")
+            for match in IMPORT_RE.finditer(text):
+                mod = match.group(1)
                 top = mod.split(".")[0]
-                if top in std or (f.parent / f"{top}.py").is_file() \
-                        or (skill_dir / f"{top}.py").is_file():
-                    continue          # 标准库与包内本地模块不算外部依赖
-                used.add(_norm_tool(top))
-            for argv in SUBPROCESS_RE.findall(text):
-                first = ARGV0_RE.search(argv)
+                if top in std or top in local_modules:
+                    continue          # 标准库与包内本地模块（含包/子目录）不算外部依赖
+                line_no = text.count("\n", 0, match.start()) + 1
+                add_use(top, f, line_no, match.group(0))
+            for match in SUBPROCESS_RE.finditer(text):
+                first = ARGV0_RE.search(match.group(1))
                 if first and _TOOL_NAME_RE.match(first.group(1).strip()):
-                    used.add(_norm_tool(first.group(1)))
+                    line_no = text.count("\n", 0, match.start()) + 1
+                    add_use(first.group(1), f, line_no, match.group(0))
+
     declared_names = set()
     for name in DECLARATION_FILES:
         p = skill_dir / name
@@ -339,7 +385,12 @@ def collect_deps(skill_dir: Path, exclude_paths):
         declared_names |= set(re.findall(r"[A-Za-z_][\w.+-]*", text))
     declared = sorted(t for t in used if t in declared_names)
     missing = sorted(used - set(declared) - BASELINE_DEPS)
-    return sorted(used), declared, missing
+    return sorted(used), declared, missing, locations
+
+
+def collect_deps(skill_dir: Path, exclude_paths):
+    """兼容旧调用：返回 (used, declared, missing)；详细位置用 collect_deps_detail。"""
+    return collect_deps_detail(skill_dir, exclude_paths)[:3]
 
 
 def parse_frontmatter(text: str):
@@ -572,7 +623,7 @@ def main():
            "egress": [],
            "hardcoded": [], "excluded": rel_paths(exclude_paths, skill_dir),
            "ignored": [], "scan_excluded_dirs": [], "stale_refs": [],
-           "deps_used": [], "deps_declared": [], "deps_missing": [],
+           "deps_used": [], "deps_declared": [], "deps_missing": [], "deps_locations": {},
            "skill_md_body_lines": None, "skill_md_body_warn_lines": body_warn,
            "skill_md_body_fail_lines": body_fail,
            "body_level": "ok",
@@ -689,10 +740,17 @@ def main():
             f"发现 {len(out['pii'])} 处疑似个人信息，需人工复核是否已脱敏（#4，仅警告）")
 
     # 依赖全面性（ADR-0031）：用了什么 vs 声明了什么 → report.py 把 #12 至少降到 warn
-    out["deps_used"], out["deps_declared"], out["deps_missing"] = collect_deps(skill_dir, exclude_paths)
+    (out["deps_used"], out["deps_declared"], out["deps_missing"],
+     out["deps_locations"]) = collect_deps_detail(skill_dir, exclude_paths)
     if out["deps_missing"]:
+        locs = out["deps_locations"]
+        shown = []
+        for dep in out["deps_missing"]:
+            first = (locs.get(dep) or [{}])[0]
+            where = f" @ {first.get('file')}:{first.get('line')}" if first.get("file") else ""
+            shown.append(dep + where)
         out["warnings"].append(
-            f"依赖未声明：{'、'.join(out['deps_missing'])}（#12 依赖全面性，ADR-0031，仅警告）")
+            f"依赖未声明：{'、'.join(shown)}（#12 依赖全面性，ADR-0031，仅警告）")
 
     # 依赖新鲜度（ADR-0009 延伸）：声明路径漂移 → warning（不 fail 闸门）
     out["stale_refs"] = find_stale_refs(skill_dir, body)

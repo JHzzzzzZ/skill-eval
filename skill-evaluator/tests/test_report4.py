@@ -211,6 +211,33 @@ def test_pii_judge_partial_is_warn(tmp_path):
     assert rep["metrics"]["#4"]["verdict"] == "warn"
 
 
+def test_judge_items_include_source_file_and_line(tmp_path):
+    d = base(tmp_path)
+    files = all_pass_inputs()
+    files["judges/brevity.json"] = judge(0.5, [
+        {"name": "正文精简", "pass": False, "quote": "需要定位的原文",
+         "file": "SKILL.md", "line": 7}])
+    write_inputs(d, files)
+    rep, html, md = run_all(d)
+    item = rep["metrics"]["#2"]["data"]["items"][0]
+    assert item["file"] == "SKILL.md" and item["line"] == 7
+    assert "SKILL.md:7" in card(html, "#2")
+    assert "SKILL.md:7" in md
+
+
+def test_deps_missing_table_includes_file_and_line(tmp_path):
+    d = base(tmp_path)
+    files = all_pass_inputs()
+    files["static.json"]["deps_missing"] = ["requests"]
+    files["static.json"]["deps_locations"] = {
+        "requests": [{"file": "scripts/a.py", "line": 12, "text": "import requests"}]}
+    write_inputs(d, files)
+    rep, html, md = run_all(d)
+    assert rep["metrics"]["#12"]["data"]["deps_locations"]["requests"][0]["line"] == 12
+    assert "scripts/a.py:12" in card(html, "#12")
+    assert "scripts/a.py:12" in md
+
+
 # --- 需求 5：依赖全面性 → #8 至少 warn ---
 
 def test_deps_missing_downgrades_8_to_warn(tmp_path):

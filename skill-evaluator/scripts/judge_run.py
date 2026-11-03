@@ -67,6 +67,41 @@ def collect_files(skill_dir: Path, max_chars: int | None = None) -> list:
     return files
 
 
+def locate_quote(files: list, quote: str):
+    """在提供给判官的原文里定位引文，返回 {file, line}；找不到返回 None。
+
+    这是 best-effort：判官可能改写引文或引用了截断边界，找不到时报告仍保留原文引用，
+    只是不伪造位置。
+    """
+    raw = str(quote or "").strip()
+    if not raw:
+        return None
+    candidates = [raw]
+    # 引文常带 Markdown 空白差异/省略号；再用前 60 字符做一次定位。
+    first = " ".join(raw.split()[:12])
+    if len(first) >= 8 and first != raw:
+        candidates.append(first)
+    for file in files:
+        text = str(file.get("text") or "")
+        for needle in candidates:
+            idx = text.find(needle)
+            if idx < 0:
+                continue
+            return {"file": file.get("path") or "", "line": text.count("\n", 0, idx) + 1}
+    return None
+
+
+def annotate_locations(payload: dict, files: list) -> dict:
+    """给 judge items 补 file/line；不改变 name/pass/quote/score。"""
+    for item in payload.get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        loc = locate_quote(files, item.get("quote"))
+        if loc:
+            item.update(loc)
+    return payload
+
+
 def build_prompt(rubric: str, files: list) -> str:
     parts = [rubric.rstrip(), "", "## 被测文件"]
     for f in files:
@@ -143,6 +178,7 @@ def run(metric: str, skill_dir: Path, out: Path, *, model=None, backend="auto",
         text = text2
     if errors:
         raise ValueError("评审输出不满足契约：" + "；".join(errors))
+    annotate_locations(payload, files)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     if raw_dir:

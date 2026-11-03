@@ -509,7 +509,8 @@ def build(d: Path, evalset_dir: Path | None = None,
             "data": {**(cur.get("data") if isinstance(cur.get("data"), dict) else {}),
                      "deps_used": static.get("deps_used") or [],
                      "deps_declared": static.get("deps_declared") or [],
-                     "deps_missing": miss},
+                     "deps_missing": miss,
+                     "deps_locations": static.get("deps_locations") or {}},
             "note": ((cur.get("note") or "") + "；" if cur.get("note") else "")
                     + f"静态面：{len(miss)} 项依赖未在文档/requirements.txt/check-deps.sh 声明"
                       f"（{'、'.join(miss[:5])}）"}
@@ -1160,13 +1161,41 @@ def _advice_items(data: dict) -> list:
 
 
 def _judge_rows(items) -> list:
-    """judge items → 表格行（检查点 / 结果 / 原文引用）。
+    """judge items → 表格行（检查点 / 结果 / 原文引用 / 位置）。
 
-    只给 md 与 _tables 用：HTML 侧另有一套带颜色符号的渲染（`_glyph`，
-    颜色不能过 `_html_table` 的转义），两者输出格式不同，不强行合并。
+    位置是 best-effort（judge_run 按原文引用定位）；找不到时留空，不伪造。
+    只给 md 与 _tables 用：HTML 侧另有一套带颜色符号的渲染（`_glyph`）。
     """
-    return [[i.get("name"), "✓" if i.get("pass") else "✗", _cell(i.get("quote"))]
-            for i in items if isinstance(i, dict)]
+    rows = []
+    has_loc = any(isinstance(i, dict) and i.get("file") for i in items)
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        row = [item.get("name"), "✓" if item.get("pass") else "✗", _cell(item.get("quote"))]
+        if has_loc:
+            where = ""
+            if item.get("file"):
+                where = str(item["file"])
+                if item.get("line") is not None:
+                    where += f":{item['line']}"
+            row.append(where or "—")
+        rows.append(row)
+    return rows
+
+
+def _dep_where(locations) -> str:
+    """deps_locations 条目 → `file:line、file:line`。"""
+    if not isinstance(locations, list):
+        return "—"
+    out = []
+    for item in locations:
+        if not isinstance(item, dict) or not item.get("file"):
+            continue
+        where = str(item["file"])
+        if item.get("line") is not None:
+            where += f":{item['line']}"
+        out.append(where)
+    return "、".join(out) or "—"
 
 
 def _advice_entry(metric: str, severity: str, problem: str, evidence: str, action: str) -> dict:
@@ -1206,8 +1235,12 @@ def _advice(m: dict) -> list:
         for items in _advice_items(data):
             for it in items:
                 if isinstance(it, dict) and it.get("pass") is False:
+                    evidence = str(it.get("quote") or "").strip() or "—"
+                    if it.get("file"):
+                        where = str(it["file"]) + (f":{it['line']}" if it.get("line") is not None else "")
+                        evidence += f"（{where}）"
                     out.append(_advice_entry(k, sev, f"检查点未通过：{it.get('name')}",
-                                             str(it.get("quote") or "").strip() or "—", action))
+                                             evidence, action))
         if k != "#4":
             continue
         for g, label in DIM_PERM_GROUPS.items():
@@ -1294,14 +1327,17 @@ def _tables(metric: str, data, allow_generic=True) -> list:
                 out.append((f"golden trace 来源 {_fmt(data.get('sources'))} 条", ["类型", "内容"], rows))
             dj = data.get("deps_judge")
             if isinstance(dj, dict) and isinstance(dj.get("items"), list):
-                out.append((f"语义面 deps 评审 score {_fmt(dj.get('score'))}",
-                            ["检查点", "结果", "原文引用"], _judge_rows(dj["items"])))
+                jrows = _judge_rows(dj["items"])
+                jcols = ["检查点", "结果", "原文引用"] + (["位置"] if jrows and len(jrows[0]) == 4 else [])
+                out.append((f"语义面 deps 评审 score {_fmt(dj.get('score'))}", jcols, jrows))
             miss = data.get("deps_missing") or []
             if miss:
+                locations = data.get("deps_locations") or {}
                 out.append((f"依赖全面性：已用 {len(data.get('deps_used') or [])} 项、"
                             f"已声明 {len(data.get('deps_declared') or [])} 项",
-                            ["未声明的依赖", "说明"],
-                            [[m, "未在文档/requirements.txt/check-deps.sh 声明"] for m in miss]))
+                            ["未声明的依赖", "位置", "说明"],
+                            [[m, _dep_where(locations.get(m)),
+                              "未在文档/requirements.txt/check-deps.sh 声明"] for m in miss]))
         elif metric == "#4":
             level = {**{g: "error → fail" for g in DIM_PERM_HARD},
                      **{g: "warning（人工复核）" for g in DIM_PERM_SOFT}}
@@ -1324,8 +1360,9 @@ def _tables(metric: str, data, allow_generic=True) -> list:
                           "、".join(data.get("scan_excluded_dirs") or []) or "无"]]))
             pj = data.get("pii_judge")
             if isinstance(pj, dict) and isinstance(pj.get("items"), list):
-                out.append((f"语义面 pii 评审 score {_fmt(pj.get('score'))}",
-                            ["检查点", "结果", "原文引用"], _judge_rows(pj["items"])))
+                prow = _judge_rows(pj["items"])
+                pcols = ["检查点", "结果", "原文引用"] + (["位置"] if prow and len(prow[0]) == 4 else [])
+                out.append((f"语义面 pii 评审 score {_fmt(pj.get('score'))}", pcols, prow))
     if not out and allow_generic:
         out = _flatten_table(data)
     return _public_tables(out) if out else out
@@ -1400,13 +1437,17 @@ def render_html(report: dict, evalset_dir=None, skill_arg=None) -> str:
         items_html = ""
         if isinstance(data, dict) and isinstance(data.get("items"), list):
             summary = _judge_summary(data)
+            has_loc = any(isinstance(i, dict) and i.get("file") for i in data["items"])
             trs = "".join(
                 f"<tr><td>{_esc(i['name'])}</td><td>{_glyph('pass' if i['pass'] else 'fail')}</td>"
-                f"<td><code>{_esc(i['quote'][:80])}</code></td></tr>"
+                f"<td><code>{_esc(i['quote'][:80])}</code></td>"
+                + (f"<td><code>{_esc(str(i.get('file') or ''))}{':' + _esc(str(i.get('line'))) if i.get('line') is not None else ''}</code></td>" if has_loc else "")
+                + "</tr>"
                 for i in data["items"])
+            loc_head = "<th>位置</th>" if has_loc else ""
             items_html = ((f"<p style='margin:6px 0 2px;font-size:13px;color:#475569'>{_esc(summary)}</p>"
                            if summary else "")
-                          + f"<table><tr><th>检查点</th><th>结果</th><th>原文引用</th></tr>{trs}</table>")
+                          + f"<table><tr><th>检查点</th><th>结果</th><th>原文引用</th>{loc_head}</tr>{trs}</table>")
         # 表格优先（ADR-0030）：定制表 → 通用兜底；已用 items 渲染出表时不再把同一份 dict 重复压平
         tables = _tables(k, data, allow_generic=not items_html) if data is not None else []
         table_html = "".join(_html_table(*t) for t in tables)
@@ -1481,9 +1522,9 @@ def render_md(report: dict) -> str:
         if data is not None:
             has_items = isinstance(data, dict) and isinstance(data.get("items"), list)
             if has_items:
-                lines += _md_table(_judge_summary(data), ["检查点", "结果", "原文引用"],
-                                   [[i["name"], "✓" if i["pass"] else "✗", i["quote"]]
-                                    for i in data["items"]])
+                jrows = _judge_rows(data["items"])
+                jcols = ["检查点", "结果", "原文引用"] + (["位置"] if jrows and len(jrows[0]) == 4 else [])
+                lines += _md_table(_judge_summary(data), jcols, jrows)
             for tbl in _tables(k, data, allow_generic=not has_items):
                 lines += _md_table(*tbl)
         lines.append("")

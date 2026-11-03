@@ -52,3 +52,20 @@ def test_collect_files_truncates_at_limit(tmp_path):
     (d / "big.md").write_text("x" * 5000, encoding="utf-8")
     files = judge_run.collect_files(d, max_chars=200)
     assert sum(len(f["text"]) for f in files) <= 200 + 40
+
+
+def test_annotate_locations_adds_file_and_line():
+    files = [{"path": "SKILL.md", "text": "第一行\n需要定位的原文\n第三行\n"}]
+    payload = {"items": [{"name": "x", "pass": False, "quote": "需要定位的原文"}],
+               "score": 0.0, "evidence": ["需要定位的原文"], "reason": "r"}
+    out = judge_run.annotate_locations(payload, files)
+    assert out["items"][0]["file"] == "SKILL.md"
+    assert out["items"][0]["line"] == 2
+
+
+def test_annotate_locations_missing_quote_does_not_fake_location():
+    out = judge_run.annotate_locations(
+        {"items": [{"name": "x", "pass": False, "quote": "原文被改写"}],
+         "score": 0.0, "evidence": ["原文被改写"], "reason": "r"},
+        [{"path": "SKILL.md", "text": "别的内容\n"}])
+    assert "file" not in out["items"][0] and "line" not in out["items"][0]
