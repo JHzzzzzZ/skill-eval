@@ -62,7 +62,7 @@ def collect_files(skill_dir: Path, max_chars: int | None = None) -> list:
         left = max(0, max_chars - total)
         if len(text) > left:
             text = text[:left] + "\n…（截断：达到评审输入上限）"
-        files.append({"path": rel, "text": text})
+        files.append({"path": rel.replace("\\", "/"), "text": text})
         total += len(text)
     return files
 

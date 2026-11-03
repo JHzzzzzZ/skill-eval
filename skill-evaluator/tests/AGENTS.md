@@ -18,7 +18,7 @@ Generated: 2026-09-22T13:43:08.578Z
 | `test_rerun_metrics.py` | `scripts/rerun_metrics.py`（只替换目标 rubric / 其他文件字节不变 / 失败不动原文件 / 缺 judge 拒绝 / 指标映射） | 5 |
 | `test_token_admin.py` | `web/token_admin.py`（issue 只返一次明文、只落 hash / list 不泄 hash / revoke 即时失效 / CLI 全局 `--tokens-file`/`--audit-file` / 路径不走环境变量 / 审计写失败不抛 / 损坏库 fail closed） | 9 |
 | `test_llm.py` | `scripts/llm.py`（协议/无 tools/JSON 提取） | 5 |
-| `test_judge_run.py` | `scripts/judge_run.py`（文件收集/prompt/SKILL.md 优先；引文定位 file:line） | 7 |
+| `test_judge_run.py` | `scripts/judge_run.py`（文件收集/prompt/SKILL.md 优先；引文定位相对 skill 根的 file:line） | 8 |
 | `test_runner.py` | `scripts/runner.py`（dry-run/T0 端到端 / T0-T1 忽略失效评测集 / 进度计时 / 复用与跨目录缓存 / 阶段级完成判定 / 半截 T1 不缓存 / 真实输入解析 / 单指标重跑委托） | 16 |
 | `test_report.py` | `report.py` 16-key 契约基线 + 局部报告 + 徽章中文化 + 内容保真 / 报告头 provenance | 57 |
 | `test_trace_run.py` | `scripts/trace_run.py`（pi + fake Claude 事件流 / adapter 契约） | 53 |

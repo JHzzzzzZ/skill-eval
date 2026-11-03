@@ -254,7 +254,7 @@ T1 评审走 `llm` 接口层（ADR-0034）：模型 `--model` > `llm.model` > `S
 
 **调用口径（ADR-0020/0022/0034）**：每条 rubric 一次**独立单发**调用——prompt = rubric 全文 + 被测文件（`judge_run.py` 收集，默认上限 60k 字符），不携带编排 agent 的历史/探索上下文。T1 默认走 `llm` 接口层：请求不含 tools/tool_choice，结构上保证无工具；`--backend pi` 回退旧路径时要求 `--no-tools`。固定可重放：同一 prompt、单发、无工具；原始 request/response 存 `raw/llm-judge/`。默认单次；要更高可信度可手工跑 3 次后 `judge_runner.py --merge`（成本 ×3，需在报告注明口径）。
 
-输出：结构化 JSON（`{items: [{name, pass, quote, file?, line?}], score, evidence, reason}`；judge_run 会按 quote 在评审输入里尽力补 `file/line`，找不到不伪造；evidence 必须引用原文；**score = pass 项数/总项数**，0~1 两位小数，judge_runner.py 强制校验）。rubric 文件在 `judges/`。
+输出：结构化 JSON（`{items: [{name, pass, quote, file?, line?}], score, evidence, reason}`；judge_run 会按 quote 在评审输入里尽力补 `file/line`（路径统一为相对 skill 根的 POSIX 路径），找不到不伪造；evidence 必须引用原文；**score = pass 项数/总项数**，0~1 两位小数，judge_runner.py 强制校验）。rubric 文件在 `judges/`。
 
 流程门禁：`scripts/judge_run.py --metric <name> --skill <dir> --out judges/<metric>.json` 默认走 `llm`（无 tools），校验失败把 errors 回给模型重产一次，再失败则该指标标 `skipped`。原始 request/response 存 `raw/llm-judge/<metric>.json`；`--backend pi` 时事件流里出现 `tool_execution_start` 则该次评审作废重跑（ADR-0022）。
 

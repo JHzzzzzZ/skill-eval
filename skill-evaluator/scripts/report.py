@@ -1175,12 +1175,17 @@ def _judge_rows(items) -> list:
         if has_loc:
             where = ""
             if item.get("file"):
-                where = str(item["file"])
+                where = _source_path(item["file"])
                 if item.get("line") is not None:
                     where += f":{item['line']}"
             row.append(where or "—")
         rows.append(row)
     return rows
+
+
+def _source_path(value) -> str:
+    """报告里展示的源文件路径统一为相对 skill 根的 POSIX 路径。"""
+    return str(value or "").replace("\\", "/").lstrip("./")
 
 
 def _dep_where(locations) -> str:
@@ -1191,7 +1196,7 @@ def _dep_where(locations) -> str:
     for item in locations:
         if not isinstance(item, dict) or not item.get("file"):
             continue
-        where = str(item["file"])
+        where = _source_path(item["file"])
         if item.get("line") is not None:
             where += f":{item['line']}"
         out.append(where)
@@ -1237,7 +1242,7 @@ def _advice(m: dict) -> list:
                 if isinstance(it, dict) and it.get("pass") is False:
                     evidence = str(it.get("quote") or "").strip() or "—"
                     if it.get("file"):
-                        where = str(it["file"]) + (f":{it['line']}" if it.get("line") is not None else "")
+                        where = _source_path(it["file"]) + (f":{it['line']}" if it.get("line") is not None else "")
                         evidence += f"（{where}）"
                     out.append(_advice_entry(k, sev, f"检查点未通过：{it.get('name')}",
                                              evidence, action))
@@ -1351,7 +1356,8 @@ def _tables(metric: str, data, allow_generic=True) -> list:
                     for h in (data.get(g) or []) if isinstance(h, dict)]
             if hits:
                 out.append((None, ["规则组", "文件", "行", "命中文本"],
-                            [[g, h.get("file"), h.get("line"), _cell(h.get("text"))] for g, h in hits]))
+                            [[g, _source_path(h.get("file")), h.get("line"),
+                              _cell(h.get("text"))] for g, h in hits]))
             out.append(("扫描范围与旁证（信息行，不改裁决）", ["项目", "值"],
                         [["声明但包内不存在的引用", "、".join(data.get("stale_refs") or []) or "无"],
                          ["未扫描", "、".join(data.get("excluded") or []) or "无"],
@@ -1441,7 +1447,7 @@ def render_html(report: dict, evalset_dir=None, skill_arg=None) -> str:
             trs = "".join(
                 f"<tr><td>{_esc(i['name'])}</td><td>{_glyph('pass' if i['pass'] else 'fail')}</td>"
                 f"<td><code>{_esc(i['quote'][:80])}</code></td>"
-                + (f"<td><code>{_esc(str(i.get('file') or ''))}{':' + _esc(str(i.get('line'))) if i.get('line') is not None else ''}</code></td>" if has_loc else "")
+                + (f"<td><code>{_esc(_source_path(i.get('file')))}{':' + _esc(str(i.get('line'))) if i.get('line') is not None else ''}</code></td>" if has_loc else "")
                 + "</tr>"
                 for i in data["items"])
             loc_head = "<th>位置</th>" if has_loc else ""

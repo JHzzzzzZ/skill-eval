@@ -216,13 +216,13 @@ def test_judge_items_include_source_file_and_line(tmp_path):
     files = all_pass_inputs()
     files["judges/brevity.json"] = judge(0.5, [
         {"name": "正文精简", "pass": False, "quote": "需要定位的原文",
-         "file": "SKILL.md", "line": 7}])
+         "file": "scripts/sub/a.py", "line": 7}])
     write_inputs(d, files)
     rep, html, md = run_all(d)
     item = rep["metrics"]["#2"]["data"]["items"][0]
-    assert item["file"] == "SKILL.md" and item["line"] == 7
-    assert "SKILL.md:7" in card(html, "#2")
-    assert "SKILL.md:7" in md
+    assert item["file"] == "scripts/sub/a.py" and item["line"] == 7
+    assert "scripts/sub/a.py:7" in card(html, "#2")
+    assert "scripts/sub/a.py:7" in md
 
 
 def test_deps_missing_table_includes_file_and_line(tmp_path):

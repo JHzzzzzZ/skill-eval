@@ -69,3 +69,12 @@ def test_annotate_locations_missing_quote_does_not_fake_location():
          "score": 0.0, "evidence": ["原文被改写"], "reason": "r"},
         [{"path": "SKILL.md", "text": "别的内容\n"}])
     assert "file" not in out["items"][0] and "line" not in out["items"][0]
+
+
+def test_annotate_locations_keeps_skill_relative_nested_path():
+    files = [{"path": "scripts/sub/a.py", "text": "第一行\n目标引文\n"}]
+    payload = {"items": [{"name": "x", "pass": False, "quote": "目标引文"}],
+               "score": 0.0, "evidence": ["目标引文"], "reason": "r"}
+    out = judge_run.annotate_locations(payload, files)
+    assert out["items"][0]["file"] == "scripts/sub/a.py"
+    assert out["items"][0]["line"] == 2
