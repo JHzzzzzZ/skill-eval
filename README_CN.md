@@ -30,7 +30,7 @@ skill-evaluator/
 ├── scripts/            # CLI + runner + llm/harness 适配层 + sandbox/capabilities；check-deps.sh = 前置自检（#7）
 ├── sandbox/            # 容器镜像模板与边界说明（T2/T3，Docker `--network none`）
 ├── web/                # 本地前端（stdlib HTTP + SSE + 原生 JS）
-└── tests/              # 508 个测试，全部走 subprocess seam
+└── tests/              # 510 个测试，全部走 subprocess seam
 docs/adr/               # 41 条架构决策记录
 ```
 
@@ -74,7 +74,7 @@ docs/adr/               # 41 条架构决策记录
 
 ```bash
 cd skill-evaluator
-python -m pytest tests        # 508 个测试全绿
+python -m pytest tests        # 510 个测试全绿
 ```
 
 设计决策及理由见 `docs/adr/`。英文版见 `README.md`。

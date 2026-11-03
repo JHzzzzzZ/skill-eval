@@ -10,7 +10,7 @@ Generated: 2026-09-22T13:43:08.578Z
 
 | 测试文件 | 覆盖 | test 数 |
 |---|---|---|
-| `test_static_check.py` | `scripts/static_check.py`（六组规则 + PII + 依赖全面性/本地模块排除 + 位置 + 字符/行阈值） | 65 |
+| `test_static_check.py` | `scripts/static_check.py`（六组规则 + PII + 依赖全面性/本地模块排除 + `_internal`/junk dirs + #5 未引用文件 + 位置 + 字符/行阈值） | 66 |
 | `test_config.py` | `scripts/_config.py`（YAML 子集解析/优先级/类型） | 7 |
 | `test_evalset_gen.py` | `scripts/evalset_gen.py`（prompt/条目归一化） | 2 |
 | `test_web.py` | `web/app.py`（zip 上传安全边界 / UI 术语 / 停止进程 / 复用拷贝与复用归属 / 工作区 / 评测集版本与导入导出 / 磁盘 history 回退 / 局部报告 / ACTIVE 运行态 / 内容保真 / provenance / 审核人 400 / 预检接线 / 评测集前置 / 历史对比与可比性判定 / 报告导出 / T2-T3 token 门禁与 run 归属 / 游客 T0-T1 / legacy 在无 token 时才放行 / 审计 / 限流 / 容器能力 412 / 确认后宿主回退 / T0-T1 不传评测集 / 证据/溯源/403/改判/移动端 / 单用户历史 / `/api/estimate` 与前端成本条、配置记忆、动态权重 / 报告锚点与筛选、统一弹窗焦点锁、下一步建议卡与建议弹层、手机卡片 data-label / 评测集质量面板、默认未审、过滤与可见行全选、review 增量合并 / 单指标重跑端点与 UI） | 83 |
@@ -26,7 +26,7 @@ Generated: 2026-09-22T13:43:08.578Z
 | `test_adapter.py` | `scripts/adapter_registry.py` / `adapter_claude.py`（注册、未知 adapter、skill 安装、能力声明） | 7 |
 | `test_capabilities.py` | `scripts/capabilities.py`（分层能力矩阵 + 宿主 fallback）+ runner 退出码 3 | 17 |
 | `test_report3.py` | `report.py` 元数据/指纹批次（ADR-0010/0011）+ data 渲染层 | 21 |
-| `test_report4.py` | `report.py` 报告可用性（表格化/折叠/闸门可见/建议的 priority+effort 与排序/✓✗/依赖全面性与 file:line/PII，ADR-0029/0030/0031） | 24 |
+| `test_report4.py` | `report.py` 报告可用性（表格化/折叠/闸门可见/建议的 priority+effort 与排序/✓✗/依赖全面性与 file:line/#5 文件表/PII，ADR-0029/0030/0031） | 25 |
 | `test_report5.py` | 报告页徽章对比度与中文可见文案回归 | 6 |
 | `test_score.py` | `scripts/score.py` | 16 |
 | `test_judge_runner.py` | `scripts/judge_runner.py` | 13 |

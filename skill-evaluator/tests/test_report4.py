@@ -225,6 +225,19 @@ def test_judge_items_include_source_file_and_line(tmp_path):
     assert "scripts/sub/a.py:7" in md
 
 
+def test_low_redundancy_file_table_shows_relative_paths(tmp_path):
+    d = base(tmp_path)
+    files = all_pass_inputs()
+    files["static.json"]["unreferenced_files"] = ["scripts/orphan.py", "docs/old.md"]
+    files["static.json"]["junk_dirs"] = [".vscode", "__pycache__"]
+    write_inputs(d, files)
+    rep, html, md = run_all(d)
+    assert rep["metrics"]["#5"]["verdict"] == "warn"
+    assert "scripts/orphan.py" in card(html, "#5")
+    assert "scripts/orphan.py" in md
+    assert ".vscode" in card(html, "#5")
+
+
 def test_deps_missing_table_includes_file_and_line(tmp_path):
     d = base(tmp_path)
     files = all_pass_inputs()

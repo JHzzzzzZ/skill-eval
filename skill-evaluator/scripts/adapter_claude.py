@@ -60,7 +60,7 @@ class ClaudeCodeAdapter(AgentAdapter):
         if destination.resolve() == source_dir.resolve():
             return
         shutil.copytree(source_dir, destination, dirs_exist_ok=True,
-                        ignore=shutil.ignore_patterns(CLAUDE_SKILL_DIR, ".git", "results", "__pycache__"))
+                        ignore=shutil.ignore_patterns(CLAUDE_SKILL_DIR, ".git", "results", "__pycache__", "_internal"))
 
     def command(self, request: RunRequest) -> list:
         cmd = [self.binary, "-p", request.prompt, "--output-format", "stream-json", "--verbose"]

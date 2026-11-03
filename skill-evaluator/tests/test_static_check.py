@@ -700,6 +700,30 @@ def test_deps_excludes_local_modules_across_subdirs_and_packages(tmp_path):
         assert local not in out["deps_missing"], out["deps_missing"]
 
 
+def test_low_redundancy_files_ignore_internal_and_report_junk(tmp_path):
+    d = make_skill(tmp_path, '---\nname: s\ndescription: "x" * 120\n---\n\n'
+                             '见 `scripts/a.py` 与 [reference](reference.md)。\n')
+    (d / "scripts").mkdir()
+    (d / "scripts" / "a.py").write_text("from b import f\n", encoding="utf-8")
+    (d / "scripts" / "b.py").write_text("def f(): return 1\n", encoding="utf-8")
+    (d / "scripts" / "c.py").write_text("print('orphan')\n", encoding="utf-8")
+    (d / "reference.md").write_text("细节\n", encoding="utf-8")
+    (d / "_internal").mkdir()
+    (d / "_internal" / "hidden.py").write_text("print('do not count')\n", encoding="utf-8")
+    (d / ".vscode").mkdir()
+    (d / ".vscode" / "settings.json").write_text("{}", encoding="utf-8")
+    (d / "__pycache__").mkdir()
+    (d / "__pycache__" / "x.pyc").write_text("x", encoding="utf-8")
+    out = run_check(d)
+    assert "scripts/c.py" in out["unreferenced_files"]
+    assert "scripts/b.py" not in out["unreferenced_files"]       # a.py import 间接引用
+    assert "reference.md" not in out["unreferenced_files"]       # SKILL.md 直接引用
+    assert not any("_internal" in p for p in out["unreferenced_files"])
+    assert ".vscode" in out["junk_dirs"] and "__pycache__" in out["junk_dirs"]
+    assert "_internal" not in out["junk_dirs"]
+    assert "scripts/c.py" in out["warnings"][0] or any("scripts/c.py" in w for w in out["warnings"])
+
+
 def test_deps_locations_point_to_file_and_line(tmp_path):
     out = run_check(deps_skill(tmp_path))
     loc = out["deps_locations"]["requests"][0]

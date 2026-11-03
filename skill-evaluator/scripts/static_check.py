@@ -65,15 +65,24 @@ INVOKE_VALUES = {"human", "both"}  # pi 真实三态归约：缺省/false=both�
 # .skillrepos/ 是沙箱副本 repo（每个被测 skill 一份完整拷贝，含 scripts/static_check.py）：
 # 不排除它，自检就会在自己副本的正则表定义行上自命中（实测 4 处 exfil → 237 个测试里
 # test_evaluator_self_check_passes 挂）。副本是运行面痕迹，不是被测内容。
-DEFAULT_EXCLUDE_DIRS = ("tests", "evalsets", "uploads", ".sandbox", ".skillrepos", "runs", "cache", "calibration", "workspaces")
+DEFAULT_EXCLUDE_DIRS = ("_internal", "tests", "evalsets", "uploads", ".sandbox", ".skillrepos", "runs", "cache", "calibration", "workspaces")
 
 # 行内抑制标记：合法文档里引用危险模式（如本仓 reference.md 的硬编码说明行）时用
 IGNORE_MARKER = "static-check:ignore"
 
+# 非运行目录：存在就报告，但不扫描内容（用户点名的 .vscode/.idea/__pycache__ 等）
+JUNK_DIRS = frozenset({".vscode", ".idea", "__pycache__", ".pytest_cache", ".mypy_cache",
+                       ".ruff_cache", "node_modules"})
+# 包元数据/说明文件：SKILL.md 不引用也不算冗余（不是运行内容）
+METADATA_FILES = frozenset({"SKILL.md", "LICENSE", "LICENSE.md", "README.md", "README_CN.md",
+                            "requirements.txt", "pyproject.toml", "setup.py", "setup.cfg",
+                            "package.json", "package-lock.json", "config.yaml", "meta.json",
+                            ".gitignore", ".gitattributes"})
+
 # 扫描的文本后缀（单一事实来源，别再散在循环里）
 SCAN_SUFFIXES = frozenset({".py", ".sh", ".ps1", ".cmd", ".bat", ".js", ".md", ".json", ".toml", ".yaml", ".yml"})
 # 遍历时直接剪掉的目录：版本库/缓存不是 skill 运行面，且文件数极大（实测 .sandbox 3.2 万文件）
-PRUNE_DIRS = frozenset({".git", ".pytest_cache", "__pycache__"})
+PRUNE_DIRS = frozenset({".git", ".pytest_cache", "__pycache__", "_internal"})
 
 DANGEROUS_PATTERNS = [
     r"rm\s+-rf?\b",
@@ -468,6 +477,152 @@ def find_stale_refs(skill_dir: Path, body: str):
     return sorted(set(refs))
 
 
+# 低冗余（#5）的包内文件引用图：SKILL.md 直接引用 + 文档链接 + 脚本 import 的间接引用。
+REF_PATH_RE = re.compile(
+    r"(?<![\w./-])((?:\.{0,2}/)?[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*"
+    r"\.(?:md|py|sh|ps1|cmd|bat|js|ts|json|toml|ya?ml|txt|png|jpe?g|gif|svg|webp|pdf))",
+    re.IGNORECASE)
+
+
+def _inside(skill_dir: Path, path: Path):
+    try:
+        return path.resolve().relative_to(skill_dir.resolve()).as_posix()
+    except (OSError, ValueError):
+        return None
+
+
+def _file_refs(skill_dir: Path, text: str, known: set) -> set:
+    """从 Markdown/正文里提取存在的文件引用；目录引用展开到其下文件。"""
+    out = set()
+    body = re.sub(r"```.*?```", "", text, flags=re.S)  # 示例命令不是声明引用
+    candidates = []
+    for target in re.findall(r"\[[^\]]*\]\(([^)#]+)", body):
+        candidates.append(target.strip())
+    for code in re.findall(r"`([^`]+)`", body):
+        candidates.extend(tok.strip() for tok in code.split())
+    candidates.extend(REF_PATH_RE.findall(body))
+    for raw in candidates:
+        raw = raw.strip().strip(".,;:)）\"'")
+        if not raw or "://" in raw or raw.startswith(("/", "~")):
+            continue
+        p = (skill_dir / raw).resolve()
+        rel = _inside(skill_dir, p)
+        if rel is None:
+            continue
+        if p.is_dir():
+            out |= {f for f in known if f == rel or f.startswith(rel.rstrip("/") + "/")}
+        elif rel in known:
+            out.add(rel)
+    return out
+
+
+def _module_map(files: set) -> dict:
+    """模块名/点路径 → 包内 py 文件列表。"""
+    out = {}
+    for rel in files:
+        if not rel.endswith(".py"):
+            continue
+        path = Path(rel)
+        if path.name == "__init__.py":
+            parts = path.parent.parts
+            if parts:
+                out.setdefault(parts[-1], []).append(rel)
+                out.setdefault(".".join(parts), []).append(rel)
+        else:
+            out.setdefault(path.stem, []).append(rel)
+            out.setdefault(".".join(path.with_suffix("").parts), []).append(rel)
+    return out
+
+
+def _import_targets(source: str, rel: str, modules: dict, known: set) -> set:
+    """source 文件里的 import → 包内文件；只返回确实存在的本地目标。"""
+    out = set()
+    folder = Path(rel).parent
+    for match in IMPORT_RE.finditer(source):
+        mod = match.group(1)
+        parts = mod.split(".")
+        candidates = [mod, parts[0]]
+        # 相对导入：当前文件目录 + 模块名；不把“找不到”误当外部依赖。
+        if rel.endswith(".py"):
+            base = "/".join(folder.parts)
+            for depth in range(0, 4):
+                prefix = base
+                for _ in range(depth):
+                    prefix = "/".join(prefix.split("/")[:-1])
+                candidates.append((prefix + "/" + mod.replace(".", "/")).lstrip("/"))
+        for candidate in candidates:
+            for target in modules.get(candidate, []):
+                out.add(target)
+            prefix = candidate.rstrip("/") + "/"
+            out |= {f for f in known if f.startswith(prefix) and f.endswith(".py")}
+    return out
+
+
+def _referenced_files(skill_dir: Path, body: str, known: set) -> set:
+    """从 SKILL.md 出发，沿文档链接与本地 import 求可达文件。"""
+    queue = list(_file_refs(skill_dir, body, known))
+    seen = set()
+    modules = _module_map(known)
+    while queue:
+        rel = queue.pop()
+        if rel in seen or rel not in known:
+            continue
+        seen.add(rel)
+        p = skill_dir / rel
+        try:
+            text = p.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        if rel.endswith((".md", ".txt")):
+            queue.extend(_file_refs(skill_dir, text, known))
+        elif rel.endswith(".py"):
+            queue.extend(_import_targets(text, rel, modules, known))
+    return seen
+
+
+def find_unreferenced_files(skill_dir: Path, body: str, exclude_paths) -> list:
+    """#5 低冗余的文件面：包内存在、但 SKILL.md 既没直接引用也没经 import/文档间接引用的文件。"""
+    known = set()
+    for d, files in walk_tree(skill_dir, list(exclude_paths)):
+        for name in files:
+            p = d / name
+            if not p.is_file() or any(part in JUNK_DIRS or part == "_internal"
+                                      for part in p.parts):
+                continue
+            rel = _inside(skill_dir, p)
+            if rel:
+                known.add(rel)
+    referenced = _referenced_files(skill_dir, body, known)
+    return sorted(
+        rel for rel in known - referenced
+        if rel not in METADATA_FILES
+        and not rel.startswith("_internal/")
+        and not rel.endswith(".pyc")
+    )
+
+
+def find_junk_dirs(skill_dir: Path, exclude_paths) -> list:
+    """报告存在的编辑/缓存目录；不扫描、不把其内容计入依赖或冗余。"""
+    excluded = [Path(x).resolve() for x in exclude_paths]
+    out = []
+    for dirpath, dirnames, _files in os.walk(skill_dir):
+        d = Path(dirpath)
+        if any(d.resolve().is_relative_to(e) for e in excluded):
+            dirnames[:] = []
+            continue
+        for name in list(dirnames):
+            p = d / name
+            if name in JUNK_DIRS:
+                rel = _inside(skill_dir, p)
+                if rel:
+                    out.append(rel)
+                dirnames.remove(name)
+            elif name in {"_internal", ".git"}:
+                dirnames.remove(name)
+        dirnames[:] = sorted(dirnames)
+    return sorted(set(out))
+
+
 def walk_tree(root: Path, excluded=()):
     """单次遍历并剪枝：yield (目录, 文件名列表)；`excluded` 里的子树整棵跳过。
 
@@ -624,6 +779,7 @@ def main():
            "hardcoded": [], "excluded": rel_paths(exclude_paths, skill_dir),
            "ignored": [], "scan_excluded_dirs": [], "stale_refs": [],
            "deps_used": [], "deps_declared": [], "deps_missing": [], "deps_locations": {},
+           "unreferenced_files": [], "junk_dirs": [],
            "skill_md_body_lines": None, "skill_md_body_warn_lines": body_warn,
            "skill_md_body_fail_lines": body_fail,
            "body_level": "ok",
@@ -751,6 +907,17 @@ def main():
             shown.append(dep + where)
         out["warnings"].append(
             f"依赖未声明：{'、'.join(shown)}（#12 依赖全面性，ADR-0031，仅警告）")
+
+    # #5 低冗余：包内文件引用图（直接 + 文档链接 + 脚本 import 间接），以及编辑器/缓存目录
+    out["unreferenced_files"] = find_unreferenced_files(skill_dir, body, exclude_paths)
+    out["junk_dirs"] = find_junk_dirs(skill_dir, exclude_paths)
+    if out["unreferenced_files"]:
+        out["warnings"].append(
+            "包内文件未被 SKILL.md 直接/间接引用：" + "、".join(out["unreferenced_files"][:8])
+            + ("…" if len(out["unreferenced_files"]) > 8 else "") + "（#5 低冗余）")
+    if out["junk_dirs"]:
+        out["warnings"].append(
+            "发现非运行目录：" + "、".join(out["junk_dirs"]) + "（建议删除；#5 低冗余）")
 
     # 依赖新鲜度（ADR-0009 延伸）：声明路径漂移 → warning（不 fail 闸门）
     out["stale_refs"] = find_stale_refs(skill_dir, body)

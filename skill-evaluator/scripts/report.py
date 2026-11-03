@@ -187,7 +187,7 @@ def skill_fingerprint(skill_dir) -> dict:
         return {"path": str(skill_dir), "content_sha256": None, "files": 0, "note": "目录不存在"}
     files = sorted((p for p in root.rglob("*")
                     if p.is_file() and ".git" not in p.parts and "__pycache__" not in p.parts
-                    and p.suffix != ".pyc"),
+                    and "_internal" not in p.parts and p.suffix != ".pyc"),
                    key=lambda p: p.relative_to(root).as_posix())
     return {"path": str(root), "content_sha256": _sha256_files(root, files), "files": len(files)}
 
@@ -600,6 +600,27 @@ def build(d: Path, evalset_dir: Path | None = None,
                   "note": (name + "（逐项计分：" + "/".join(
                       f"{i['name']}={'✓' if i['pass'] else '✗'}" for i in j.get("items", [])) + "）")
                   if j else "无评审输出"}
+
+    # #5 文件面（低冗余）：SKILL.md 未直接/间接引用的文件 + 编辑器/缓存目录。
+    if isinstance(static, dict):
+        orphans = [x for x in (static.get("unreferenced_files") or []) if isinstance(x, str)]
+        junk = [x for x in (static.get("junk_dirs") or []) if isinstance(x, str)]
+        if orphans or junk:
+            cur = m["#5"]
+            data = {**(cur.get("data") if isinstance(cur.get("data"), dict) else {}),
+                    "unreferenced_files": orphans, "junk_dirs": junk}
+            bits = []
+            if orphans:
+                bits.append(f"{len(orphans)} 个文件未被 SKILL.md 直接/间接引用")
+            if junk:
+                bits.append("非运行目录：" + "、".join(junk))
+            m["#5"] = {
+                "verdict": worse(cur.get("verdict", "skipped"), "warn"),
+                "method": METHOD_STATIC if cur.get("verdict") == "skipped" else cur.get("method"),
+                "data": data,
+                "note": ((cur.get("note") or "") + "；" if cur.get("note") else "")
+                        + "静态文件面：" + "；".join(bits),
+            }
 
     # #4 语义面（ADR-0029）：工号/客户名/内部系统地址这类公司特化信息没有可枚举格式，
     # 只能靠评审。与静态面（六组 + 闸门）取**较差者**（ADR-0017 多源口径：主源 + 辅证）。
@@ -1020,6 +1041,14 @@ def _data_table(metric: str, data):
     渲染层不得反过来改 report.json 的形状。"""
     if not isinstance(data, dict):
         return None
+    if metric == "#5":
+        orphans = data.get("unreferenced_files") or []
+        junk = data.get("junk_dirs") or []
+        if orphans or junk:
+            rows = [["未引用文件", p, "SKILL.md 未直接/间接引用"] for p in orphans]
+            rows += [["非运行目录", p, "编辑器/缓存目录，建议删除"] for p in junk]
+            return ("包内文件引用检查（直接引用 + 文档链接 + 脚本 import 间接引用）",
+                    ["类型", "路径", "说明"], rows)
     if metric == "#16":
         pairs = data.get("per_pair")
         if not isinstance(pairs, list) or not pairs:

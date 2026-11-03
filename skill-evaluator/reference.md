@@ -36,7 +36,7 @@ Windows 上杀 pi 子进程树用 `taskkill /T`（`_subprocess.py` 的硬依赖�
 
 已知漏检（如实告知，不要当成"扫过就是安全"）：自造格式的高熵 token、改写的语义注入、跨段拼接的注入、无读取动词的 `.env` 引用。混淆与个人信息类命中仅警告，需人工复核。PII 静态面的边界：只能认格式化的个人标识（邮箱/手机号/身份证/银行卡/公网 IP，带 Luhn 与证件校验位），自造示例（如真实号段格式的假号码）会误报、工号与客户名会漏报——后者靠 `judges/pii.md` 四项检查点补。
 
-扫描口径（ADR-0012）：默认排除 `tests/`、`evalsets/`、`uploads/`、`runs/`、`cache/`、`calibration/`、`workspaces/`、`.sandbox/`、`.skillrepos/` 与扫描器自身源码（`--no-default-excludes` 关闭默认排除）；`--exclude <路径>` 的相对路径按 **skill 目录**解析；单行末尾加 `static-check:ignore` 可抑制命中，被抑制项记入 `ignored` 字段（不静默丢）。
+扫描口径（ADR-0012）：默认排除 `_internal/`、`tests/`、`evalsets/`、`uploads/`、`runs/`、`cache/`、`calibration/`、`workspaces/`、`.sandbox/`、`.skillrepos/` 与扫描器自身源码（`--no-default-excludes` 关闭默认排除）；`--exclude <路径>` 的相对路径按 **skill 目录**解析；单行末尾加 `static-check:ignore` 可抑制命中，被抑制项记入 `ignored` 字段（不静默丢）。
 
 ## 版本号
 
@@ -126,7 +126,7 @@ T1 评审走 `llm` 接口层（ADR-0034）：模型 `--model` > `llm.model` > `S
 可配参数统一在 `config.yaml`（ADR-0035），优先级 CLI > 现有 ENV > config.yaml > 代码默认。关键项：description 字符阈值 384 warn / 1024 fail、正文 150 warn / 500 fail（ADR-0037）、触发集每组最小条数 10、F1 0.7、逐 case 变异系数上限 0.5、幂等比例 0.5、触发集覆盖 0.6/0.8、跨模型相似度 0.5/0.8、触发判定分 0.5、触发单 case 90s/30 步/120000 token、args 上限 2000、UI 单元格 800 / 内联 400；重复运行 3 次、评审单发 1 次/并发 4（runner 读取）。成本预估默认值在 `estimate.*`：完整任务/触发 case 的秒与 token、判定调用秒与 token、T2A 早停比例、固定开销；只影响页面提示，不参与裁决。既有 `SKILL_EVAL_TRIGGER_MIN` 仍可覆盖最小条数；`--exclude <路径>`（相对 skill 目录解析）、`--no-default-excludes`（static_check.py）仍是 CLI 开关；`--threshold` 仍可覆盖触发判定分。`JUDGE_SAMPLES=3` 的多数票流程不变（跑 3 次后 `judge_runner.py --merge`，ADR-0028）。
 
 判据口径（容易被误读，单独列）：#11 = 三分量多数票（tokens/tool_calls/seconds 各一票，ADR-0026）；
-#5 = 评审面（消融实证随 T4 休眠，ADR-0026）；#12 = 全部 golden trace 取并集，依赖信号分强弱档
+#5 = 评审面（SKILL.md 文案冗余）+ 静态文件面（SKILL.md 未直接/间接引用的文件、编辑器/缓存目录；间接引用沿脚本 import/文档链接；`_internal` 忽略）；#12 = 全部 golden trace 取并集，依赖信号分强弱档
 （弱档要求报错里带含分隔符的路径，agent 自己写错相对路径不算，ADR-0025），另有静态声明面
 （`deps_missing` 非空至少降为 warn，ADR-0031）；#10 = human 型不适用（ADR-0018）；
 #4 = 六组静态规则 + 可移植性闸门与 `judges/pii.json` 取较差者（ADR-0029）。
@@ -225,7 +225,7 @@ T1 评审走 `llm` 接口层（ADR-0034）：模型 `--model` > `llm.model` > `S
 - `t2b/pairwise.json`：无标签双向盲评聚合（`valid`/`with_skill_wins`/`baseline_wins`/`ties`/`win_rate`/`cases`）
 - `real-input.meta.json`：`{"sha256", "note", "count", "cases": [{"id","note","has_expect"}]}`；正文存评估器 `uploads/real-input/<sha>.json`（gitignore，报告不回显）
 - `trace-<序号>.json`：`{"steps": [{"tool", "args", "args_hash"}, ...], "answer", "tokens", "seconds", "triggered", "errors", "host": {"model", "pi", "platform"}, "limit_hit"?}`；触发评测触限时 `limit_hit` 为“步数/token 上限”，同时写入 `errors`（trace_run.py 落盘，--out；host 为宿主 pin，事后归因/复现用；离线 --events 重算时仅记 model 意图）
-- `static.json`：static_check.py --out（脚本自写 UTF-8；stdout 同步回显。禁 shell 重定向——GBK 控制台会产 GBK 文件）。全部脚本入口接 `scripts/_console.py::fix()`：GBK 控制台下回显不可编码字符降级为替换符，不崩、退出码 0；`--out` 文件不受影响。含 #4 的六组（`dangerous`/`secrets`/`injection`/`exfil`/`obfuscation`/`pii`）+ 出站网络 `egress`（GET/内网/socket/ssh 都算，仅警告）、`hardcoded`、`excluded`/`ignored`（ADR-0012）、`scan_excluded_dirs`（ADR-0012：运行面之外）、`stale_refs`（依赖新鲜度，ADR-0009 延伸：SKILL.md 声明但包内不存在的路径引用，warning 级）、`deps_used`/`deps_declared`/`deps_missing`/`deps_locations`（依赖全面性，ADR-0031，warning 级；报告显示 file:line）、`skill_md_body_lines`/`skill_md_body_warn_lines`/`skill_md_body_fail_lines`（#2 行数主源与两档阈值，ADR-0017：口径 = frontmatter 之后全文行数，含空行与代码块；旧 `skill_md_body_max_lines` 只作历史产物兼容读取，新产物不再输出）<!-- static-check:ignore -->
+- `static.json`：static_check.py --out（脚本自写 UTF-8；stdout 同步回显。禁 shell 重定向——GBK 控制台会产 GBK 文件）。全部脚本入口接 `scripts/_console.py::fix()`：GBK 控制台下回显不可编码字符降级为替换符，不崩、退出码 0；`--out` 文件不受影响。含 #4 的六组（`dangerous`/`secrets`/`injection`/`exfil`/`obfuscation`/`pii`）+ 出站网络 `egress`（GET/内网/socket/ssh 都算，仅警告）、`hardcoded`、`excluded`/`ignored`（ADR-0012）、`scan_excluded_dirs`（ADR-0012：运行面之外）、`stale_refs`（依赖新鲜度，ADR-0009 延伸：SKILL.md 声明但包内不存在的路径引用，warning 级）、`deps_used`/`deps_declared`/`deps_missing`/`deps_locations`（依赖全面性，ADR-0031，warning 级；报告显示 file:line）、`unreferenced_files`/`junk_dirs`（#5 低冗余文件面：SKILL.md 直接/文档链接/脚本 import 不可达的文件 + 编辑器/缓存目录；`_internal` 整体忽略）、`skill_md_body_lines`/`skill_md_body_warn_lines`/`skill_md_body_fail_lines`（#2 行数主源与两档阈值，ADR-0017：口径 = frontmatter 之后全文行数，含空行与代码块；旧 `skill_md_body_max_lines` 只作历史产物兼容读取，新产物不再输出）<!-- static-check:ignore -->
 - `score.json`：score.py --out（同上）；含 `cost`（多次运行汇总）+ `cost_by_case`（逐 case，仅全条目带 case 时出现）+ `necessity`（T2B 合并进来；每分量带 `n`）；T2B 另有 `match`（有 expect）与 `preference`（无标签 A/B），作为 #11 辅助证据，不合成总分
 - `idem.json`：多次 idem.py --out 结果的聚合 `{"ratio", "idempotent", "pairs", "idempotent_pairs", "per_pair"}`
 - `golden.json`：主运行的 golden trace（#12 的数据源之一）；同时存在 `traces/golden-*.json` 时，
